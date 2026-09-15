@@ -1,0 +1,114 @@
+:root {
+  font-family: system-ui, -apple-system, 'Helvetica Neue', 'PingFang TC', 'Microsoft JhengHei',
+    sans-serif;
+  color: #1a202c;
+  background: #f7fafc;
+  font-size: 15px;
+}
+
+* {
+  box-sizing: border-box;
+}
+
+body {
+  margin: 0;
+  padding: 1.5rem;
+}
+
+.card {
+  background: #fff;
+  border: 1px solid #e2e8f0;
+  border-radius: 6px;
+  padding: 1rem;
+  margin-bottom: 1rem;
+}
+
+button {
+  font: inherit;
+  padding: 0.35rem 0.75rem;
+  border: 1px solid #cbd5e0;
+  border-radius: 4px;
+  background: #fff;
+  cursor: pointer;
+}
+
+button:disabled {
+  opacity: 0.6;
+  cursor: progress;
+}
+
+button.secondary {
+  background: #edf2f7;
+}
+
+button.link {
+  border: none;
+  background: none;
+  padding: 0 0.25rem;
+  color: #2b6cb0;
+}
+
+button.link.danger {
+  color: #c53030;
+}
+
+input,
+select {
+  font: inherit;
+  padding: 0.3rem 0.4rem;
+  border: 1px solid #cbd5e0;
+  border-radius: 4px;
+  background: #fff;
+}
+
+table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 0.88rem;
+}
+
+th,
+td {
+  padding: 0.35rem 0.5rem;
+  border-bottom: 1px solid #edf2f7;
+  text-align: left;
+  white-space: nowrap;
+}
+
+thead th {
+  background: #f7fafc;
+  font-weight: 600;
+}
+
+tfoot td {
+  font-weight: 600;
+  border-top: 2px solid #cbd5e0;
+}
+
+.num {
+  text-align: right;
+  font-variant-numeric: tabular-nums;
+}
+
+.muted {
+  color: #718096;
+  font-size: 0.85rem;
+}
+
+.error {
+  color: #c53030;
+  font-size: 0.85rem;
+}
+
+.ok {
+  color: #276749;
+  font-size: 0.85rem;
+}
+
+.positive {
+  color: #276749;
+}
+
+.negative {
+  color: #c53030;
+}

@@ -1,0 +1,25 @@
+{
+  "permissions": {
+    "allow": [
+      "Exec(npm install)",
+      "Exec(node)",
+      "Exec(cargo build)",
+      "Exec(grep)",
+      "Exec(openspec)",
+      "Exec(cd)",
+      "Exec(cargo fmt)",
+      "Exec(pnpm build)",
+      "Exec(true)",
+      "Exec(lsof)",
+      "Exec(WEALTH_DB=/tmp/wealth-e2e-609ad4b9-2.db cargo run)",
+      "Exec(cargo run)",
+      "Exec(sqlite3)",
+      "Exec(cargo check)",
+      "Exec(cargo test)",
+      "Exec(pnpm exec vue-tsc)",
+      "Exec(cargo clippy)",
+      "Exec(sleep)",
+      "Exec(python3)"
+    ]
+  }
+}

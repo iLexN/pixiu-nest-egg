@@ -1,0 +1,64 @@
+{
+  "stocks": [
+    {
+      "symbol": "0388.HK",
+      "price": 395.4
+    },
+    {
+      "symbol": "0005.HK",
+      "price": 161.1
+    },
+    {
+      "symbol": "0941.HK",
+      "price": 79.05
+    },
+    {
+      "symbol": "1038.HK",
+      "price": 64.3
+    },
+    {
+      "symbol": "1336.HK",
+      "price": 46.26
+    },
+    {
+      "symbol": "6823.HK",
+      "price": 12.42
+    },
+    {
+      "symbol": "3067.HK",
+      "price": 9.075
+    },
+    {
+      "symbol": "0003.HK",
+      "price": 7.09
+    },
+    {
+      "symbol": "2638.HK",
+      "price": 6.25
+    },
+    {
+      "symbol": "3988.HK",
+      "price": 5.975
+    },
+    {
+      "symbol": "1310.HK",
+      "price": 5.47
+    },
+    {
+      "symbol": "VOO",
+      "price": 699.3
+    },
+    {
+      "symbol": "GOOG",
+      "price": 345.71
+    },
+    {
+      "symbol": "BRK-B",
+      "price": 514.95
+    },
+    {
+      "symbol": "BE",
+      "price": 257.05
+    }
+  ]
+}

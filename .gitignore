@@ -1,0 +1,11 @@
+/target
+target/
+node_modules/
+frontend/dist/
+data/
+.env
+.DS_Store
+.idea/
+
+# graft's local graph cache — regenerable, not committed (run `graft build`).
+/graft/
