@@ -132,6 +132,7 @@ watch(() => props.market, () => {
 
       <TradeTable
         :trades="trades"
+        :stocks="stocks"
         :order="order"
         @edit="startEdit"
         @remove="remove"

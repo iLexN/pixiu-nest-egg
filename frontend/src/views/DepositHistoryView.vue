@@ -120,6 +120,7 @@ onMounted(load)
   display: flex;
   align-items: center;
   gap: 1rem;
+  margin-bottom: 1rem;
 }
 .history-header h3 {
   margin: 0;

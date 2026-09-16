@@ -75,7 +75,7 @@ onMounted(load)
       />
 
       <h4>到期月份</h4>
-      <table>
+      <table class="rollup">
         <thead>
           <tr>
             <th>月份</th>
@@ -98,7 +98,7 @@ onMounted(load)
       </table>
 
       <h4>銀行分佈</h4>
-      <table>
+      <table class="rollup">
         <thead>
           <tr>
             <th>銀行</th>
@@ -176,6 +176,12 @@ onMounted(load)
 }
 h4 {
   margin: 1.5rem 0 0.5rem;
+}
+.rollup {
+  table-layout: fixed;
+}
+.rollup th.num {
+  width: 9rem;
 }
 .hint-columns {
   display: flex;

@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { onMounted, ref, watch } from 'vue'
-import { api, ApiError, type Market, type SummaryResponse } from '../api'
+import { api, ApiError, type Market, type SummaryResponse, type SummaryStock } from '../api'
 import { fmtMoney, fmtPercent, fmtPrice, fmtShares, signClass } from '../format'
 
 const props = defineProps<{ market: Market }>()
@@ -23,6 +23,11 @@ async function load() {
   } catch (err) {
     error.value = err instanceof ApiError ? err.message : String(err)
   }
+}
+
+function priceClass(stock: SummaryStock): string {
+  if (stock.current_price === null || stock.weighted_avg_buy_price <= 0) return ''
+  return signClass(stock.current_price - stock.weighted_avg_buy_price)
 }
 
 function startEdit(id: number, current: number | null) {
@@ -223,6 +228,7 @@ watch(() => props.market, load)
               v-else
               type="button"
               class="link"
+              :class="priceClass(stock)"
               @click="startEdit(stock.id, stock.current_price)"
             >
               {{ stock.current_price === null ? '設定現價' : fmtPrice(stock.current_price) }}
@@ -305,6 +311,12 @@ watch(() => props.market, load)
 }
 .price-cell input {
   width: 6rem;
+}
+.price-cell .link.positive {
+  color: var(--positive);
+}
+.price-cell .link.negative {
+  color: var(--negative);
 }
 .drag-handle {
   color: var(--muted);
