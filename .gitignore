@@ -9,3 +9,7 @@ data/
 
 # graft's local graph cache — regenerable, not committed (run `graft build`).
 /graft/
+
+# personal financial data — never commit
+財富分析報告.xlsx
+portfolio.csv
