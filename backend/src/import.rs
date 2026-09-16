@@ -8,7 +8,7 @@ use std::collections::HashMap;
 use anyhow::{anyhow, Context};
 use sqlx::{Row, SqlitePool};
 
-use crate::calc::{validate_deposit, validate_trade, DepositInput, TradeInput};
+use crate::calc::{validate_deposit, validate_dividend, validate_trade, DepositInput, TradeInput};
 use crate::models::Market;
 use crate::xlsx::{MarketSheets, SheetDeposit, SheetStock, WorkbookData};
 
@@ -18,6 +18,11 @@ pub struct MarketReport {
     pub stocks_updated: usize,
     pub trades_imported: usize,
     pub trades_skipped: usize,
+    pub dividends_imported: usize,
+    pub dividends_skipped: usize,
+    /// Rows the status heuristic imported as pending, `code pay_date` each —
+    /// the ones worth eyeballing after the run.
+    pub dividends_pending: Vec<String>,
 }
 
 #[derive(Debug, Default, Clone, PartialEq, Eq)]
@@ -154,7 +159,201 @@ async fn import_market(pool: &SqlitePool, sheets: &MarketSheets) -> anyhow::Resu
         report.trades_imported += 1;
     }
 
+    import_dividends(pool, sheets, &mut report, next_sort_order).await?;
+
     Ok(report)
+}
+
+/// The J–O 派息 block: snapshots prefer the sheet's own denominators
+/// (buy_cost = M ÷ L, price = M ÷ (N × O)); missing pieces fall back to
+/// deriving from the imported trades as of the pay date.
+async fn import_dividends(
+    pool: &SqlitePool,
+    sheets: &MarketSheets,
+    report: &mut MarketReport,
+    mut next_sort_order: i64,
+) -> anyhow::Result<()> {
+    let market = sheets.market;
+    let today = crate::routes::today();
+
+    // Snapshot facts are per-stock: an unfiltered market-wide sum would
+    // inflate every row's 股數.
+    let mut facts_by_code: HashMap<&str, Vec<(chrono::NaiveDate, crate::calc::TradeFacts)>> =
+        HashMap::new();
+    for trade in &sheets.trades {
+        let Some(date) = chrono::NaiveDate::parse_from_str(&trade.trade_date, "%Y-%m-%d").ok()
+        else {
+            continue;
+        };
+        let Some(trade_type) = crate::models::TradeType::parse(&trade.trade_type) else {
+            continue;
+        };
+        facts_by_code.entry(trade.code.as_str()).or_default().push((
+            date,
+            crate::calc::TradeFacts {
+                trade_type,
+                shares: trade.shares,
+                total: trade.total.unwrap_or(0.0),
+            },
+        ));
+    }
+
+    let mut existing = existing_dividend_keys(pool, market).await?;
+
+    for dividend in &sheets.dividends {
+        // Dividend rows can name a stock that only exists in the J–O block.
+        let stock_id = match stock_id(pool, market, &dividend.code).await? {
+            Some(id) => id,
+            None => {
+                upsert_stock(
+                    pool,
+                    market,
+                    &SheetStock {
+                        code: dividend.code.clone(),
+                        ticker: None,
+                        exchange: None,
+                        sector: None,
+                        sort_order: next_sort_order,
+                    },
+                )
+                .await?;
+                report.stocks_created += 1;
+                next_sort_order += 1;
+                stock_id(pool, market, &dividend.code)
+                    .await?
+                    .ok_or_else(|| anyhow!("stock {} was not created", dividend.code))?
+            }
+        };
+
+        let pay_date =
+            chrono::NaiveDate::parse_from_str(&dividend.pay_date, "%Y-%m-%d").map_err(|_| {
+                anyhow!(
+                    "row {} of the {} trade sheet has no usable 派息 date",
+                    dividend.source_row,
+                    market.as_str()
+                )
+            })?;
+
+        let empty: Vec<(chrono::NaiveDate, crate::calc::TradeFacts)> = Vec::new();
+        let facts = facts_by_code.get(dividend.code.as_str()).unwrap_or(&empty);
+        let (derived_shares, derived_cost) = crate::calc::holdings_snapshot(facts, pay_date);
+        let shares_held = dividend.shares.or(Some(derived_shares));
+        let buy_cost = match dividend.rate_on_cost {
+            Some(rate) if rate > 0.0 => Some(dividend.amount / rate),
+            _ => Some(derived_cost),
+        };
+        let received_price = match (dividend.rate_on_price, shares_held) {
+            (Some(rate), Some(shares)) if rate > 0.0 && shares > 0.0 => {
+                Some(dividend.amount / (rate * shares))
+            }
+            _ => None,
+        };
+
+        // The sheet has no status marker: rows with the second rate recorded —
+        // or already past their pay date — were received; future ones are the
+        // pending estimate.
+        let received = dividend.rate_on_price.is_some() || pay_date <= today;
+        let (estimated_amount, received_amount) = if received {
+            (None, Some(dividend.amount))
+        } else {
+            (Some(dividend.amount), None)
+        };
+
+        let key = DividendKey::new(stock_id, &dividend.pay_date, dividend.amount);
+        if let Some(remaining) = existing.get_mut(&key) {
+            if *remaining > 0 {
+                *remaining -= 1;
+                report.dividends_skipped += 1;
+                continue;
+            }
+        }
+
+        let validated = validate_dividend(crate::calc::DividendInput {
+            pay_date: &dividend.pay_date,
+            per_share: None,
+            shares_held,
+            buy_cost,
+            estimated_amount,
+            received_amount,
+            received_price,
+        })
+        .map_err(|errors| {
+            anyhow!(
+                "row {} of the {} trade sheet is not valid: {}",
+                dividend.source_row,
+                market.as_str(),
+                errors
+                    .iter()
+                    .map(|e| format!("{}: {}", e.field, e.message))
+                    .collect::<Vec<_>>()
+                    .join("; ")
+            )
+        })?;
+
+        crate::routes::dividends::insert_dividend(
+            pool,
+            stock_id,
+            &validated,
+            dividend.amount_formula.as_deref(),
+        )
+        .await
+        .with_context(|| {
+            format!(
+                "inserting 派息 row {} of {}",
+                dividend.source_row,
+                market.as_str()
+            )
+        })?;
+        report.dividends_imported += 1;
+        if !received {
+            report
+                .dividends_pending
+                .push(format!("{} {}", dividend.code, dividend.pay_date));
+        }
+    }
+
+    Ok(())
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+struct DividendKey {
+    stock_id: i64,
+    pay_date: String,
+    amount: u64,
+}
+
+impl DividendKey {
+    fn new(stock_id: i64, pay_date: &str, amount: f64) -> Self {
+        Self {
+            stock_id,
+            pay_date: pay_date.to_string(),
+            amount: amount.to_bits(),
+        }
+    }
+}
+
+async fn existing_dividend_keys(
+    pool: &SqlitePool,
+    market: Market,
+) -> anyhow::Result<HashMap<DividendKey, usize>> {
+    let rows = sqlx::query(
+        "SELECT d.stock_id, d.pay_date, COALESCE(d.received_amount, d.estimated_amount) \
+         FROM dividends d JOIN stocks s ON s.id = d.stock_id WHERE s.market = ?",
+    )
+    .bind(market.as_str())
+    .fetch_all(pool)
+    .await?;
+
+    let mut keys: HashMap<DividendKey, usize> = HashMap::new();
+    for row in &rows {
+        let key = DividendKey::new(
+            row.try_get("stock_id")?,
+            &row.try_get::<String, _>("pay_date")?,
+            row.try_get::<Option<f64>, _>(2)?.unwrap_or(0.0),
+        );
+        *keys.entry(key).or_insert(0) += 1;
+    }
+    Ok(keys)
 }
 
 enum Upsert {

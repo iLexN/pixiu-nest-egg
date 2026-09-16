@@ -53,12 +53,34 @@ pub struct SheetSummary {
     pub total_buy_cost: Option<f64>,
 }
 
+/// One row of the trade sheet's J–O 派息 block.
+#[derive(Debug, Clone)]
+pub struct SheetDividend {
+    /// J: the stock name/code.
+    pub code: String,
+    /// K: the pay date.
+    pub pay_date: String,
+    /// M: 派息 amount (cached value).
+    pub amount: f64,
+    /// L cached rate: amount ÷ 總買入成本 snapshot.
+    pub rate_on_cost: Option<f64>,
+    /// N cached rate: amount ÷ (price × 股數).
+    pub rate_on_price: Option<f64>,
+    /// O: 股數 snapshot.
+    pub shares: Option<f64>,
+    /// The M cell's formula text, when it is a formula.
+    pub amount_formula: Option<String>,
+    /// 1-based row number in the source sheet, for error messages.
+    pub source_row: usize,
+}
+
 #[derive(Debug, Clone)]
 pub struct MarketSheets {
     pub market: Market,
     pub trades: Vec<SheetTrade>,
     pub stocks: Vec<SheetStock>,
     pub summary: Vec<SheetSummary>,
+    pub dividends: Vec<SheetDividend>,
 }
 
 /// One row of 定期Info's 表_定期List. The sheet's derived columns
@@ -155,6 +177,10 @@ pub fn read(path: &Path) -> anyhow::Result<WorkbookData> {
     let us_summary = sheet_rows(&mut workbook, US_SUMMARY_SHEET, path)?;
     let deposit_info = sheet_rows(&mut workbook, DEPOSIT_INFO_SHEET, path)?;
     let deposit_view = sheet_rows(&mut workbook, DEPOSIT_SHEET, path)?;
+    // Formula text is a second pass; formats without formulas error, which is
+    // fine — the note just stays empty then.
+    let hk_formulas = workbook.worksheet_formula(HK_TRADE_SHEET).ok();
+    let us_formulas = workbook.worksheet_formula(US_TRADE_SHEET).ok();
 
     Ok(WorkbookData {
         hk: MarketSheets {
@@ -162,12 +188,14 @@ pub fn read(path: &Path) -> anyhow::Result<WorkbookData> {
             trades: parse_trades(&hk_trades, Market::Hk)?,
             stocks: parse_hk_stocks(&hk_summary),
             summary: parse_summary(&hk_summary, Market::Hk),
+            dividends: parse_dividends(&hk_trades, hk_formulas.as_ref()),
         },
         us: MarketSheets {
             market: Market::Us,
             trades: parse_trades(&us_trades, Market::Us)?,
             stocks: parse_us_stocks(&us_summary),
             summary: parse_summary(&us_summary, Market::Us),
+            dividends: parse_dividends(&us_trades, us_formulas.as_ref()),
         },
         deposits: parse_deposits(&deposit_info)?,
         deposit_cached: parse_deposit_cached(&deposit_view, &deposit_info),
@@ -227,6 +255,80 @@ fn date(row: &[Data], index: usize) -> Option<String> {
         }
         _ => None,
     }
+}
+
+/// A date cell that may hold a raw Excel serial (days since 1899-12-30), as
+/// the 派息 block's K column does.
+fn serial_or_date(row: &[Data], index: usize) -> Option<String> {
+    date(row, index).or_else(|| {
+        let serial = number(row, index)?;
+        // Plausible serial range: 1954-10 through 2173-10.
+        if !(20000.0..=100000.0).contains(&serial) {
+            return None;
+        }
+        let epoch = chrono::NaiveDate::from_ymd_opt(1899, 12, 30)?;
+        Some(
+            (epoch + chrono::Duration::days(serial.trunc() as i64))
+                .format("%Y-%m-%d")
+                .to_string(),
+        )
+    })
+}
+
+// Trade sheet columns J–O hold the 派息 block: J stock, K pay date, L rate
+// (M ÷ buy cost), M 派息 amount, N second rate (M ÷ price × shares), O 股數.
+const DIVIDEND_STOCK: usize = 9;
+const DIVIDEND_DATE: usize = 10;
+const DIVIDEND_RATE_COST: usize = 11;
+const DIVIDEND_AMOUNT: usize = 12;
+const DIVIDEND_RATE_PRICE: usize = 13;
+const DIVIDEND_SHARES: usize = 14;
+
+/// Rows where J (stock), K (date) and M (amount) are all populated form the
+/// 派息 block; everything else — the trade table's own columns, scratch cells,
+/// the header row — falls out naturally.
+fn parse_dividends(rows: &Rows, formulas: Option<&calamine::Range<String>>) -> Vec<SheetDividend> {
+    let mut dividends = Vec::new();
+    for (index, row) in rows.iter().enumerate() {
+        let (Some(code), Some(pay_date), Some(amount)) = (
+            text(row, DIVIDEND_STOCK),
+            serial_or_date(row, DIVIDEND_DATE),
+            number(row, DIVIDEND_AMOUNT),
+        ) else {
+            continue;
+        };
+        // calamine's Range::get indexes relative to the formula range's
+        // start, which is not A1.
+        let amount_formula = formulas.and_then(|range| {
+            let (start_row, start_col) = range.start().unwrap_or((0, 0));
+            let (start_row, start_col) = (start_row as usize, start_col as usize);
+            if index < start_row || DIVIDEND_AMOUNT < start_col {
+                return None;
+            }
+            range
+                .get((index - start_row, DIVIDEND_AMOUNT - start_col))
+                .map(|formula| formula.trim().to_string())
+                .filter(|formula| !formula.is_empty())
+                .map(|formula| {
+                    if formula.starts_with('=') {
+                        formula
+                    } else {
+                        format!("={formula}")
+                    }
+                })
+        });
+        dividends.push(SheetDividend {
+            code,
+            pay_date,
+            amount,
+            rate_on_cost: number(row, DIVIDEND_RATE_COST),
+            rate_on_price: number(row, DIVIDEND_RATE_PRICE),
+            shares: number(row, DIVIDEND_SHARES),
+            amount_formula,
+            source_row: index + 1,
+        });
+    }
+    dividends
 }
 
 /// Column layout of a market's trade sheet.

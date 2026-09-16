@@ -78,6 +78,24 @@ One row per 定期 deposit (from 定期Info's 表_定期List). Nullable columns 
 | `sort_order` | Workbook row order; new entries append |
 | `created_at`, `updated_at` | Audit timestamps |
 
+### `dividends`
+
+One row per 派息 event per stock (from the trade sheets' J–O block). The snapshot columns freeze the position at the pay date, so later trades never rewrite a recorded rate.
+
+| Column | Meaning |
+|---|---|
+| `id` | Internal dividend ID |
+| `stock_id` | Links to `stocks.id` |
+| `pay_date` | `YYYY-MM-DD` text date (the sheet's K column) |
+| `per_share` | Announced 每股派息, optional |
+| `shares_held` | 股數 snapshot on the pay date |
+| `buy_cost` | 總買入成本 snapshot on the pay date |
+| `estimated_amount` | 預期派息, optional |
+| `received_amount` | 實收派息; empty while pending |
+| `received_price` | 現價 snapshot at receipt, optional |
+| `note` | Optional free-text note (imported rows keep the sheet's M formula) |
+| `created_at`, `updated_at` | Audit timestamps |
+
 ### Values not stored
 
 These are calculated by the backend when needed:
@@ -95,6 +113,12 @@ These are calculated by the backend when needed:
 - Deposit status (`End` once end_date is today or past)
 - Deposit end month/year
 - Active/history/month/year/bank rollups
+- Dividend status (`received` once `received_amount` is set)
+- Dividend effective amount (received else estimated)
+- Dividend `rate` = amount ÷ `buy_cost` snapshot
+- Dividend second `rate` = amount ÷ (`received_price` × `shares_held`)
+- Dividend variance = `received_amount − estimated_amount`
+- Per-year received rollups
 
 This avoids stale copied totals.
 
@@ -135,7 +159,7 @@ What is calculated:
   → GET /api/stocks?market=... reloads the stock list
 ```
 
-A stock with trades cannot be deleted. Delete its trades first, or keep the stock for history.
+A stock with trades or dividend records cannot be deleted. Delete those rows first, or keep the stock for history.
 
 ## Update stock metadata in 股票管理
 
@@ -381,6 +405,50 @@ Status and rollups are point-in-time: they derive from today, so a deposit moves
 
 The 手動步驟提醒 checklists (定期 start step / 定期 end step) are static hints for the still-unmigrated `Month Stat`, `回報率`, `Overview`, and money-master bookkeeping in the workbook.
 
+## Record a dividend in 派息
+
+```text
+DividendForm (記錄派息)
+  → POST /api/dividends
+  → backend resolves stock_id from stock_id or market + code
+  → backend derives the snapshots from trades with trade_date <= pay_date:
+      shares_held = Σ BUY 股數 − Σ SELL 股數
+      buy_cost    = Σ BUY total
+  → caller-supplied shares_held/buy_cost override the derivation
+  → backend validates and stores one row in dividends
+  → estimated_amount defaults to 每股派息 × shares_held when only 每股派息 is given,
+    and 每股派息 is implied as estimated_amount ÷ shares_held when only 預期派息 is given
+  → the 派息 view reloads GET /api/dividends/summary?market=...
+```
+
+The snapshots are stored, not recomputed: buying more of the same stock later does not change a recorded dividend's 股數, 總買入成本, or rate. If the pay date was wrong, editing it with 重新計算快照 checked re-derives both snapshots.
+
+## Mark a dividend received
+
+```text
+收訖 on a pending row → DividendReceiveForm
+  → PATCH /api/dividends/:id { received_amount, received_price? }
+  → status becomes received; both rates now use the received amount
+  → 同時更新現價 checked → a separate PATCH /api/stocks/:id sets manual_price
+```
+
+The 現價 entered at receipt is stored on the dividend record only. It does not update the stock's 現價 unless 同時更新現價 is checked, because the receipt price may be recorded on a different day than the price update.
+
+## Load the 派息 view
+
+```text
+DividendsView (派息 tab, market-scoped like 交易記錄)
+  → GET /api/dividends/summary?market=...
+      → pending list, per-year received totals, per-stock breakdown,
+        history_years for the year selector
+  → GET /api/summary?market=...
+      → stock list for the form; the per-share × shares preview hint
+  → GET /api/dividends?market=...&status=received&year=YYYY&order=desc
+      → received history rows
+```
+
+Derived on every read, never stored: `status`, effective `amount`, `yield_on_cost` (amount ÷ buy_cost), `yield_on_price` (amount ÷ received_price × shares_held), `variance` (received − estimated). Yields are empty when their denominator is missing.
+
 ## Import workbook data
 
 ```text
@@ -392,13 +460,15 @@ cargo run -p wealth-backend --bin import_xlsx -- "財富分析報告.xlsx"
 
 The importer reads:
 
-- `港股Trade`
-- `美股Trade`
+- `港股Trade` — trade columns plus the J–O 派息 block
+- `美股Trade` — trade columns plus the J–O 派息 block
 - `港股`
 - `美股`
 - `定期Info` (表_定期List) and `定期` (cached aggregates for parity)
 
-The import is idempotent. A second run skips trades already stored with the same stock, date, type, shares, and total, and deposits already stored with the same label, end date, principal, and interest.
+For each dividend row the importer stores J (stock), K (pay date, Excel serial dates accepted), M (派息 amount, cached value), and O (股數 snapshot). The remaining snapshots are recovered from the cached rates the same way the sheet computed them — `buy_cost = M ÷ L`, `received_price = M ÷ (N × O)` — falling back to trade-derived snapshots when a rate is absent. The M formula text, when present, is kept in `note`. Rows with an N rate, or a pay date already past, import as received; future rows without it import as pending estimates.
+
+The import is idempotent. A second run skips trades already stored with the same stock, date, type, shares, and total, deposits already stored with the same label, end date, principal, and interest, and dividends already stored with the same stock, pay date, and amount.
 
 The workbook is never modified.
 
@@ -411,9 +481,11 @@ cargo run -p wealth-backend --bin check_parity -- "財富分析報告.xlsx"
   → recomputes deposit aggregates from SQLite deposits
   → compares them to 定期's cached month/bank rows, 定期!B1,
     and the 定期Info year tables
+  → counts stored dividends and totals the effective amount per market,
+    compared against the J–O block's row count and Σ 派息
 ```
 
-This verifies that the database reproduces the spreadsheet's trade-derived figures and deposit rollups. Deposit parity is point-in-time: the cached values reflect the workbook's last recalculation, so a deposit that matures after that point shows as a difference.
+This verifies that the database reproduces the spreadsheet's trade-derived figures, deposit rollups, and dividend totals. Deposit parity is point-in-time: the cached values reflect the workbook's last recalculation, so a deposit that matures after that point shows as a difference.
 
 ## Frontend vs backend responsibilities
 
@@ -433,6 +505,8 @@ This verifies that the database reproduces the spreadsheet's trade-derived figur
 | Manual stock order | Drag/drop UI | Persists `sort_order` |
 | Deposit CRUD | Form (add + edit) | Yes, validates |
 | Deposit totals/status/rollups | Displays them | Calculates them |
+| Dividend CRUD + receipt | Forms | Yes, validates and snapshots |
+| Dividend rates/variance/rollups | Displays them | Calculates them |
 | Workbook import | — | Yes |
 | Parity check | — | Yes |
 
@@ -456,7 +530,15 @@ The update itself affects one stock row. Afterward, the frontend fetches the com
 
 ### Does deleting a stock delete its trades?
 
-No. The backend refuses to delete a stock that still has trades.
+No. The backend refuses to delete a stock that still has trades or dividend records.
+
+### Does buying more shares change a recorded dividend?
+
+No. The 股數 and 總買入成本 on a dividend row are snapshots stored when the dividend was recorded; the rate columns use those frozen values.
+
+### Does recording the receipt price update the stock's 現價?
+
+No. `received_price` is stored on the dividend only. The 同時更新現價 checkbox issues a separate stock update, so recording a receipt on a different day than the price change is safe.
 
 ### Does reordering stocks change calculations?
 

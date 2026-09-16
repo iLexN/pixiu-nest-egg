@@ -713,3 +713,159 @@ async fn deposit_summary_reports_upcoming_rollups_and_year_tables() {
     assert!(history_years.iter().any(|y| *y == 2026));
     assert!(history_years.iter().any(|y| *y == 2099));
 }
+
+// --- 4.7 dividends (派息) ---
+
+async fn create_buy(app: &Router, stock_id: i64, date: &str, shares: f64, total: f64) {
+    let (status, body) = send(
+        app,
+        "POST",
+        "/api/trades",
+        Some(json!({
+            "stock_id": stock_id, "trade_type": "BUY", "trade_date": date,
+            "shares": shares, "unit_price": 1.0, "total": total
+        })),
+    )
+    .await;
+    assert_eq!(status, StatusCode::CREATED, "body = {body}");
+}
+
+#[tokio::test]
+async fn dividend_lifecycle_freezes_its_snapshots() {
+    let app = app().await;
+    let stock = create_stock(&app, "HK", "中國銀行", None).await;
+    create_buy(&app, stock, "2023-05-23", 30000.0, 96523.15).await;
+    create_buy(&app, stock, "2024-02-15", 18000.0, 53731.5).await;
+    create_buy(&app, stock, "2024-03-04", 20000.0, 58491.99).await;
+
+    // Record an expected dividend: per-share only, snapshot derived from
+    // trades on or before the pay date.
+    let (status, body) = send(
+        &app,
+        "POST",
+        "/api/dividends",
+        Some(json!({
+            "market": "HK", "code": "中國銀行",
+            "pay_date": "2024-08-05", "per_share": 0.2
+        })),
+    )
+    .await;
+    assert_eq!(status, StatusCode::CREATED, "body = {body}");
+    let id = body["id"].as_i64().expect("id");
+    assert_eq!(body["status"], "PENDING");
+    approx(&body["shares_held"], 68000.0);
+    approx(&body["buy_cost"], 208746.64);
+    approx(&body["estimated_amount"], 13600.0);
+    approx(&body["yield_on_cost"], 13600.0 / 208746.64);
+    assert!(body["yield_on_price"].is_null());
+
+    // A later buy must not rewrite the recorded dividend's snapshot.
+    create_buy(&app, stock, "2025-01-10", 1000.0, 5000.0).await;
+    let (_, body) = send(&app, "GET", "/api/dividends?market=HK", None).await;
+    let row = &body.as_array().expect("array")[0];
+    approx(&row["shares_held"], 68000.0);
+    approx(&row["buy_cost"], 208746.64);
+
+    // Receiving flips the status and unlocks the second rate; the estimate
+    // stays for comparison.
+    let (status, body) = send(
+        &app,
+        "PATCH",
+        &format!("/api/dividends/{id}"),
+        Some(json!({ "received_amount": 13000.0, "received_price": 5.0 })),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "body = {body}");
+    assert_eq!(body["status"], "RECEIVED");
+    approx(&body["amount"], 13000.0);
+    approx(&body["variance"], -600.0);
+    approx(&body["yield_on_price"], 13000.0 / (5.0 * 68000.0));
+
+    // refresh_snapshots re-derives from trades as of the pay date; moving the
+    // pay date past the new buy picks it up.
+    let (status, body) = send(
+        &app,
+        "PATCH",
+        &format!("/api/dividends/{id}"),
+        Some(json!({ "pay_date": "2025-02-01", "refresh_snapshots": true })),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "body = {body}");
+    approx(&body["shares_held"], 69000.0);
+    approx(&body["buy_cost"], 213746.64);
+
+    let (_, body) = send(&app, "GET", "/api/dividends?status=received", None).await;
+    assert_eq!(body.as_array().expect("array").len(), 1);
+    let (_, body) = send(&app, "GET", "/api/dividends?status=pending", None).await;
+    assert_eq!(body.as_array().expect("array").len(), 0);
+    let (_, body) = send(&app, "GET", "/api/dividends?year=2025", None).await;
+    assert_eq!(body.as_array().expect("array").len(), 1);
+    let (_, body) = send(&app, "GET", "/api/dividends?market=US", None).await;
+    assert_eq!(body.as_array().expect("array").len(), 0);
+
+    // Summary: pending list and the yearly received rollup.
+    let (status, body) = send(&app, "GET", "/api/dividends/summary?market=HK", None).await;
+    assert_eq!(status, StatusCode::OK, "body = {body}");
+    assert_eq!(body["pending"].as_array().expect("pending").len(), 0);
+    let years = body["years"].as_array().expect("years");
+    let bucket = years
+        .iter()
+        .find(|y| y["total"].as_f64().unwrap_or(0.0) > 0.0)
+        .expect("received bucket");
+    approx(&bucket["total"], 13000.0);
+    assert_eq!(bucket["stocks"][0]["code"], "中國銀行");
+
+    // A stock with dividends cannot be deleted.
+    let (status, _) = send(&app, "DELETE", &format!("/api/stocks/{stock}"), None).await;
+    assert_eq!(status, StatusCode::CONFLICT);
+
+    let (status, _) = send(&app, "DELETE", &format!("/api/dividends/{id}"), None).await;
+    assert_eq!(status, StatusCode::NO_CONTENT);
+    let (status, _) = send(&app, "DELETE", &format!("/api/dividends/{id}"), None).await;
+    assert_eq!(status, StatusCode::NOT_FOUND);
+}
+
+#[tokio::test]
+async fn dividend_validation_errors_name_the_fields() {
+    let app = app().await;
+    create_stock(&app, "HK", "港燈", None).await;
+
+    let (status, body) = send(
+        &app,
+        "POST",
+        "/api/dividends",
+        Some(json!({ "market": "HK", "code": "港燈", "pay_date": "2026/13/45", "per_share": 0.1 })),
+    )
+    .await;
+    assert_eq!(status, StatusCode::BAD_REQUEST);
+    assert!(body["fields"]
+        .as_array()
+        .expect("fields")
+        .iter()
+        .any(|f| f["field"] == "pay_date"));
+
+    let (status, body) = send(
+        &app,
+        "POST",
+        "/api/dividends",
+        Some(json!({ "market": "HK", "code": "港燈", "pay_date": "2026-09-30" })),
+    )
+    .await;
+    assert_eq!(status, StatusCode::BAD_REQUEST);
+    assert!(body["fields"]
+        .as_array()
+        .expect("fields")
+        .iter()
+        .any(|f| f["field"] == "estimated_amount"));
+
+    let (status, _) = send(
+        &app,
+        "POST",
+        "/api/dividends",
+        Some(
+            json!({ "market": "HK", "code": "不存在", "pay_date": "2026-09-30", "per_share": 1.0 }),
+        ),
+    )
+    .await;
+    assert_eq!(status, StatusCode::BAD_REQUEST);
+}

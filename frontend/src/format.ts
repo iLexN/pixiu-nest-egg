@@ -16,8 +16,8 @@ const shares = new Intl.NumberFormat('en-US', {
 
 const percent = new Intl.NumberFormat('en-US', {
   style: 'percent',
-  minimumFractionDigits: 2,
-  maximumFractionDigits: 2,
+  minimumFractionDigits: 3,
+  maximumFractionDigits: 3,
 })
 
 /** Empty cells stay empty rather than showing a misleading 0. */

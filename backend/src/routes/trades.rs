@@ -230,7 +230,7 @@ pub async fn load_one(pool: &SqlitePool, id: i64) -> Result<Trade, ApiError> {
     row_to_trade(&row)
 }
 
-async fn resolve_stock(
+pub async fn resolve_stock(
     pool: &SqlitePool,
     stock_id: Option<i64>,
     market: Option<Market>,

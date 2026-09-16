@@ -30,7 +30,8 @@
       "Exec(git cat-file)",
       "Exec(git filter-repo)",
       "Exec(git show)",
-      "Exec(cp)"
+      "Exec(cp)",
+      "Exec(curl)"
     ]
   }
 }

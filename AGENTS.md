@@ -106,9 +106,16 @@ The live formula preview in `TradeForm.vue` mirrors those rules only so the user
 ### Workbook import and parity
 
 1. `backend/src/xlsx.rs` reads `財富分析報告.xlsx` read-only, using cached formula values.
-2. `backend/src/import.rs` inserts stocks, trades, and 定期 deposits into SQLite, preserving the workbook's initial order (`sort_order`).
-3. `backend/src/parity.rs` compares recomputed summaries and deposit rollups (定期!B1, month/bank rows, 定期Info year tables) against the workbook's cached figures.
+2. `backend/src/import.rs` inserts stocks, trades, 定期 deposits, and the trade sheets' J–O 派息 rows into SQLite, preserving the workbook's initial order (`sort_order`).
+3. `backend/src/parity.rs` compares recomputed summaries, deposit rollups (定期!B1, month/bank rows, 定期Info year tables), and dividend counts/totals against the workbook's cached figures.
 4. The workbook is never modified.
+
+### Dividends (派息)
+
+1. `DividendForm.vue` sends `POST /api/dividends` with the stock, pay date, and 每股派息 or 預期派息.
+2. The backend freezes `shares_held`/`buy_cost` snapshots from trades with `trade_date <= pay_date`, so later buys never rewrite a recorded rate.
+3. `DividendReceiveForm.vue` sends `PATCH /api/dividends/:id` with `received_amount` and optional `received_price`; the receipt price is stored on the dividend and only updates `stocks.manual_price` when 同時更新現價 is checked.
+4. Derived on read: status, effective amount, `yield_on_cost` = amount ÷ buy_cost, `yield_on_price` = amount ÷ (received_price × shares_held), and estimate variance.
 
 ## Calculation conventions
 
@@ -118,18 +125,18 @@ The live formula preview in `TradeForm.vue` mirrors those rules only so the user
 - Per-stock holdings are `Σ BUY 股數 − Σ SELL 股數`.
 - `總買入成本 = Σ BUY total`, so SELL rows do not reduce historical buy cost.
 - `加權平均買入單價 = 總買入成本 ÷ Σ BUY 股數`. This intentionally divides by shares bought, not shares held, to match the spreadsheet; after a SELL it is not cost per currently held share.
-- Money and prices are stored and calculated as SQLite `REAL`/`f64`, matching the spreadsheet. Do not round stored values. Display formatting only: money 2 decimal places, prices/averages up to 4, percentages 2.
+- Money and prices are stored and calculated as SQLite `REAL`/`f64`, matching the spreadsheet. Do not round stored values. Display formatting only: money 2 decimal places, prices/averages up to 4, percentages 3.
 - Stocks with no current price, zero holdings, or no derived market value are not included in market-value totals; the summary response lists them in `totals.excluded_codes`.
 - Each stock has a persisted `sort_order` within its market. Imported stocks initially follow the workbook's `港股`/`美股` row order; dragging rows in 持倉總覽 calls `POST /api/stocks/order` with every stock id in that market.
+- A stock with trades or dividend records cannot be deleted.
 
 ## Migration roadmap
 
-Completed so far: HK/US trade registry, trade history, per-stock summaries, manual prices/metadata, 定期 deposits (registry, upcoming/history views, month/bank/year rollups), workbook import, and parity check.
+Completed so far: HK/US trade registry, trade history, per-stock summaries, manual prices/metadata, 定期 deposits (registry, upcoming/history views, month/bank/year rollups), stock 派息 (estimate → receipt lifecycle with frozen holdings/cost/price snapshots), workbook import, and parity check.
 
 Remaining spreadsheet sections, in intended order:
 
-1. 派息
-2. Month Stat / Overview
-3. MPF / 債券 / AIA
+1. Month Stat / Overview
+2. MPF / 債券 / AIA
 
 Until those are migrated, continue maintaining the workbook's non-trade sheets by hand. The app should become the source of truth only after all sections are covered and verified.

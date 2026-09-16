@@ -215,9 +215,14 @@ pub async fn remove(
         .bind(id)
         .fetch_one(&state.pool)
         .await?;
-    if trades > 0 {
+    let dividends: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM dividends WHERE stock_id = ?")
+        .bind(id)
+        .fetch_one(&state.pool)
+        .await?;
+    if trades > 0 || dividends > 0 {
         return Err(ApiError::Conflict(format!(
-            "{} still has {trades} trade(s); delete them before deleting the stock",
+            "{} still has {trades} trade(s) and {dividends} dividend record(s); \
+             delete them before deleting the stock",
             stock.code
         )));
     }

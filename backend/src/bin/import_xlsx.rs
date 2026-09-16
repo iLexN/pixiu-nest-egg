@@ -30,14 +30,20 @@ async fn main() -> anyhow::Result<()> {
         let sheets = data.market(market);
         println!(
             "{}: {} trade row(s) in the sheet -> {} imported, {} skipped (already present); \
-             stocks {} created, {} updated",
+             stocks {} created, {} updated; 派息 {} row(s) -> {} imported, {} skipped",
             market.as_str(),
             sheets.trades.len(),
             market_report.trades_imported,
             market_report.trades_skipped,
             market_report.stocks_created,
             market_report.stocks_updated,
+            sheets.dividends.len(),
+            market_report.dividends_imported,
+            market_report.dividends_skipped,
         );
+        for pending in &market_report.dividends_pending {
+            println!("  派息 pending (imported as estimate): {pending}");
+        }
     }
     println!(
         "定期: {} deposit row(s) in the sheet -> {} imported, {} skipped (already present)",

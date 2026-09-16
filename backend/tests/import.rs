@@ -27,10 +27,11 @@ async fn imports_every_trade_row_then_skips_them_on_a_second_run() {
     assert_eq!(first.hk.trades_skipped, 0);
     assert_eq!(count(&pool, "trades").await, 34);
 
-    // 港股 lists 11 stocks (10 traded + ＦＧ恆生紅利), 美股 lists 4.
-    assert_eq!(first.hk.stocks_created, 11);
+    // 港股 lists 11 stocks (10 traded + ＦＧ恆生紅利) plus 香港寬頻, which only
+    // appears in the 派息 block; 美股 lists 4.
+    assert_eq!(first.hk.stocks_created, 12);
     assert_eq!(first.us.stocks_created, 4);
-    assert_eq!(count(&pool, "stocks").await, 15);
+    assert_eq!(count(&pool, "stocks").await, 16);
 
     let second = import::import(&pool, &data).await.expect("second import");
     assert_eq!(second.hk.trades_imported, 0);
@@ -40,7 +41,7 @@ async fn imports_every_trade_row_then_skips_them_on_a_second_run() {
     assert_eq!(second.hk.stocks_created, 0);
     assert_eq!(second.us.stocks_created, 0);
     assert_eq!(count(&pool, "trades").await, 34);
-    assert_eq!(count(&pool, "stocks").await, 15);
+    assert_eq!(count(&pool, "stocks").await, 16);
 }
 
 #[tokio::test]
@@ -68,18 +69,68 @@ async fn imports_every_deposit_row_then_skips_them_on_a_second_run() {
 }
 
 #[tokio::test]
+async fn imports_every_dividend_row_then_skips_them_on_a_second_run() {
+    let pool = db::connect_memory().await.expect("db");
+    let data = xlsx::read(&workbook_path()).expect("workbook");
+
+    let first = import::import(&pool, &data).await.expect("first import");
+    assert_eq!(first.hk.dividends_imported, 43);
+    assert_eq!(first.us.dividends_imported, 0);
+    assert_eq!(count(&pool, "dividends").await, 43);
+
+    // The earliest 中國銀行 row carries the sheet's frozen denominators:
+    // 6767.35 ÷ 0.0701… ≈ 96523.15 buy cost over the 30000 shares held then.
+    let row = sqlx::query(
+        "SELECT d.shares_held, d.buy_cost, d.received_amount, d.received_price \
+         FROM dividends d JOIN stocks s ON s.id = d.stock_id \
+         WHERE s.code = '中國銀行' ORDER BY d.pay_date LIMIT 1",
+    )
+    .fetch_one(&pool)
+    .await
+    .expect("first dividend");
+    use sqlx::Row;
+    let shares: f64 = row.try_get(0).expect("shares");
+    let cost: f64 = row.try_get(1).expect("cost");
+    let received: f64 = row.try_get(2).expect("received");
+    assert!((shares - 30000.0).abs() < 0.01, "shares = {shares}");
+    assert!((cost - 96523.15).abs() < 0.01, "cost = {cost}");
+    assert!((received - 6767.35).abs() < 0.01, "received = {received}");
+    assert!(row.try_get::<Option<f64>, _>(3).expect("price").is_none());
+
+    // A later row recovered the price snapshot from M ÷ (N × O).
+    let price: Option<f64> = sqlx::query_scalar(
+        "SELECT d.received_price FROM dividends d JOIN stocks s ON s.id = d.stock_id \
+         WHERE s.code = '中國銀行' AND d.pay_date = '2026-08-19'",
+    )
+    .fetch_one(&pool)
+    .await
+    .expect("priced dividend");
+    assert!((price.expect("price") - 5.41).abs() < 0.01);
+
+    let second = import::import(&pool, &data).await.expect("second import");
+    assert_eq!(second.hk.dividends_imported, 0);
+    assert_eq!(second.hk.dividends_skipped, 43);
+    assert_eq!(count(&pool, "dividends").await, 43);
+}
+
+#[tokio::test]
 async fn imported_stock_order_matches_the_summary_sheets() {
     let pool = db::connect_memory().await.expect("db");
     let data = xlsx::read(&workbook_path()).expect("workbook");
     import::import(&pool, &data).await.expect("import");
 
     for market in [Market::Hk, Market::Us] {
-        let expected: Vec<&str> = data
+        let mut expected: Vec<String> = data
             .market(market)
             .stocks
             .iter()
-            .map(|stock| stock.code.as_str())
+            .map(|stock| stock.code.clone())
             .collect();
+        // Stocks that only appear in the 派息 block are appended after the
+        // summary-sheet order.
+        if market == Market::Hk {
+            expected.push("香港寬頻".to_string());
+        }
         let actual: Vec<String> = sqlx::query_scalar(
             "SELECT code FROM stocks WHERE market = ? ORDER BY sort_order, code",
         )
@@ -143,12 +194,14 @@ async fn duplicate_source_rows_are_kept_once_and_only_once() {
                 sort_order: 1,
             }],
             summary: Vec::new(),
+            dividends: Vec::new(),
         },
         us: MarketSheets {
             market: Market::Us,
             trades: Vec::new(),
             stocks: Vec::new(),
             summary: Vec::new(),
+            dividends: Vec::new(),
         },
         deposits: Vec::new(),
         deposit_cached: Default::default(),

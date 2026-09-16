@@ -6,12 +6,13 @@ import TradesView from './views/TradesView.vue'
 import StocksView from './views/StocksView.vue'
 import DepositsView from './views/DepositsView.vue'
 import DepositHistoryView from './views/DepositHistoryView.vue'
+import DividendsView from './views/DividendsView.vue'
 
-type Tab = 'trades' | 'summary' | 'stocks' | 'deposits' | 'depositHistory'
+type Tab = 'trades' | 'summary' | 'stocks' | 'dividends' | 'deposits' | 'depositHistory'
 
 const market = ref<Market>('HK')
 const tab = ref<Tab>('trades')
-const STOCK_TABS: Tab[] = ['trades', 'summary', 'stocks']
+const STOCK_TABS: Tab[] = ['trades', 'summary', 'stocks', 'dividends']
 </script>
 
 <template>
@@ -25,6 +26,7 @@ const STOCK_TABS: Tab[] = ['trades', 'summary', 'stocks']
       <button :class="{ active: tab === 'trades' }" @click="tab = 'trades'">交易記錄</button>
       <button :class="{ active: tab === 'summary' }" @click="tab = 'summary'">持倉總覽</button>
       <button :class="{ active: tab === 'stocks' }" @click="tab = 'stocks'">股票管理</button>
+      <button :class="{ active: tab === 'dividends' }" @click="tab = 'dividends'">派息</button>
       <button :class="{ active: tab === 'deposits' }" @click="tab = 'deposits'">定期</button>
       <button :class="{ active: tab === 'depositHistory' }" @click="tab = 'depositHistory'">
         定期記錄
@@ -36,6 +38,7 @@ const STOCK_TABS: Tab[] = ['trades', 'summary', 'stocks']
     <TradesView v-if="tab === 'trades'" :market="market" />
     <SummaryView v-else-if="tab === 'summary'" :market="market" />
     <StocksView v-else-if="tab === 'stocks'" :market="market" />
+    <DividendsView v-else-if="tab === 'dividends'" :market="market" />
     <DepositsView v-else-if="tab === 'deposits'" />
     <DepositHistoryView v-else />
   </main>

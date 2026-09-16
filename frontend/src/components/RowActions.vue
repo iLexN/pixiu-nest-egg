@@ -1,7 +1,13 @@
 <script setup lang="ts">
 import { onBeforeUnmount, ref } from 'vue'
 
+const props = defineProps<{
+  /** Show a 收訖 action first in the menu. */
+  receive?: boolean
+}>()
+
 const emit = defineEmits<{
+  receive: []
   edit: []
   remove: []
 }>()
@@ -26,9 +32,10 @@ function close() {
   document.removeEventListener('keydown', onKeydown)
 }
 
-function pick(action: 'edit' | 'remove') {
+function pick(action: 'receive' | 'edit' | 'remove') {
   close()
-  if (action === 'edit') emit('edit')
+  if (action === 'receive') emit('receive')
+  else if (action === 'edit') emit('edit')
   else emit('remove')
 }
 
@@ -41,6 +48,9 @@ onBeforeUnmount(() => document.removeEventListener('keydown', onKeydown))
     <template v-if="open">
       <div class="backdrop" @click="close"></div>
       <div class="menu">
+        <button v-if="props.receive" type="button" class="link" @click="pick('receive')">
+          收訖
+        </button>
         <button type="button" class="link" @click="pick('edit')">編輯</button>
         <button type="button" class="link danger" @click="pick('remove')">刪除</button>
       </div>

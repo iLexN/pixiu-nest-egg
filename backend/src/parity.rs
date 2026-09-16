@@ -36,8 +36,8 @@ pub struct ParityRow {
 }
 
 #[derive(Debug, Clone)]
-pub struct DepositParityRow {
-    /// What is being compared, e.g. `定期 active principal` or `2027 1月`.
+pub struct NamedParityRow {
+    /// What is being compared, e.g. `定期 active principal` or `派息 HK count`.
     pub name: String,
     pub outcome: Outcome,
 }
@@ -45,7 +45,8 @@ pub struct DepositParityRow {
 #[derive(Debug, Clone, Default)]
 pub struct ParityReport {
     pub rows: Vec<ParityRow>,
-    pub deposits: Vec<DepositParityRow>,
+    pub deposits: Vec<NamedParityRow>,
+    pub dividends: Vec<NamedParityRow>,
 }
 
 impl ParityReport {
@@ -55,14 +56,21 @@ impl ParityReport {
             .filter(|row| !matches!(row.outcome, Outcome::Match | Outcome::SkippedNoData))
     }
 
-    pub fn deposit_problems(&self) -> impl Iterator<Item = &DepositParityRow> {
-        self.deposits
-            .iter()
+    fn named_problems(rows: &[NamedParityRow]) -> impl Iterator<Item = &NamedParityRow> {
+        rows.iter()
             .filter(|row| !matches!(row.outcome, Outcome::Match | Outcome::SkippedNoData))
     }
 
+    pub fn deposit_problems(&self) -> impl Iterator<Item = &NamedParityRow> {
+        Self::named_problems(&self.deposits)
+    }
+
+    pub fn dividend_problems(&self) -> impl Iterator<Item = &NamedParityRow> {
+        Self::named_problems(&self.dividends)
+    }
+
     pub fn problem_count(&self) -> usize {
-        self.problems().count() + self.deposit_problems().count()
+        self.problems().count() + self.deposit_problems().count() + self.dividend_problems().count()
     }
 
     pub fn is_clean(&self) -> bool {
@@ -76,6 +84,7 @@ pub async fn check(pool: &SqlitePool, data: &WorkbookData) -> anyhow::Result<Par
         check_market(pool, data, market, &mut report).await?;
     }
     check_deposits(pool, data, &mut report).await?;
+    check_dividends(pool, data, &mut report).await?;
     Ok(report)
 }
 
@@ -154,11 +163,15 @@ async fn check_market(
     Ok(())
 }
 
-fn deposit_row(report: &mut ParityReport, name: impl Into<String>, outcome: Outcome) {
-    report.deposits.push(DepositParityRow {
+fn named_row(rows: &mut Vec<NamedParityRow>, name: impl Into<String>, outcome: Outcome) {
+    rows.push(NamedParityRow {
         name: name.into(),
         outcome,
     });
+}
+
+fn deposit_row(report: &mut ParityReport, name: impl Into<String>, outcome: Outcome) {
+    named_row(&mut report.deposits, name, outcome);
 }
 
 /// First difference wins, like check_market. `field` names the column
@@ -346,5 +359,57 @@ async fn check_deposits(
         }
     }
 
+    Ok(())
+}
+
+/// The J–O 派息 block stores no aggregate, so the check compares the row
+/// count and the total amount per market — enough to catch missed or
+/// duplicated rows.
+async fn check_dividends(
+    pool: &SqlitePool,
+    data: &WorkbookData,
+    report: &mut ParityReport,
+) -> anyhow::Result<()> {
+    use sqlx::Row;
+    for market in [Market::Hk, Market::Us] {
+        let sheet = data.market(market);
+        let sheet_count = sheet.dividends.len() as f64;
+        let sheet_total: f64 = sheet.dividends.iter().map(|d| d.amount).sum();
+
+        let row = sqlx::query(
+            "SELECT COUNT(*), COALESCE(SUM(COALESCE(d.received_amount, d.estimated_amount)), 0.0) \
+             FROM dividends d JOIN stocks s ON s.id = d.stock_id WHERE s.market = ?",
+        )
+        .bind(market.as_str())
+        .fetch_one(pool)
+        .await?;
+        let count: i64 = row.try_get(0)?;
+        let total: f64 = row.try_get(1)?;
+
+        let name = format!("派息 {}", market.as_str());
+        if (count as f64 - sheet_count).abs() > 0.5 {
+            named_row(
+                &mut report.dividends,
+                format!("{name} count"),
+                Outcome::Difference {
+                    field: "rows",
+                    computed: count as f64,
+                    sheet: sheet_count,
+                },
+            );
+        } else if !approx_eq(total, sheet_total) {
+            named_row(
+                &mut report.dividends,
+                format!("{name} total"),
+                Outcome::Difference {
+                    field: "amount",
+                    computed: total,
+                    sheet: sheet_total,
+                },
+            );
+        } else {
+            named_row(&mut report.dividends, name, Outcome::Match);
+        }
+    }
     Ok(())
 }

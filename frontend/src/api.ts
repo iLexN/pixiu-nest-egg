@@ -208,6 +208,79 @@ export interface DepositFilters {
   order?: 'asc' | 'desc'
 }
 
+export type DividendStatus = 'PENDING' | 'RECEIVED'
+
+export interface Dividend {
+  id: number
+  stock_id: number
+  market: Market
+  code: string
+  pay_date: string
+  per_share: number | null
+  shares_held: number | null
+  buy_cost: number | null
+  estimated_amount: number | null
+  received_amount: number | null
+  received_price: number | null
+  note: string | null
+  status: DividendStatus
+  amount: number | null
+  yield_on_cost: number | null
+  yield_on_price: number | null
+  variance: number | null
+}
+
+export interface NewDividend {
+  stock_id?: number
+  market?: Market
+  code?: string
+  pay_date: string
+  per_share?: number | null
+  estimated_amount?: number | null
+  shares_held?: number | null
+  buy_cost?: number | null
+  note?: string | null
+}
+
+export interface DividendPatch {
+  stock_id?: number
+  pay_date?: string
+  per_share?: number | null
+  shares_held?: number | null
+  buy_cost?: number | null
+  estimated_amount?: number | null
+  received_amount?: number | null
+  received_price?: number | null
+  note?: string | null
+  refresh_snapshots?: boolean
+}
+
+export interface DividendStockTotal {
+  code: string
+  received: number
+}
+
+export interface DividendYearRollup {
+  year: number
+  total: number
+  stocks: DividendStockTotal[]
+}
+
+export interface DividendSummary {
+  today: string
+  pending: Dividend[]
+  years: DividendYearRollup[]
+  history_years: number[]
+}
+
+export interface DividendFilters {
+  market?: Market
+  stock_id?: number
+  status?: 'pending' | 'received'
+  year?: number
+  order?: 'asc' | 'desc'
+}
+
 /** Carries the server's field-level messages so forms can show them inline. */
 export class ApiError extends Error {
   status: number
@@ -308,5 +381,20 @@ export const api = {
   },
   depositSummary(): Promise<DepositSummary> {
     return request('/deposits/summary')
+  },
+  listDividends(filters: DividendFilters = {}): Promise<Dividend[]> {
+    return request(`/dividends${queryString({ ...filters })}`)
+  },
+  createDividend(dividend: NewDividend): Promise<Dividend> {
+    return request('/dividends', { method: 'POST', body: JSON.stringify(dividend) })
+  },
+  updateDividend(id: number, patch: DividendPatch): Promise<Dividend> {
+    return request(`/dividends/${id}`, { method: 'PATCH', body: JSON.stringify(patch) })
+  },
+  deleteDividend(id: number): Promise<void> {
+    return request(`/dividends/${id}`, { method: 'DELETE' })
+  },
+  dividendSummary(market: Market): Promise<DividendSummary> {
+    return request(`/dividends/summary${queryString({ market })}`)
   },
 }

@@ -1,4 +1,5 @@
 pub mod deposits;
+pub mod dividends;
 pub mod stocks;
 pub mod summary;
 pub mod trades;
@@ -9,9 +10,14 @@ use chrono::Datelike;
 use sqlx::sqlite::SqliteRow;
 use sqlx::{Row, SqlitePool};
 
-use crate::calc::{deposit_active, deposit_total, unit_price_incl_fee};
+use crate::calc::{
+    deposit_active, deposit_total, dividend_amount, dividend_variance, unit_price_incl_fee,
+    yield_on_cost, yield_on_price,
+};
 use crate::error::ApiError;
-use crate::models::{Deposit, DepositStatus, InputMode, Market, Stock, Trade, TradeType};
+use crate::models::{
+    Deposit, DepositStatus, Dividend, DividendStatus, InputMode, Market, Stock, Trade, TradeType,
+};
 
 #[derive(Clone)]
 pub struct AppState {
@@ -32,6 +38,12 @@ pub fn api_router(state: AppState) -> Router {
         .route(
             "/deposits/{id}",
             patch(deposits::update).delete(deposits::remove),
+        )
+        .route("/dividends", get(dividends::list).post(dividends::create))
+        .route("/dividends/summary", get(dividends::summary))
+        .route(
+            "/dividends/{id}",
+            patch(dividends::update).delete(dividends::remove),
         )
         .with_state(state)
 }
@@ -110,6 +122,45 @@ pub fn today() -> chrono::NaiveDate {
 
 pub const DEPOSIT_COLUMNS: &str =
     "id, label, bank, principal, rate, interest, end_date, note1, note2, sort_order";
+
+pub const DIVIDEND_SELECT: &str = "SELECT d.id, d.stock_id, s.market, s.code, d.pay_date, \
+     d.per_share, d.shares_held, d.buy_cost, d.estimated_amount, d.received_amount, \
+     d.received_price, d.note \
+     FROM dividends d JOIN stocks s ON s.id = d.stock_id";
+
+pub fn row_to_dividend(row: &SqliteRow) -> Result<Dividend, ApiError> {
+    let market: String = row.try_get("market")?;
+    let shares_held: Option<f64> = row.try_get("shares_held")?;
+    let buy_cost: Option<f64> = row.try_get("buy_cost")?;
+    let estimated_amount: Option<f64> = row.try_get("estimated_amount")?;
+    let received_amount: Option<f64> = row.try_get("received_amount")?;
+    let received_price: Option<f64> = row.try_get("received_price")?;
+    let amount = dividend_amount(received_amount, estimated_amount);
+    Ok(Dividend {
+        id: row.try_get("id")?,
+        stock_id: row.try_get("stock_id")?,
+        market: Market::parse(&market)
+            .ok_or_else(|| ApiError::Conflict(format!("stored market {market} is not valid")))?,
+        code: row.try_get("code")?,
+        pay_date: row.try_get("pay_date")?,
+        per_share: row.try_get("per_share")?,
+        shares_held,
+        buy_cost,
+        estimated_amount,
+        received_amount,
+        received_price,
+        note: row.try_get("note")?,
+        status: if received_amount.is_some() {
+            DividendStatus::Received
+        } else {
+            DividendStatus::Pending
+        },
+        amount,
+        yield_on_cost: yield_on_cost(amount, buy_cost),
+        yield_on_price: yield_on_price(amount, received_price, shares_held),
+        variance: dividend_variance(received_amount, estimated_amount),
+    })
+}
 
 pub fn row_to_deposit(row: &SqliteRow, today: chrono::NaiveDate) -> Result<Deposit, ApiError> {
     let end_date: String = row.try_get("end_date")?;
