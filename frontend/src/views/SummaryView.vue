@@ -172,6 +172,26 @@ watch(() => props.market, load)
           {{ fmtPercent(summary.totals.net_percent) }}
         </strong>
       </div>
+      <div class="total-card">
+        <span>累計派息</span>
+        <strong>{{ fmtMoney(summary.totals.dividends_received) }}</strong>
+      </div>
+      <div class="total-card">
+        <span>累計派息%</span>
+        <strong :class="signClass(summary.totals.dividend_return)">
+          {{ fmtPercent(summary.totals.dividend_return) }}
+        </strong>
+      </div>
+      <div class="total-card">
+        <span>淨投入總本金</span>
+        <strong>{{ fmtMoney(summary.totals.net_invested) }}</strong>
+      </div>
+      <div class="total-card">
+        <span>實質動態總回報%</span>
+        <strong :class="signClass(summary.totals.real_total_return)">
+          {{ fmtPercent(summary.totals.real_total_return) }}
+        </strong>
+      </div>
     </div>
 
     <table>
@@ -188,6 +208,11 @@ watch(() => props.market, load)
           <th class="num">當前總市值</th>
           <th class="num">未實現金額</th>
           <th class="num">未實現報酬率</th>
+          <th class="num">累計派息</th>
+          <th class="num">累計派息%</th>
+          <th class="num">淨投入總本金</th>
+          <th class="num">淨攤薄單價</th>
+          <th class="num">實質動態總回報%</th>
         </tr>
       </thead>
       <tbody>
@@ -241,6 +266,15 @@ watch(() => props.market, load)
           <td class="num" :class="signClass(stock.unrealized_return)">
             {{ fmtPercent(stock.unrealized_return) }}
           </td>
+          <td class="num">{{ fmtMoney(stock.dividends_received) }}</td>
+          <td class="num" :class="signClass(stock.dividend_return)">
+            {{ fmtPercent(stock.dividend_return) }}
+          </td>
+          <td class="num">{{ fmtMoney(stock.net_invested) }}</td>
+          <td class="num">{{ fmtPrice(stock.net_diluted_price) }}</td>
+          <td class="num" :class="signClass(stock.real_total_return)">
+            {{ fmtPercent(stock.real_total_return) }}
+          </td>
         </tr>
       </tbody>
     </table>
@@ -289,7 +323,7 @@ watch(() => props.market, load)
 }
 .totals-grid {
   display: grid;
-  grid-template-columns: repeat(auto-fit, minmax(11rem, 1fr));
+  grid-template-columns: repeat(4, 1fr);
   gap: 0.75rem;
   margin: 1rem 0;
 }

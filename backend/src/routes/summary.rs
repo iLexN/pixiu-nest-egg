@@ -59,6 +59,21 @@ pub async fn build(pool: &SqlitePool, market: Market) -> Result<SummaryResponse,
     .fetch_all(pool)
     .await?;
 
+    // 累計派息 counts only received amounts; pending estimates are excluded.
+    let dividend_rows = sqlx::query(
+        "SELECT d.stock_id, SUM(d.received_amount) AS received FROM dividends d \
+         JOIN stocks s ON s.id = d.stock_id WHERE s.market = ? \
+         AND d.received_amount IS NOT NULL GROUP BY d.stock_id",
+    )
+    .bind(market.as_str())
+    .fetch_all(pool)
+    .await?;
+    let mut dividends: std::collections::HashMap<i64, f64> =
+        std::collections::HashMap::with_capacity(dividend_rows.len());
+    for row in &dividend_rows {
+        dividends.insert(row.try_get("stock_id")?, row.try_get("received")?);
+    }
+
     let mut facts: Vec<(i64, TradeFacts)> = Vec::with_capacity(rows.len());
     for row in &rows {
         let trade_type: String = row.try_get("trade_type")?;
@@ -83,7 +98,8 @@ pub async fn build(pool: &SqlitePool, market: Market) -> Result<SummaryResponse,
                 .filter(|(stock_id, _)| *stock_id == stock.id)
                 .map(|(_, fact)| *fact)
                 .collect();
-            let summary = summarize(&own, stock.manual_price);
+            let dividend_total = dividends.get(&stock.id).copied().unwrap_or(0.0);
+            let summary = summarize(&own, stock.manual_price, dividend_total);
             StockRow {
                 stock,
                 summary,
@@ -99,6 +115,7 @@ pub async fn build(pool: &SqlitePool, market: Market) -> Result<SummaryResponse,
             sector: row.stock.sector.as_deref(),
             total_buy_cost: row.summary.total_buy_cost,
             market_value: row.summary.market_value,
+            dividends_received: row.summary.dividends_received,
         })
         .collect();
 

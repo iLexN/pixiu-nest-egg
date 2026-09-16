@@ -200,9 +200,25 @@ pub struct StockSummary {
     pub market_value: Option<f64>,
     pub unrealized_amount: Option<f64>,
     pub unrealized_return: Option<f64>,
+    /// 累計派息: Σ received dividend amounts; pending estimates excluded.
+    pub dividends_received: f64,
+    /// 累計派息% = 累計派息 ÷ 總買入成本; empty when cost is 0.
+    pub dividend_return: Option<f64>,
+    /// 淨投入總本金 = 總買入成本 − 累計派息.
+    pub net_invested: f64,
+    /// 淨攤薄單價 = 淨投入總本金 ÷ 股數 held; empty when held is 0.
+    pub net_diluted_price: Option<f64>,
+    /// 實質動態總回報% = (當前總市值 − 淨投入總本金) ÷ 淨投入總本金;
+    /// empty without a market value or when 淨投入總本金 is 0.
+    pub real_total_return: Option<f64>,
 }
 
-pub fn summarize(trades: &[TradeFacts], current_price: Option<f64>) -> StockSummary {
+/// `dividend_total` is the stock's Σ received 派息 — money actually paid out.
+pub fn summarize(
+    trades: &[TradeFacts],
+    current_price: Option<f64>,
+    dividend_total: f64,
+) -> StockSummary {
     let mut bought_shares = 0.0;
     let mut sold_shares = 0.0;
     let mut total_buy_cost = 0.0;
@@ -233,6 +249,22 @@ pub fn summarize(trades: &[TradeFacts], current_price: Option<f64>) -> StockSumm
         _ => None,
     };
 
+    let dividend_return = if total_buy_cost != 0.0 {
+        Some(dividend_total / total_buy_cost)
+    } else {
+        None
+    };
+    let net_invested = total_buy_cost - dividend_total;
+    let net_diluted_price = if shares_held != 0.0 {
+        Some(net_invested / shares_held)
+    } else {
+        None
+    };
+    let real_total_return = match market_value {
+        Some(value) if net_invested != 0.0 => Some((value - net_invested) / net_invested),
+        _ => None,
+    };
+
     StockSummary {
         shares_held,
         total_buy_cost,
@@ -241,6 +273,11 @@ pub fn summarize(trades: &[TradeFacts], current_price: Option<f64>) -> StockSumm
         market_value,
         unrealized_amount,
         unrealized_return,
+        dividends_received: dividend_total,
+        dividend_return,
+        net_invested,
+        net_diluted_price,
+        real_total_return,
     }
 }
 
@@ -251,6 +288,8 @@ pub struct RollupInput<'a> {
     pub sector: Option<&'a str>,
     pub total_buy_cost: f64,
     pub market_value: Option<f64>,
+    /// 累計派息: Σ received dividend amounts.
+    pub dividends_received: f64,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize)]
@@ -274,6 +313,17 @@ pub struct MarketTotals {
     pub net_percent: Option<f64>,
     /// Stocks left out of `market_value`/`net_*` because they have no 現價.
     pub excluded_codes: Vec<String>,
+    /// Σ 累計派息 across all stocks in the market.
+    pub dividends_received: f64,
+    /// Σ 累計派息 ÷ Σ 總買入成本; empty when `buy_cost` is 0.
+    pub dividend_return: Option<f64>,
+    /// Σ 淨投入總本金 across all stocks: `buy_cost − dividends_received`.
+    pub net_invested: f64,
+    /// Σ 淨投入總本金 of the priced subset, mirroring `buy_cost_priced`.
+    pub net_invested_priced: f64,
+    /// (market_value − net_invested_priced) ÷ net_invested_priced;
+    /// empty when nothing is priced or the denominator is 0.
+    pub real_total_return: Option<f64>,
 }
 
 pub fn market_totals(rows: &[RollupInput<'_>]) -> MarketTotals {
@@ -282,12 +332,16 @@ pub fn market_totals(rows: &[RollupInput<'_>]) -> MarketTotals {
     let mut market_value = 0.0;
     let mut priced = 0usize;
     let mut excluded_codes = Vec::new();
+    let mut dividends_received = 0.0;
+    let mut net_invested_priced = 0.0;
 
     for row in rows {
         buy_cost += row.total_buy_cost;
+        dividends_received += row.dividends_received;
         match row.market_value {
             Some(value) => {
                 buy_cost_priced += row.total_buy_cost;
+                net_invested_priced += row.total_buy_cost - row.dividends_received;
                 market_value += value;
                 priced += 1;
             }
@@ -305,6 +359,17 @@ pub fn market_totals(rows: &[RollupInput<'_>]) -> MarketTotals {
         Some(amount) if buy_cost_priced != 0.0 => Some(amount / buy_cost_priced),
         _ => None,
     };
+    let real_total_return = match market_value {
+        Some(value) if net_invested_priced != 0.0 => {
+            Some((value - net_invested_priced) / net_invested_priced)
+        }
+        _ => None,
+    };
+    let dividend_return = if buy_cost != 0.0 {
+        Some(dividends_received / buy_cost)
+    } else {
+        None
+    };
 
     MarketTotals {
         buy_cost,
@@ -313,6 +378,11 @@ pub fn market_totals(rows: &[RollupInput<'_>]) -> MarketTotals {
         net_amount,
         net_percent,
         excluded_codes,
+        dividends_received,
+        dividend_return,
+        net_invested: buy_cost - dividends_received,
+        net_invested_priced,
+        real_total_return,
     }
 }
 
@@ -1019,7 +1089,7 @@ mod tests {
             buy(18000.0, 53731.5),
             buy(20000.0, 58491.99),
         ];
-        let summary = summarize(&trades, None);
+        let summary = summarize(&trades, None, 0.0);
         assert!(approx_eq(summary.shares_held, 68000.0));
         assert!(approx_eq(summary.total_buy_cost, 208746.64));
         assert!(
@@ -1032,7 +1102,7 @@ mod tests {
     #[test]
     fn sell_reduces_holdings_but_not_average_or_cost() {
         let trades = [buy(1000.0, 10030.0), sell(400.0)];
-        let summary = summarize(&trades, None);
+        let summary = summarize(&trades, None, 0.0);
         assert!(approx_eq(summary.shares_held, 600.0));
         assert!(approx_eq(summary.total_buy_cost, 10030.0));
         // Sheet behaviour: divided by shares bought, not shares held.
@@ -1042,7 +1112,7 @@ mod tests {
     #[test]
     fn closed_position_reports_zero_average() {
         let trades = [buy(1000.0, 10030.0), sell(1000.0)];
-        let summary = summarize(&trades, Some(12.0));
+        let summary = summarize(&trades, Some(12.0), 0.0);
         assert!(approx_eq(summary.shares_held, 0.0));
         assert_eq!(summary.weighted_avg_buy_price, 0.0);
         assert_eq!(summary.market_value, None);
@@ -1059,7 +1129,7 @@ mod tests {
             buy(18000.0, 53731.5),
             buy(20000.0, 58491.99),
         ];
-        let summary = summarize(&trades, Some(5.91));
+        let summary = summarize(&trades, Some(5.91), 0.0);
         assert!(approx_eq(summary.market_value.unwrap(), 401880.0));
         assert!(approx_eq(summary.unrealized_amount.unwrap(), 193133.36));
         assert!(
@@ -1071,7 +1141,7 @@ mod tests {
 
     #[test]
     fn missing_price_leaves_unrealized_figures_empty() {
-        let summary = summarize(&[buy(100.0, 1000.0)], None);
+        let summary = summarize(&[buy(100.0, 1000.0)], None, 0.0);
         assert_eq!(summary.market_value, None);
         assert_eq!(summary.unrealized_amount, None);
         assert_eq!(summary.unrealized_return, None);
@@ -1079,10 +1149,77 @@ mod tests {
 
     #[test]
     fn zero_cost_basis_leaves_return_empty() {
-        let summary = summarize(&[buy(100.0, 0.0)], Some(5.0));
+        let summary = summarize(&[buy(100.0, 0.0)], Some(5.0), 0.0);
         assert!(approx_eq(summary.market_value.unwrap(), 500.0));
         assert!(approx_eq(summary.unrealized_amount.unwrap(), 500.0));
         assert_eq!(summary.unrealized_return, None);
+    }
+
+    // --- 3.4b dividend-adjusted net position ---
+
+    #[test]
+    fn net_position_matches_sheet_for_boc() {
+        // 中國銀行: 總買入成本 208746.64, 68000 held, 現價 5.91, 累計派息 54023.87.
+        let trades = [
+            buy(30000.0, 96523.15),
+            buy(18000.0, 53731.5),
+            buy(20000.0, 58491.99),
+        ];
+        let summary = summarize(&trades, Some(5.91), 54023.87);
+        assert!(approx_eq(summary.dividends_received, 54023.87));
+        assert!(
+            approx_eq(summary.dividend_return.unwrap(), 0.2588011476),
+            "yield = {:?}",
+            summary.dividend_return
+        );
+        assert!(approx_eq(summary.net_invested, 154722.77));
+        assert!(
+            approx_eq(summary.net_diluted_price.unwrap(), 2.275334853),
+            "diluted = {:?}",
+            summary.net_diluted_price
+        );
+        assert!(
+            approx_eq(summary.real_total_return.unwrap(), 1.597419593),
+            "return = {:?}",
+            summary.real_total_return
+        );
+    }
+
+    #[test]
+    fn no_dividends_leaves_net_invested_equal_to_cost() {
+        let summary = summarize(&[buy(1000.0, 10030.0)], Some(12.0), 0.0);
+        assert!(approx_eq(summary.dividends_received, 0.0));
+        assert!(approx_eq(summary.dividend_return.unwrap(), 0.0));
+        assert!(approx_eq(summary.net_invested, 10030.0));
+        assert!(approx_eq(summary.net_diluted_price.unwrap(), 10.03));
+        assert!(approx_eq(
+            summary.real_total_return.unwrap(),
+            1970.0 / 10030.0
+        ));
+    }
+
+    #[test]
+    fn closed_position_leaves_diluted_price_and_return_empty() {
+        let trades = [buy(1000.0, 10030.0), sell(1000.0)];
+        let summary = summarize(&trades, Some(12.0), 500.0);
+        assert!(approx_eq(summary.net_invested, 9530.0));
+        assert_eq!(summary.net_diluted_price, None);
+        assert_eq!(summary.real_total_return, None);
+    }
+
+    #[test]
+    fn zero_cost_basis_leaves_dividend_return_empty() {
+        let summary = summarize(&[buy(100.0, 0.0)], Some(5.0), 0.0);
+        assert_eq!(summary.dividend_return, None);
+        assert_eq!(summary.real_total_return, None);
+    }
+
+    #[test]
+    fn missing_price_leaves_real_total_return_empty() {
+        let summary = summarize(&[buy(100.0, 1000.0)], None, 200.0);
+        assert!(approx_eq(summary.net_invested, 800.0));
+        assert!(approx_eq(summary.net_diluted_price.unwrap(), 8.0));
+        assert_eq!(summary.real_total_return, None);
     }
 
     // --- 3.5 rollups ---
@@ -1092,21 +1229,23 @@ mod tests {
         sector: Option<&'a str>,
         cost: f64,
         market_value: Option<f64>,
+        dividends: f64,
     ) -> RollupInput<'a> {
         RollupInput {
             code,
             sector,
             total_buy_cost: cost,
             market_value,
+            dividends_received: dividends,
         }
     }
 
     #[test]
     fn sector_rollup_groups_multiple_stocks() {
         let rows = [
-            rollup_input("港燈", Some("Utilities"), 100.0, Some(120.0)),
-            rollup_input("香港中華煤氣", Some("Utilities\t"), 100.0, Some(80.0)),
-            rollup_input("匯豐", Some("Banks - Diversified"), 200.0, Some(300.0)),
+            rollup_input("港燈", Some("Utilities"), 100.0, Some(120.0), 0.0),
+            rollup_input("香港中華煤氣", Some("Utilities\t"), 100.0, Some(80.0), 0.0),
+            rollup_input("匯豐", Some("Banks - Diversified"), 200.0, Some(300.0), 0.0),
         ];
         let groups = sector_rollup(&rows);
         assert_eq!(groups.len(), 2);
@@ -1123,8 +1262,8 @@ mod tests {
     #[test]
     fn stock_without_sector_lands_in_uncategorized() {
         let rows = [
-            rollup_input("VOO", None, 100.0, Some(150.0)),
-            rollup_input("BE", Some("   "), 100.0, Some(50.0)),
+            rollup_input("VOO", None, 100.0, Some(150.0), 0.0),
+            rollup_input("BE", Some("   "), 100.0, Some(50.0), 0.0),
         ];
         let groups = sector_rollup(&rows);
         assert_eq!(groups.len(), 1);
@@ -1135,8 +1274,8 @@ mod tests {
     #[test]
     fn totals_exclude_stocks_without_a_price() {
         let rows = [
-            rollup_input("港燈", Some("Utilities"), 100.0, Some(150.0)),
-            rollup_input("港交所", Some("Financial Services"), 400.0, None),
+            rollup_input("港燈", Some("Utilities"), 100.0, Some(150.0), 0.0),
+            rollup_input("港交所", Some("Financial Services"), 400.0, None, 0.0),
         ];
         let totals = market_totals(&rows);
         assert!(approx_eq(totals.buy_cost, 500.0));
@@ -1149,11 +1288,33 @@ mod tests {
 
     #[test]
     fn totals_without_any_price_have_no_market_value() {
-        let rows = [rollup_input("港交所", None, 400.0, None)];
+        let rows = [rollup_input("港交所", None, 400.0, None, 0.0)];
         let totals = market_totals(&rows);
         assert_eq!(totals.market_value, None);
         assert_eq!(totals.net_amount, None);
         assert_eq!(totals.net_percent, None);
+    }
+
+    #[test]
+    fn totals_aggregate_dividend_adjusted_figures() {
+        let rows = [
+            rollup_input("中國銀行", None, 208746.64, Some(401880.0), 54023.87),
+            rollup_input("港交所", None, 400.0, None, 10.0),
+        ];
+        let totals = market_totals(&rows);
+        assert!(approx_eq(totals.dividends_received, 54033.87));
+        assert!(approx_eq(
+            totals.dividend_return.unwrap(),
+            54033.87 / 209146.64
+        ));
+        assert!(approx_eq(totals.net_invested, 209146.64 - 54033.87));
+        // Only the priced stock's net invested feeds the aggregate return.
+        assert!(approx_eq(totals.net_invested_priced, 154722.77));
+        assert!(
+            approx_eq(totals.real_total_return.unwrap(), 1.597419593),
+            "return = {:?}",
+            totals.real_total_return
+        );
     }
 
     // --- deposits ---

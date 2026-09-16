@@ -49,6 +49,11 @@ export interface SummaryStock extends Stock {
   market_value: number | null
   unrealized_amount: number | null
   unrealized_return: number | null
+  dividends_received: number
+  dividend_return: number | null
+  net_invested: number
+  net_diluted_price: number | null
+  real_total_return: number | null
   trade_count: number
 }
 
@@ -68,6 +73,11 @@ export interface MarketTotals {
   net_amount: number | null
   net_percent: number | null
   excluded_codes: string[]
+  dividends_received: number
+  dividend_return: number | null
+  net_invested: number
+  net_invested_priced: number
+  real_total_return: number | null
 }
 
 export interface SummaryResponse {

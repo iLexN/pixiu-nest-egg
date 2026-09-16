@@ -51,6 +51,14 @@ pub struct SheetSummary {
     pub shares_held: Option<f64>,
     pub weighted_avg_buy_price: Option<f64>,
     pub total_buy_cost: Option<f64>,
+    /// 港股 K: 累計派息 (counts every J–O row, including not-yet-received ones).
+    pub cumulative_dividends: Option<f64>,
+    /// 港股 P: 累計派息% = K ÷ 總買入成本.
+    pub dividend_return: Option<f64>,
+    /// 港股 U: 淨投入總本金 = 總買入成本 − K.
+    pub net_invested: Option<f64>,
+    /// 港股 V: 淨攤薄單價 = U ÷ 股數.
+    pub net_diluted_price: Option<f64>,
 }
 
 /// One row of the trade sheet's J–O 派息 block.
@@ -488,11 +496,17 @@ fn parse_summary(rows: &Rows, market: Market) -> Vec<SheetSummary> {
         let Some(code) = text(row, code_column) else {
             break;
         };
+        // The dividend-adjusted columns (K, P, U, V) exist only on 港股.
+        let hk = market == Market::Hk;
         summary.push(SheetSummary {
             code,
             shares_held: number(row, 3),
             weighted_avg_buy_price: number(row, 4),
             total_buy_cost: number(row, 5),
+            cumulative_dividends: hk.then(|| number(row, 10)).flatten(),
+            dividend_return: hk.then(|| number(row, 15)).flatten(),
+            net_invested: hk.then(|| number(row, 20)).flatten(),
+            net_diluted_price: hk.then(|| number(row, 21)).flatten(),
         });
     }
     summary

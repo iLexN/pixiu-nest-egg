@@ -300,6 +300,7 @@ SummaryView
   → GET /api/summary?market=HK or US
   → backend loads all stocks in that market, ordered by sort_order
   → backend loads all trade facts for that market
+  → backend sums received 派息 per stock
   → backend groups trades by stock_id
   → backend calculates every stock row
   → backend calculates sector rollups and market totals
@@ -317,6 +318,11 @@ shares held = Σ BUY 股數 − Σ SELL 股數
 當前總市值 = 現價 × shares held
 未實現金額 = 當前總市值 − 總買入成本
 未實現報酬率 = 未實現金額 ÷ 總買入成本
+累計派息 = Σ received_amount of the stock's 派息 records
+累計派息% = 累計派息 ÷ 總買入成本
+淨投入總本金 = 總買入成本 − 累計派息
+淨攤薄單價 = 淨投入總本金 ÷ shares held
+實質動態總回報% = (當前總市值 − 淨投入總本金) ÷ 淨投入總本金
 ```
 
 Important spreadsheet-compatible behavior:
@@ -326,6 +332,10 @@ Important spreadsheet-compatible behavior:
 - 加權平均買入單價 divides by **shares bought**, not shares held.
 - If there are no holdings, weighted average is shown as `0`.
 - If 現價 is missing, market value and unrealized figures are empty, not zero.
+- 累計派息 counts **received amounts only**; a pending estimate changes none of the dividend-adjusted figures until it is marked received. This deliberately differs from the workbook's K column, which sums every J–O row including future ones.
+- 累計派息% is empty when 總買入成本 is 0; 淨攤薄單價 is empty when holdings are 0; 實質動態總回報% is empty when the stock has no 現價 or 淨投入總本金 is 0.
+
+The totals row also shows 累計派息 and 淨投入總本金 summed across all stocks in the market, plus an aggregate 實質動態總回報% = (total market value − 淨投入總本金 of priced stocks) ÷ 淨投入總本金 of priced stocks. Stocks without 現價 are excluded from that denominator, matching how the unpriced subset is excluded from 未實現報酬率.
 
 ## Reorder stocks in 持倉總覽
 

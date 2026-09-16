@@ -98,6 +98,23 @@ async fn check_market(
         .await
         .map_err(|err| anyhow!("computing the {} summary failed: {err}", market.as_str()))?;
 
+    // The sheet's K column counts every J–O row, so parity uses the effective
+    // amount (received else estimated), not the UI's received-only figure.
+    let dividend_rows = sqlx::query(
+        "SELECT d.stock_id, SUM(COALESCE(d.received_amount, d.estimated_amount)) AS effective \
+         FROM dividends d JOIN stocks s ON s.id = d.stock_id \
+         WHERE s.market = ? GROUP BY d.stock_id",
+    )
+    .bind(market.as_str())
+    .fetch_all(pool)
+    .await?;
+    let mut effective_dividends: std::collections::HashMap<i64, f64> =
+        std::collections::HashMap::with_capacity(dividend_rows.len());
+    for row in &dividend_rows {
+        use sqlx::Row;
+        effective_dividends.insert(row.try_get("stock_id")?, row.try_get("effective")?);
+    }
+
     for sheet in &data.market(market).summary {
         let Some(computed) = summary
             .stocks
@@ -145,6 +162,49 @@ async fn check_market(
                             sheet: sheet_value,
                         };
                         break;
+                    }
+                }
+            }
+        }
+
+        // 港股's dividend-adjusted columns K/P/U/V (W is skipped: the sheet's
+        // market value used live prices, the app uses manual 現價).
+        if outcome == Outcome::Match && market == Market::Hk {
+            let effective = effective_dividends
+                .get(&computed.stock.id)
+                .copied()
+                .unwrap_or(0.0);
+            let cost = computed.summary.total_buy_cost;
+            let held = computed.summary.shares_held;
+            let net_invested = cost - effective;
+            let net_comparisons: [(&'static str, Option<f64>, Option<f64>); 4] = [
+                ("累計派息", sheet.cumulative_dividends, Some(effective)),
+                (
+                    "累計派息%",
+                    sheet.dividend_return,
+                    (cost != 0.0).then(|| effective / cost),
+                ),
+                ("淨投入總本金", sheet.net_invested, Some(net_invested)),
+                (
+                    "淨攤薄單價",
+                    sheet.net_diluted_price,
+                    (held != 0.0).then(|| net_invested / held),
+                ),
+            ];
+            for (field, sheet_value, computed_value) in net_comparisons {
+                match (sheet_value, computed_value) {
+                    (None, _) => continue,
+                    (Some(sheet_value), computed_value) => {
+                        sheet_values += 1;
+                        let computed_value = computed_value.unwrap_or(f64::NAN);
+                        if !approx_eq(computed_value, sheet_value) {
+                            outcome = Outcome::Difference {
+                                field,
+                                computed: computed_value,
+                                sheet: sheet_value,
+                            };
+                            break;
+                        }
                     }
                 }
             }
