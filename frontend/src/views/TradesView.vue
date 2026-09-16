@@ -1,5 +1,6 @@
 <script setup lang="ts">
 import { onMounted, ref, watch } from 'vue'
+import DateInput from '../components/DateInput.vue'
 import TradeForm from '../components/TradeForm.vue'
 import TradeTable from '../components/TradeTable.vue'
 import { api, ApiError, type Market, type Stock, type Trade } from '../api'
@@ -10,11 +11,16 @@ const stocks = ref<Stock[]>([])
 const trades = ref<Trade[]>([])
 const message = ref('')
 const error = ref('')
+const editing = ref<Trade | null>(null)
+
+const showForm = ref(false)
 
 const filterCode = ref('')
 const from = ref('')
 const to = ref('')
 const order = ref<'asc' | 'desc'>('asc')
+
+const ISO_DATE = /^\d{4}-\d{2}-\d{2}$/
 
 async function load() {
   error.value = ''
@@ -23,8 +29,8 @@ async function load() {
     trades.value = await api.listTrades({
       market: props.market,
       code: filterCode.value || undefined,
-      from: from.value || undefined,
-      to: to.value || undefined,
+      from: ISO_DATE.test(from.value) ? from.value : undefined,
+      to: ISO_DATE.test(to.value) ? to.value : undefined,
       order: order.value,
     })
   } catch (err) {
@@ -48,15 +54,28 @@ async function remove(trade: Trade) {
   }
 }
 
+function toggleForm() {
+  // While editing, 新增交易 switches to a fresh create form instead of closing.
+  showForm.value = editing.value ? true : !showForm.value
+  editing.value = null
+}
+
+function cancelForm() {
+  editing.value = null
+  showForm.value = false
+}
+
+function startEdit(trade: Trade) {
+  editing.value = trade
+  showForm.value = true
+}
+
 function onSaved(trade: Trade) {
   message.value = `已儲存交易 #${trade.id}`
   error.value = ''
+  editing.value = null
+  showForm.value = false
   void load()
-}
-
-function onError(messageText: string) {
-  message.value = ''
-  error.value = messageText
 }
 
 function clearFilters() {
@@ -69,13 +88,22 @@ function clearFilters() {
 onMounted(load)
 watch(() => props.market, () => {
   filterCode.value = ''
+  editing.value = null
   void load()
 })
 </script>
 
 <template>
   <section>
-    <TradeForm :market="props.market" :stocks="stocks" @saved="onSaved" />
+    <button type="button" class="toggle-form" @click="toggleForm">新增交易</button>
+    <TradeForm
+      v-if="showForm"
+      :market="props.market"
+      :stocks="stocks"
+      :editing="editing"
+      @saved="onSaved"
+      @cancelled="cancelForm"
+    />
 
     <div class="card">
       <div class="filters">
@@ -90,11 +118,11 @@ watch(() => props.market, () => {
         </label>
         <label>
           由
-          <input v-model="from" type="date" @change="load" />
+          <DateInput v-model="from" @change="load" />
         </label>
         <label>
           至
-          <input v-model="to" type="date" @change="load" />
+          <DateInput v-model="to" @change="load" />
         </label>
         <button type="button" class="secondary" @click="clearFilters">清除篩選</button>
       </div>
@@ -104,18 +132,19 @@ watch(() => props.market, () => {
 
       <TradeTable
         :trades="trades"
-        :stocks="stocks"
         :order="order"
-        @saved="onSaved"
+        @edit="startEdit"
         @remove="remove"
         @toggle-order="toggleOrder"
-        @error="onError"
       />
     </div>
   </section>
 </template>
 
 <style scoped>
+.toggle-form {
+  margin-bottom: 1rem;
+}
 .filters {
   display: flex;
   flex-wrap: wrap;

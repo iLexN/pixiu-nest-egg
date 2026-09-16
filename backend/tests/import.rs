@@ -44,6 +44,30 @@ async fn imports_every_trade_row_then_skips_them_on_a_second_run() {
 }
 
 #[tokio::test]
+async fn imports_every_deposit_row_then_skips_them_on_a_second_run() {
+    let pool = db::connect_memory().await.expect("db");
+    let data = xlsx::read(&workbook_path()).expect("workbook");
+
+    let first = import::import(&pool, &data).await.expect("first import");
+    assert_eq!(first.deposits.deposits_imported, 23);
+    assert_eq!(first.deposits.deposits_skipped, 0);
+    assert_eq!(count(&pool, "deposits").await, 23);
+
+    // Workbook row order is preserved as sort_order.
+    let first_label: Option<String> =
+        sqlx::query_scalar("SELECT label FROM deposits ORDER BY sort_order LIMIT 1")
+            .fetch_one(&pool)
+            .await
+            .expect("first label");
+    assert_eq!(first_label.as_deref(), Some("HS-74"));
+
+    let second = import::import(&pool, &data).await.expect("second import");
+    assert_eq!(second.deposits.deposits_imported, 0);
+    assert_eq!(second.deposits.deposits_skipped, 23);
+    assert_eq!(count(&pool, "deposits").await, 23);
+}
+
+#[tokio::test]
 async fn imported_stock_order_matches_the_summary_sheets() {
     let pool = db::connect_memory().await.expect("db");
     let data = xlsx::read(&workbook_path()).expect("workbook");
@@ -126,6 +150,8 @@ async fn duplicate_source_rows_are_kept_once_and_only_once() {
             stocks: Vec::new(),
             summary: Vec::new(),
         },
+        deposits: Vec::new(),
+        deposit_cached: Default::default(),
     };
 
     let first = import::import(&pool, &data).await.expect("first import");

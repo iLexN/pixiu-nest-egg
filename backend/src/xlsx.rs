@@ -4,6 +4,7 @@
 //! everything else on those sheets (the 派息 table, templates, scratch cells)
 //! is ignored. Formula cells are read as their cached values.
 
+use std::collections::HashMap;
 use std::path::Path;
 
 use anyhow::{anyhow, Context};
@@ -15,6 +16,8 @@ pub const HK_TRADE_SHEET: &str = "港股Trade";
 pub const HK_SUMMARY_SHEET: &str = "港股";
 pub const US_TRADE_SHEET: &str = "美股Trade";
 pub const US_SUMMARY_SHEET: &str = "美股";
+pub const DEPOSIT_SHEET: &str = "定期";
+pub const DEPOSIT_INFO_SHEET: &str = "定期Info";
 
 #[derive(Debug, Clone)]
 pub struct SheetTrade {
@@ -58,10 +61,73 @@ pub struct MarketSheets {
     pub summary: Vec<SheetSummary>,
 }
 
+/// One row of 定期Info's 表_定期List. The sheet's derived columns
+/// (status, total, month, year) are not read; the app re-derives them.
+#[derive(Debug, Clone)]
+pub struct SheetDeposit {
+    /// The sheet's `id` column: a bank reference like `SC-9632`.
+    pub label: Option<String>,
+    /// The sheet's `input` column.
+    pub principal: Option<f64>,
+    /// Annual rate as a fraction (0.03 = 3%).
+    pub rate: Option<f64>,
+    /// 利息.
+    pub interest: Option<f64>,
+    pub end_date: String,
+    pub note1: Option<String>,
+    pub note2: Option<String>,
+    /// 1-based position within the table, stored as sort_order.
+    pub sort_order: i64,
+    /// 1-based row number in the source sheet, for error messages.
+    pub source_row: usize,
+}
+
+/// A 定期 month-table or bank row: B Total (Σ deposit total), C 利息,
+/// D 定期 (Σ principal).
+#[derive(Debug, Clone, PartialEq)]
+pub struct SheetActiveSums {
+    pub total: f64,
+    pub interest: f64,
+    pub principal: f64,
+}
+
+/// A 定期Info year-table month row: B Total (= 利息 + 定期), C 利息,
+/// D 定期 (Σ deposit total).
+#[derive(Debug, Clone, PartialEq)]
+pub struct SheetYearSums {
+    pub total: f64,
+    pub interest: f64,
+    pub payout: f64,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct SheetYearTable {
+    pub year: i32,
+    /// (month number, sums) for each month the table lists.
+    pub months: Vec<(u32, SheetYearSums)>,
+}
+
+/// The workbook's cached deposit aggregates, for the parity check.
+#[derive(Debug, Clone, Default)]
+pub struct DepositSheetCached {
+    /// 定期!B1: Σ active principal.
+    pub active_principal: Option<f64>,
+    /// The 定期 month table: month number -> sums.
+    pub months: Vec<(u32, SheetActiveSums)>,
+    /// The month table's `total` row, when present.
+    pub grand_total: Option<SheetActiveSums>,
+    /// The 定期 bank rows keyed by the label in column A (SC, HS).
+    pub banks: Vec<(String, SheetActiveSums)>,
+    /// The 定期Info year tables.
+    pub years: Vec<SheetYearTable>,
+}
+
 #[derive(Debug, Clone)]
 pub struct WorkbookData {
     pub hk: MarketSheets,
     pub us: MarketSheets,
+    pub deposits: Vec<SheetDeposit>,
+    pub deposit_cached: DepositSheetCached,
 }
 
 impl WorkbookData {
@@ -87,6 +153,8 @@ pub fn read(path: &Path) -> anyhow::Result<WorkbookData> {
     let hk_summary = sheet_rows(&mut workbook, HK_SUMMARY_SHEET, path)?;
     let us_trades = sheet_rows(&mut workbook, US_TRADE_SHEET, path)?;
     let us_summary = sheet_rows(&mut workbook, US_SUMMARY_SHEET, path)?;
+    let deposit_info = sheet_rows(&mut workbook, DEPOSIT_INFO_SHEET, path)?;
+    let deposit_view = sheet_rows(&mut workbook, DEPOSIT_SHEET, path)?;
 
     Ok(WorkbookData {
         hk: MarketSheets {
@@ -101,6 +169,8 @@ pub fn read(path: &Path) -> anyhow::Result<WorkbookData> {
             stocks: parse_us_stocks(&us_summary),
             summary: parse_summary(&us_summary, Market::Us),
         },
+        deposits: parse_deposits(&deposit_info)?,
+        deposit_cached: parse_deposit_cached(&deposit_view, &deposit_info),
     })
 }
 
@@ -326,6 +396,145 @@ fn parse_summary(rows: &Rows, market: Market) -> Vec<SheetSummary> {
     summary
 }
 
+// 定期Info 表_定期List: status | id | input | rate | 利息 | total | end date |
+// note1 | note2 | month | year — located by header names, not a fixed range.
+fn parse_deposits(rows: &Rows) -> anyhow::Result<Vec<SheetDeposit>> {
+    let header = rows
+        .iter()
+        .position(|row| {
+            row.iter()
+                .any(|c| matches!(c, Data::String(v) if v.trim() == "status"))
+                && row
+                    .iter()
+                    .any(|c| matches!(c, Data::String(v) if v.trim() == "input"))
+        })
+        .ok_or_else(|| anyhow!("{DEPOSIT_INFO_SHEET} sheet has no 表_定期List header"))?;
+
+    let mut columns: HashMap<String, usize> = HashMap::new();
+    for (index, cell) in rows[header].iter().enumerate() {
+        if let Data::String(name) = cell {
+            columns.insert(name.trim().to_string(), index);
+        }
+    }
+    let column = |name: &str| -> anyhow::Result<usize> {
+        columns
+            .get(name)
+            .copied()
+            .ok_or_else(|| anyhow!("{DEPOSIT_INFO_SHEET} 表_定期List has no {name} column"))
+    };
+    let id_col = column("id")?;
+    let input_col = column("input")?;
+    let rate_col = column("rate")?;
+    let interest_col = column("利息")?;
+    let end_date_col = column("end date")?;
+    let note1_col = columns.get("note1").copied();
+    let note2_col = columns.get("note2").copied();
+
+    let mut deposits = Vec::new();
+    for (offset, row) in rows.iter().enumerate().skip(header + 1) {
+        let label = text(row, id_col);
+        let principal = number(row, input_col);
+        let interest = number(row, interest_col);
+        let end_date = date(row, end_date_col);
+        if label.is_none() && principal.is_none() && interest.is_none() && end_date.is_none() {
+            continue; // blank row outside the table
+        }
+        let source_row = offset + 1;
+        let Some(end_date) = end_date else {
+            return Err(anyhow!(
+                "row {source_row} of {DEPOSIT_INFO_SHEET} has no usable end date"
+            ));
+        };
+        deposits.push(SheetDeposit {
+            label,
+            principal,
+            rate: number(row, rate_col),
+            interest,
+            end_date,
+            note1: note1_col.and_then(|col| text(row, col)),
+            note2: note2_col.and_then(|col| text(row, col)),
+            sort_order: deposits.len() as i64 + 1,
+            source_row,
+        });
+    }
+    Ok(deposits)
+}
+
+/// The "1月".."12月" row labels used by the 定期 month table and the
+/// 定期Info year tables.
+fn month_number(label: &str) -> Option<u32> {
+    let month = label.strip_suffix('月')?.parse::<u32>().ok()?;
+    (1..=12).contains(&month).then_some(month)
+}
+
+/// Cached aggregate cells: the 定期 sheet's B1 total, month table and bank
+/// rows, plus the 定期Info year tables. Anything without all three numbers is
+/// skipped, which keeps the checklists and scratch cells out.
+fn parse_deposit_cached(view: &Rows, info: &Rows) -> DepositSheetCached {
+    let mut cached = DepositSheetCached {
+        active_principal: view.first().and_then(|row| number(row, 1)),
+        ..DepositSheetCached::default()
+    };
+
+    for row in view {
+        let Some(Data::String(label)) = cell(row, 0) else {
+            continue;
+        };
+        let label = label.trim();
+        let (Some(total), Some(interest), Some(principal)) =
+            (number(row, 1), number(row, 2), number(row, 3))
+        else {
+            continue;
+        };
+        let sums = SheetActiveSums {
+            total,
+            interest,
+            principal,
+        };
+        if let Some(month) = month_number(label) {
+            cached.months.push((month, sums));
+        } else if label.eq_ignore_ascii_case("total") {
+            cached.grand_total = Some(sums);
+        } else {
+            cached.banks.push((label.to_string(), sums));
+        }
+    }
+
+    // A "YYYY" label with B/C/D = Total/利息/定期 starts a 12-row month block.
+    for (index, row) in info.iter().enumerate() {
+        let Some(year) = text(row, 0)
+            .and_then(|value| value.parse::<i32>().ok())
+            .filter(|year| (2000..=2100).contains(year))
+        else {
+            continue;
+        };
+        if text(row, 1).as_deref() != Some("Total") {
+            continue;
+        }
+        let mut months = Vec::new();
+        for month in 1..=12u32 {
+            let Some(month_row) = info.get(index + month as usize) else {
+                break;
+            };
+            if text(month_row, 0).and_then(|label| month_number(&label)) != Some(month) {
+                break;
+            }
+            months.push((
+                month,
+                SheetYearSums {
+                    total: number(month_row, 1).unwrap_or(0.0),
+                    interest: number(month_row, 2).unwrap_or(0.0),
+                    payout: number(month_row, 3).unwrap_or(0.0),
+                },
+            ));
+        }
+        if !months.is_empty() {
+            cached.years.push(SheetYearTable { year, months });
+        }
+    }
+    cached
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -417,6 +626,71 @@ mod tests {
             .find(|s| s.code == "ＦＧ恆生紅利")
             .expect("ＦＧ恆生紅利");
         assert_eq!(unpriced.total_buy_cost, None);
+    }
+
+    #[test]
+    fn reads_the_deposit_list_and_cached_aggregates() {
+        let data = read(&workbook_path()).expect("workbook is readable");
+        assert_eq!(data.deposits.len(), 23);
+
+        let sc9632 = data
+            .deposits
+            .iter()
+            .find(|d| d.label.as_deref() == Some("SC-9632"))
+            .expect("SC-9632");
+        assert_eq!(sc9632.principal, Some(110000.0));
+        assert_eq!(sc9632.end_date, "2026-10-12");
+        assert_eq!(sc9632.sort_order, 18);
+
+        // Formula input =90000-32000 imports as its computed value.
+        let sc4501 = data
+            .deposits
+            .iter()
+            .find(|d| d.label.as_deref() == Some("SC-4501"))
+            .expect("SC-4501");
+        assert_eq!(sc4501.principal, Some(58000.0));
+
+        // Interest-only row: no label, no principal.
+        assert!(data
+            .deposits
+            .iter()
+            .any(|d| d.label.is_none() && d.principal.is_none() && d.interest == Some(539.25)));
+
+        // 定期!B1 and the month table (10月: Total 146278 / 利息 1278 / 定期 145000).
+        assert_eq!(data.deposit_cached.active_principal, Some(445000.0));
+        let (_, oct) = data
+            .deposit_cached
+            .months
+            .iter()
+            .find(|(month, _)| *month == 10)
+            .expect("10月");
+        assert_eq!(oct.principal, 145000.0);
+        assert_eq!(oct.interest, 1278.0);
+        assert_eq!(oct.total, 146278.0);
+
+        let (_, sc) = data
+            .deposit_cached
+            .banks
+            .iter()
+            .find(|(prefix, _)| prefix == "SC")
+            .expect("SC bank row");
+        assert_eq!(sc.principal, 365000.0);
+
+        // 表_2027定期 1月: Total 81614 / 利息 807 / 定期 80807.
+        let y2027 = data
+            .deposit_cached
+            .years
+            .iter()
+            .find(|table| table.year == 2027)
+            .expect("2027 table");
+        let (_, jan) = y2027
+            .months
+            .iter()
+            .find(|(month, _)| *month == 1)
+            .expect("1月");
+        assert_eq!(jan.interest, 807.0);
+        assert_eq!(jan.payout, 80807.0);
+        assert_eq!(jan.total, 81614.0);
     }
 
     #[test]

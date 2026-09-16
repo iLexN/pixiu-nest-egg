@@ -1,14 +1,16 @@
 <script setup lang="ts">
 import { computed, reactive, ref, watch } from 'vue'
 import { api, ApiError, type Market, type Stock, type Trade, type TradeType } from '../api'
+import DateInput from './DateInput.vue'
 import { fmtMoney, fmtPrice, todayIso } from '../format'
 
 const props = defineProps<{
   market: Market
   stocks: Stock[]
+  editing: Trade | null
 }>()
 
-const emit = defineEmits<{ saved: [Trade] }>()
+const emit = defineEmits<{ saved: [Trade]; cancelled: [] }>()
 
 interface FormState {
   code: string
@@ -45,6 +47,27 @@ watch(
       form.code = stocks[0]?.code ?? ''
     }
   },
+)
+
+watch(
+  () => props.editing,
+  (trade) => {
+    if (!trade) {
+      Object.assign(form, emptyForm())
+      return
+    }
+    Object.assign(form, {
+      code: trade.code,
+      trade_type: trade.trade_type,
+      trade_date: trade.trade_date,
+      shares: String(trade.shares),
+      unit_price: String(trade.unit_price),
+      total: String(trade.total),
+      fee: String(trade.fee),
+      note: trade.note ?? '',
+    })
+  },
+  { immediate: true },
 )
 
 watch(
@@ -87,19 +110,37 @@ async function submit() {
   try {
     const shares = num(form.shares) ?? 0
     const unitPrice = num(form.unit_price) ?? 0
-    const saved = await api.createTrade({
-      market: props.market,
-      code: form.code,
-      trade_type: form.trade_type,
-      trade_date: form.trade_date,
-      shares,
-      unit_price: unitPrice,
-      total: isHk.value ? num(form.total) : null,
-      fee: isHk.value ? null : num(form.fee),
-      input_mode: isHk.value ? 'HK_TOTAL' : 'US_FEE',
-      note: String(form.note).trim() === '' ? null : String(form.note).trim(),
-    })
-    Object.assign(form, emptyForm())
+    const note = String(form.note).trim() === '' ? null : String(form.note).trim()
+    let saved: Trade
+    if (props.editing) {
+      const stockId =
+        props.stocks.find((stock) => stock.code === form.code)?.id ?? props.editing.stock_id
+      saved = await api.updateTrade(props.editing.id, {
+        stock_id: stockId,
+        trade_type: form.trade_type,
+        trade_date: form.trade_date,
+        shares,
+        unit_price: unitPrice,
+        total: isHk.value ? num(form.total) : null,
+        fee: isHk.value ? null : num(form.fee),
+        input_mode: props.editing.input_mode,
+        note,
+      })
+    } else {
+      saved = await api.createTrade({
+        market: props.market,
+        code: form.code,
+        trade_type: form.trade_type,
+        trade_date: form.trade_date,
+        shares,
+        unit_price: unitPrice,
+        total: isHk.value ? num(form.total) : null,
+        fee: isHk.value ? null : num(form.fee),
+        input_mode: isHk.value ? 'HK_TOTAL' : 'US_FEE',
+        note,
+      })
+      Object.assign(form, emptyForm())
+    }
     emit('saved', saved)
   } catch (err) {
     error.value =
@@ -112,7 +153,7 @@ async function submit() {
 
 <template>
   <form class="card trade-form" @submit.prevent="submit">
-    <h3>新增交易</h3>
+    <h3>{{ props.editing ? `編輯交易 #${props.editing.id}` : '新增交易' }}</h3>
 
     <div class="grid">
       <label>
@@ -137,7 +178,7 @@ async function submit() {
 
       <label>
         日期
-        <input v-model="form.trade_date" type="date" required />
+        <DateInput v-model="form.trade_date" required />
         <small v-if="error?.fieldMessage('trade_date')" class="error">{{
           error.fieldMessage('trade_date')
         }}</small>
@@ -191,7 +232,10 @@ async function submit() {
     <p v-if="error && error.fields.length === 0" class="error">{{ error.message }}</p>
 
     <div class="actions">
-      <button type="submit" :disabled="saving">新增</button>
+      <button type="submit" :disabled="saving">{{ props.editing ? '儲存' : '新增' }}</button>
+      <button v-if="props.editing" type="button" class="secondary" @click="emit('cancelled')">
+        取消
+      </button>
     </div>
   </form>
 </template>

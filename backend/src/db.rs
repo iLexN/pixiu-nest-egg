@@ -66,6 +66,7 @@ mod tests {
         let tables = table_names(&pool).await;
         assert!(tables.contains(&"stocks".to_string()));
         assert!(tables.contains(&"trades".to_string()));
+        assert!(tables.contains(&"deposits".to_string()));
         assert!(path.exists());
 
         // Second run against the same file must not fail or change the schema.
@@ -84,5 +85,6 @@ mod tests {
         let tables = table_names(&pool).await;
         assert!(tables.contains(&"stocks".to_string()));
         assert!(tables.contains(&"trades".to_string()));
+        assert!(tables.contains(&"deposits".to_string()));
     }
 }

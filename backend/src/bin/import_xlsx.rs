@@ -39,6 +39,12 @@ async fn main() -> anyhow::Result<()> {
             market_report.stocks_updated,
         );
     }
+    println!(
+        "定期: {} deposit row(s) in the sheet -> {} imported, {} skipped (already present)",
+        data.deposits.len(),
+        report.deposits.deposits_imported,
+        report.deposits.deposits_skipped,
+    );
 
     pool.close().await;
     Ok(())

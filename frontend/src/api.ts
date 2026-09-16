@@ -135,6 +135,79 @@ export interface TradeFilters {
   order?: 'asc' | 'desc'
 }
 
+export type DepositStatus = 'ACTIVE' | 'END'
+
+export interface Deposit {
+  id: number
+  label: string | null
+  bank: string | null
+  principal: number | null
+  rate: number | null
+  interest: number | null
+  end_date: string
+  note1: string | null
+  note2: string | null
+  sort_order: number
+  total: number
+  status: DepositStatus
+  end_year: number
+  end_month: number
+}
+
+export interface NewDeposit {
+  label?: string | null
+  bank?: string | null
+  principal?: number | null
+  rate?: number | null
+  interest?: number | null
+  end_date: string
+  note1?: string | null
+  note2?: string | null
+}
+
+export interface ActiveMonthBucket {
+  year: number
+  month: number
+  principal: number
+  interest: number
+  total: number
+}
+
+export interface BankRollup {
+  bank: string
+  principal: number
+  interest: number
+  total: number
+}
+
+export interface YearMonthRow {
+  month: number
+  interest: number
+  payout: number
+  total: number
+}
+
+export interface YearRollup {
+  year: number
+  months: YearMonthRow[]
+}
+
+export interface DepositSummary {
+  today: string
+  upcoming: Deposit[]
+  active_totals: { principal: number; interest: number; total: number }
+  months: ActiveMonthBucket[]
+  banks: BankRollup[]
+  years: YearRollup[]
+  history_years: number[]
+}
+
+export interface DepositFilters {
+  status?: 'active' | 'ended'
+  year?: number
+  order?: 'asc' | 'desc'
+}
+
 /** Carries the server's field-level messages so forms can show them inline. */
 export class ApiError extends Error {
   status: number
@@ -220,5 +293,20 @@ export const api = {
   },
   summary(market: Market): Promise<SummaryResponse> {
     return request(`/summary${queryString({ market })}`)
+  },
+  listDeposits(filters: DepositFilters = {}): Promise<Deposit[]> {
+    return request(`/deposits${queryString({ ...filters })}`)
+  },
+  createDeposit(deposit: NewDeposit): Promise<Deposit> {
+    return request('/deposits', { method: 'POST', body: JSON.stringify(deposit) })
+  },
+  updateDeposit(id: number, patch: Partial<NewDeposit>): Promise<Deposit> {
+    return request(`/deposits/${id}`, { method: 'PATCH', body: JSON.stringify(patch) })
+  },
+  deleteDeposit(id: number): Promise<void> {
+    return request(`/deposits/${id}`, { method: 'DELETE' })
+  },
+  depositSummary(): Promise<DepositSummary> {
+    return request('/deposits/summary')
   },
 }

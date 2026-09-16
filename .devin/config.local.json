@@ -19,7 +19,13 @@
       "Exec(pnpm exec vue-tsc)",
       "Exec(cargo clippy)",
       "Exec(sleep)",
-      "Exec(python3)"
+      "Exec(python3)",
+      "Exec(graft map)",
+      "Exec(cat)",
+      "Exec(ls)",
+      "Exec(diff)",
+      "Exec(sed)",
+      "Exec(test)"
     ]
   }
 }

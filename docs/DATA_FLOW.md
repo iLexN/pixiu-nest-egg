@@ -1,4 +1,4 @@
-# Stock tracker data-flow guide
+# Wealth tracker data-flow guide
 
 This guide explains where each action saves data, which database table changes, where calculations happen, and what the frontend reloads afterward.
 
@@ -18,7 +18,7 @@ Vue UI displays formatted values
 
 The **backend is authoritative**. The frontend may show a temporary preview while typing, but the backend validates and recalculates every value before saving or returning summary figures.
 
-There is **no summary table** in SQLite. Summary figures are recomputed from `stocks` and `trades` every time the summary API is called.
+There is **no summary table** in SQLite. Summary figures are recomputed from `stocks` and `trades` every time the summary API is called, and deposit rollups are recomputed from `deposits`.
 
 ## Database tables
 
@@ -61,6 +61,23 @@ One row per trade.
 | `note` | Optional note, required for zero-share or negative-fee adjustments |
 | `created_at`, `updated_at` | Audit timestamps |
 
+### `deposits`
+
+One row per 定期 deposit (from 定期Info's 表_定期List). Nullable columns reflect the sheet's interest-only and label-only rows.
+
+| Column | Meaning |
+|---|---|
+| `id` | Internal deposit ID |
+| `label` | The sheet's `id` column: bank reference like `SC-9632` |
+| `bank` | Bank code (SC = 渣打, HS = 恒生); derived from the label prefix on import |
+| `principal` | The sheet's `input` column |
+| `rate` | Annual rate as a fraction (0.03 = 3%) |
+| `interest` | 利息 |
+| `end_date` | `YYYY-MM-DD` text date, required |
+| `note1`, `note2` | Optional notes |
+| `sort_order` | Workbook row order; new entries append |
+| `created_at`, `updated_at` | Audit timestamps |
+
 ### Values not stored
 
 These are calculated by the backend when needed:
@@ -74,12 +91,18 @@ These are calculated by the backend when needed:
 - 未實現報酬率
 - Sector rollups
 - Market totals
+- Deposit `total` (principal + interest)
+- Deposit status (`End` once end_date is today or past)
+- Deposit end month/year
+- Active/history/month/year/bank rollups
 
 This avoids stale copied totals.
 
 ## Feature flows
 
 ## Add a stock in 股票管理
+
+The 新增港股股票 / 新增美股股票 button reveals the StocksView form, which collapses after a successful save.
 
 ```text
 StocksView form
@@ -103,7 +126,7 @@ What is calculated:
 ## Remove a stock
 
 ```text
-Delete button in StocksView
+刪除 in a StockTable row's ⋯ menu (in StocksView)
   → browser confirmation
   → DELETE /api/stocks/:id
   → backend counts trades where stock_id = :id
@@ -117,7 +140,7 @@ A stock with trades cannot be deleted. Delete its trades first, or keep the stoc
 ## Update stock metadata in 股票管理
 
 ```text
-StocksView edit form
+StockForm edit mode (via 編輯 in a StockTable row's ⋯ menu)
   → PATCH /api/stocks/:id
   → backend updates only the fields included in the patch
   → UPDATE one stocks row
@@ -185,6 +208,8 @@ No external market-data API is called; the JSON file is user-supplied input equi
 
 ## Add a trade in 交易記錄
 
+The 新增交易 button reveals TradeForm, which collapses after a successful save.
+
 ```text
 TradeForm
   → POST /api/trades
@@ -218,10 +243,10 @@ total ÷ 股數
 
 It is empty for zero-share adjustment rows.
 
-## Edit a trade inline
+## Edit a trade
 
 ```text
-TradeTable inline editor
+TradeForm edit mode (via 編輯 in a TradeTable row's ⋯ menu)
   → PATCH /api/trades/:id
   → backend loads the existing trade
   → backend merges changed fields with unchanged fields
@@ -235,7 +260,7 @@ Editing a trade changes only that trade row. Summary values are not stored; they
 ## Delete a trade
 
 ```text
-Delete button in TradeTable
+刪除 in a TradeTable row's ⋯ menu
   → browser confirmation in TradesView
   → DELETE /api/trades/:id
   → backend deletes one trades row
@@ -310,6 +335,52 @@ Filter controls in TradesView
 
 Filtering does not change saved data. It only changes which `trades` rows are returned.
 
+## Add a deposit in 定期記錄
+
+The 新增定期 button reveals DepositForm, which collapses after a successful save.
+
+```text
+DepositForm
+  → POST /api/deposits
+  → backend validates end_date and non-negative amounts
+  → INSERT one row into deposits, sort_order appended
+  → GET /api/deposits?year=... reloads the history list
+```
+
+The form accepts rate as a percent; the API stores the fraction. `bank` is free text with 渣打 (SC) / 恒生 (HS) presets.
+
+## Edit or delete a deposit
+
+```text
+DepositForm edit mode (via 編輯 in a DepositTable row's ⋯ menu)
+  → PATCH /api/deposits/:id
+  → backend merges the patch, validates, UPDATEs one row
+
+刪除 in the row's ⋯ menu → DELETE /api/deposits/:id
+```
+
+Derived fields (`total`, `status`, end month/year) change automatically on the next read.
+
+## Load the 定期 view
+
+```text
+DepositsView (定期 tab)
+  → GET /api/deposits/summary
+      → upcoming list (end_date > today, earliest first)
+      → active totals, month buckets, bank rollups
+      → year tables for every end year present, plus the current year
+
+DepositHistoryView (定期記錄 tab)
+  → GET /api/deposits/summary
+      → history_years for the year selector
+  → GET /api/deposits?year=YYYY&order=desc
+      → history rows for the selected year
+```
+
+Status and rollups are point-in-time: they derive from today, so a deposit moves from 未到期定期 to history on its end date without any stored change.
+
+The 手動步驟提醒 checklists (定期 start step / 定期 end step) are static hints for the still-unmigrated `Month Stat`, `回報率`, `Overview`, and money-master bookkeeping in the workbook.
+
 ## Import workbook data
 
 ```text
@@ -325,8 +396,9 @@ The importer reads:
 - `美股Trade`
 - `港股`
 - `美股`
+- `定期Info` (表_定期List) and `定期` (cached aggregates for parity)
 
-The import is idempotent. A second run skips trades already stored with the same stock, date, type, shares, and total.
+The import is idempotent. A second run skips trades already stored with the same stock, date, type, shares, and total, and deposits already stored with the same label, end date, principal, and interest.
 
 The workbook is never modified.
 
@@ -336,9 +408,12 @@ The workbook is never modified.
 cargo run -p wealth-backend --bin check_parity -- "財富分析報告.xlsx"
   → backend recomputes stock summaries from SQLite trades
   → compares them to cached workbook summary values
+  → recomputes deposit aggregates from SQLite deposits
+  → compares them to 定期's cached month/bank rows, 定期!B1,
+    and the 定期Info year tables
 ```
 
-This verifies that the database reproduces the spreadsheet's trade-derived figures.
+This verifies that the database reproduces the spreadsheet's trade-derived figures and deposit rollups. Deposit parity is point-in-time: the cached values reflect the workbook's last recalculation, so a deposit that matures after that point shows as a difference.
 
 ## Frontend vs backend responsibilities
 
@@ -356,6 +431,8 @@ This verifies that the database reproduces the spreadsheet's trade-derived figur
 | Sector rollup/totals | Displays them | Calculates them |
 | Formatting/rounding | Yes | Keeps full `f64` precision |
 | Manual stock order | Drag/drop UI | Persists `sort_order` |
+| Deposit CRUD | Form (add + edit) | Yes, validates |
+| Deposit totals/status/rollups | Displays them | Calculates them |
 | Workbook import | — | Yes |
 | Parity check | — | Yes |
 

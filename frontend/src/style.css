@@ -1,8 +1,23 @@
 :root {
+  --bg: #e2ecf3;
+  --card: #f4f8fb;
+  --text: #1b2a38;
+  --border: #d8e6ef;
+  --border-strong: #b7cddb;
+  --accent: #006199;
+  --accent-soft: #8acff8;
+  --highlight: #ffd444;
+  --highlight-soft: #f4eb6c;
+  --muted: #64798a;
+  --positive: #2e7d46;
+  --negative: #c23b2e;
+  --surface: #dbe9f2;
+  --surface-alt: #e8f0f6;
+
   font-family: system-ui, -apple-system, 'Helvetica Neue', 'PingFang TC', 'Microsoft JhengHei',
     sans-serif;
-  color: #1a202c;
-  background: #f7fafc;
+  color: var(--text);
+  background: var(--bg);
   font-size: 15px;
 }
 
@@ -16,9 +31,10 @@ body {
 }
 
 .card {
-  background: #fff;
-  border: 1px solid #e2e8f0;
+  background: var(--card);
+  border: 1px solid var(--border);
   border-radius: 6px;
+  box-shadow: 0 1px 2px rgb(41 37 36 / 6%);
   padding: 1rem;
   margin-bottom: 1rem;
 }
@@ -26,10 +42,14 @@ body {
 button {
   font: inherit;
   padding: 0.35rem 0.75rem;
-  border: 1px solid #cbd5e0;
+  border: 1px solid var(--border-strong);
   border-radius: 4px;
-  background: #fff;
+  background: var(--card);
   cursor: pointer;
+}
+
+button:hover:not(:disabled) {
+  border-color: var(--accent);
 }
 
 button:disabled {
@@ -38,27 +58,34 @@ button:disabled {
 }
 
 button.secondary {
-  background: #edf2f7;
+  background: var(--surface-alt);
 }
 
 button.link {
   border: none;
   background: none;
   padding: 0 0.25rem;
-  color: #2b6cb0;
+  color: var(--accent);
 }
 
 button.link.danger {
-  color: #c53030;
+  color: var(--negative);
 }
 
 input,
 select {
   font: inherit;
   padding: 0.3rem 0.4rem;
-  border: 1px solid #cbd5e0;
+  border: 1px solid var(--border-strong);
   border-radius: 4px;
-  background: #fff;
+  background: var(--card);
+}
+
+input:focus,
+select:focus {
+  outline: 2px solid var(--accent-soft);
+  outline-offset: -1px;
+  border-color: var(--accent);
 }
 
 table {
@@ -70,19 +97,19 @@ table {
 th,
 td {
   padding: 0.35rem 0.5rem;
-  border-bottom: 1px solid #edf2f7;
+  border-bottom: 1px solid var(--border);
   text-align: left;
   white-space: nowrap;
 }
 
 thead th {
-  background: #f7fafc;
+  background: var(--surface);
   font-weight: 600;
 }
 
 tfoot td {
   font-weight: 600;
-  border-top: 2px solid #cbd5e0;
+  border-top: 2px solid var(--border-strong);
 }
 
 .num {
@@ -91,24 +118,24 @@ tfoot td {
 }
 
 .muted {
-  color: #718096;
+  color: var(--muted);
   font-size: 0.85rem;
 }
 
 .error {
-  color: #c53030;
+  color: var(--negative);
   font-size: 0.85rem;
 }
 
 .ok {
-  color: #276749;
+  color: var(--positive);
   font-size: 0.85rem;
 }
 
 .positive {
-  color: #276749;
+  color: var(--positive);
 }
 
 .negative {
-  color: #c53030;
+  color: var(--negative);
 }

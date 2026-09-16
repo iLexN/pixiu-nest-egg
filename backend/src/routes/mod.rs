@@ -1,15 +1,17 @@
+pub mod deposits;
 pub mod stocks;
 pub mod summary;
 pub mod trades;
 
 use axum::routing::{get, patch, post};
 use axum::Router;
+use chrono::Datelike;
 use sqlx::sqlite::SqliteRow;
 use sqlx::{Row, SqlitePool};
 
-use crate::calc::unit_price_incl_fee;
+use crate::calc::{deposit_active, deposit_total, unit_price_incl_fee};
 use crate::error::ApiError;
-use crate::models::{InputMode, Market, Stock, Trade, TradeType};
+use crate::models::{Deposit, DepositStatus, InputMode, Market, Stock, Trade, TradeType};
 
 #[derive(Clone)]
 pub struct AppState {
@@ -25,6 +27,12 @@ pub fn api_router(state: AppState) -> Router {
         .route("/trades", get(trades::list).post(trades::create))
         .route("/trades/{id}", patch(trades::update).delete(trades::remove))
         .route("/summary", get(summary::show))
+        .route("/deposits", get(deposits::list).post(deposits::create))
+        .route("/deposits/summary", get(deposits::summary))
+        .route(
+            "/deposits/{id}",
+            patch(deposits::update).delete(deposits::remove),
+        )
         .with_state(state)
 }
 
@@ -93,4 +101,40 @@ pub fn row_to_trade(row: &SqliteRow) -> Result<Trade, ApiError> {
 
 pub fn now_timestamp() -> String {
     chrono::Local::now().to_rfc3339()
+}
+
+/// Local today: what deposit status derives from.
+pub fn today() -> chrono::NaiveDate {
+    chrono::Local::now().date_naive()
+}
+
+pub const DEPOSIT_COLUMNS: &str =
+    "id, label, bank, principal, rate, interest, end_date, note1, note2, sort_order";
+
+pub fn row_to_deposit(row: &SqliteRow, today: chrono::NaiveDate) -> Result<Deposit, ApiError> {
+    let end_date: String = row.try_get("end_date")?;
+    let parsed = chrono::NaiveDate::parse_from_str(&end_date, "%Y-%m-%d")
+        .map_err(|_| ApiError::Conflict(format!("stored end_date {end_date} is not valid")))?;
+    let principal: Option<f64> = row.try_get("principal")?;
+    let interest: Option<f64> = row.try_get("interest")?;
+    Ok(Deposit {
+        id: row.try_get("id")?,
+        label: row.try_get("label")?,
+        bank: row.try_get("bank")?,
+        principal,
+        rate: row.try_get("rate")?,
+        interest,
+        end_date,
+        note1: row.try_get("note1")?,
+        note2: row.try_get("note2")?,
+        sort_order: row.try_get("sort_order")?,
+        total: deposit_total(principal, interest),
+        status: if deposit_active(parsed, today) {
+            DepositStatus::Active
+        } else {
+            DepositStatus::End
+        },
+        end_year: parsed.year(),
+        end_month: parsed.month(),
+    })
 }

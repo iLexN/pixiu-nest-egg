@@ -48,6 +48,18 @@ export function signClass(value: number | null | undefined): string {
   return value > 0 ? 'positive' : 'negative'
 }
 
+/** Bank codes used by the deposit list; unknown codes display as-is. */
+const BANK_NAMES: Record<string, string> = {
+  SC: '渣打',
+  HS: '恒生',
+}
+
+export function fmtBank(code: string | null | undefined): string {
+  if (!code) return ''
+  const name = BANK_NAMES[code]
+  return name ? `${name} (${code})` : code
+}
+
 export function todayIso(): string {
   const now = new Date()
   const month = `${now.getMonth() + 1}`.padStart(2, '0')

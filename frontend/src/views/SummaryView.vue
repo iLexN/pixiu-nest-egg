@@ -288,13 +288,13 @@ watch(() => props.market, load)
   margin: 1rem 0;
 }
 .total-card {
-  background: #f7fafc;
-  border: 1px solid #e2e8f0;
+  background: var(--surface);
+  border: 1px solid var(--border);
   border-radius: 8px;
   padding: 0.75rem;
 }
 .total-card span {
-  color: #718096;
+  color: var(--muted);
   display: block;
   font-size: 0.78rem;
   margin-bottom: 0.25rem;
@@ -307,7 +307,7 @@ watch(() => props.market, load)
   width: 6rem;
 }
 .drag-handle {
-  color: #718096;
+  color: var(--muted);
   cursor: grab;
   text-align: center;
   user-select: none;
@@ -320,7 +320,7 @@ watch(() => props.market, load)
   opacity: 0.45;
 }
 .drag-over td {
-  border-top: 2px solid #2b6cb0;
+  border-top: 2px solid var(--highlight);
 }
 h4 {
   margin: 1.5rem 0 0.5rem;

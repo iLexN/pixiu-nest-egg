@@ -8,9 +8,9 @@ use std::collections::HashMap;
 use anyhow::{anyhow, Context};
 use sqlx::{Row, SqlitePool};
 
-use crate::calc::{validate_trade, TradeInput};
+use crate::calc::{validate_deposit, validate_trade, DepositInput, TradeInput};
 use crate::models::Market;
-use crate::xlsx::{MarketSheets, SheetStock, WorkbookData};
+use crate::xlsx::{MarketSheets, SheetDeposit, SheetStock, WorkbookData};
 
 #[derive(Debug, Default, Clone, PartialEq, Eq)]
 pub struct MarketReport {
@@ -21,9 +21,16 @@ pub struct MarketReport {
 }
 
 #[derive(Debug, Default, Clone, PartialEq, Eq)]
+pub struct DepositReport {
+    pub deposits_imported: usize,
+    pub deposits_skipped: usize,
+}
+
+#[derive(Debug, Default, Clone, PartialEq, Eq)]
 pub struct ImportReport {
     pub hk: MarketReport,
     pub us: MarketReport,
+    pub deposits: DepositReport,
 }
 
 impl ImportReport {
@@ -39,6 +46,7 @@ pub async fn import(pool: &SqlitePool, data: &WorkbookData) -> anyhow::Result<Im
     Ok(ImportReport {
         hk: import_market(pool, &data.hk).await?,
         us: import_market(pool, &data.us).await?,
+        deposits: import_deposits(pool, &data.deposits).await?,
     })
 }
 
@@ -272,6 +280,121 @@ async fn existing_trade_keys(
             &trade_type,
             row.try_get("shares")?,
             row.try_get("total")?,
+        );
+        *keys.entry(key).or_insert(0) += 1;
+    }
+    Ok(keys)
+}
+
+/// 定期Info rows have no natural id (labels can be blank), so dedupe uses the
+/// same natural-fields approach as trades.
+async fn import_deposits(
+    pool: &SqlitePool,
+    deposits: &[SheetDeposit],
+) -> anyhow::Result<DepositReport> {
+    let mut report = DepositReport::default();
+    let mut existing = existing_deposit_keys(pool).await?;
+
+    for deposit in deposits {
+        let validated = validate_deposit(DepositInput {
+            label: deposit.label.as_deref(),
+            // The sheet encodes the bank in the label prefix (SC-9632 → SC).
+            bank: crate::calc::label_prefix(deposit.label.as_deref()).as_deref(),
+            principal: deposit.principal,
+            rate: deposit.rate,
+            interest: deposit.interest,
+            end_date: &deposit.end_date,
+        })
+        .map_err(|errors| {
+            anyhow!(
+                "row {} of the {} sheet is not valid: {}",
+                deposit.source_row,
+                crate::xlsx::DEPOSIT_INFO_SHEET,
+                errors
+                    .iter()
+                    .map(|e| format!("{}: {}", e.field, e.message))
+                    .collect::<Vec<_>>()
+                    .join("; ")
+            )
+        })?;
+
+        let key = DepositKey::new(
+            validated.label.as_deref(),
+            &validated.end_date,
+            validated.principal,
+            validated.interest,
+        );
+        if let Some(remaining) = existing.get_mut(&key) {
+            if *remaining > 0 {
+                *remaining -= 1;
+                report.deposits_skipped += 1;
+                continue;
+            }
+        }
+
+        let now = crate::routes::now_timestamp();
+        sqlx::query(
+            "INSERT INTO deposits (label, bank, principal, rate, interest, end_date, note1, \
+             note2, sort_order, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+        )
+        .bind(validated.label.as_deref())
+        .bind(validated.bank.as_deref())
+        .bind(validated.principal)
+        .bind(validated.rate)
+        .bind(validated.interest)
+        .bind(&validated.end_date)
+        .bind(deposit.note1.as_deref())
+        .bind(deposit.note2.as_deref())
+        .bind(deposit.sort_order)
+        .bind(&now)
+        .bind(&now)
+        .execute(pool)
+        .await
+        .with_context(|| format!("inserting row {} of 定期Info", deposit.source_row))?;
+        report.deposits_imported += 1;
+    }
+
+    Ok(report)
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+struct DepositKey {
+    label: Option<String>,
+    end_date: String,
+    principal: Option<u64>,
+    interest: Option<u64>,
+}
+
+impl DepositKey {
+    fn new(
+        label: Option<&str>,
+        end_date: &str,
+        principal: Option<f64>,
+        interest: Option<f64>,
+    ) -> Self {
+        Self {
+            label: label.map(str::to_string),
+            end_date: end_date.to_string(),
+            principal: principal.map(f64::to_bits),
+            interest: interest.map(f64::to_bits),
+        }
+    }
+}
+
+async fn existing_deposit_keys(pool: &SqlitePool) -> anyhow::Result<HashMap<DepositKey, usize>> {
+    let rows = sqlx::query("SELECT label, end_date, principal, interest FROM deposits")
+        .fetch_all(pool)
+        .await?;
+
+    let mut keys: HashMap<DepositKey, usize> = HashMap::new();
+    for row in &rows {
+        let label: Option<String> = row.try_get("label")?;
+        let end_date: String = row.try_get("end_date")?;
+        let key = DepositKey::new(
+            label.as_deref(),
+            &end_date,
+            row.try_get("principal")?,
+            row.try_get("interest")?,
         );
         *keys.entry(key).or_insert(0) += 1;
     }

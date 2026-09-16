@@ -106,8 +106,8 @@ The live formula preview in `TradeForm.vue` mirrors those rules only so the user
 ### Workbook import and parity
 
 1. `backend/src/xlsx.rs` reads `財富分析報告.xlsx` read-only, using cached formula values.
-2. `backend/src/import.rs` inserts stocks and trades into SQLite, preserving the workbook's initial stock order.
-3. `backend/src/parity.rs` compares recomputed summaries against the workbook's cached figures.
+2. `backend/src/import.rs` inserts stocks, trades, and 定期 deposits into SQLite, preserving the workbook's initial order (`sort_order`).
+3. `backend/src/parity.rs` compares recomputed summaries and deposit rollups (定期!B1, month/bank rows, 定期Info year tables) against the workbook's cached figures.
 4. The workbook is never modified.
 
 ## Calculation conventions
@@ -124,13 +124,12 @@ The live formula preview in `TradeForm.vue` mirrors those rules only so the user
 
 ## Migration roadmap
 
-Completed in this change: HK/US trade registry, trade history, per-stock summaries, manual prices/metadata, workbook import, and parity check.
+Completed so far: HK/US trade registry, trade history, per-stock summaries, manual prices/metadata, 定期 deposits (registry, upcoming/history views, month/bank/year rollups), workbook import, and parity check.
 
 Remaining spreadsheet sections, in intended order:
 
 1. 派息
-2. 定期
-3. Month Stat / Overview
-4. MPF / 債券 / AIA
+2. Month Stat / Overview
+3. MPF / 債券 / AIA
 
 Until those are migrated, continue maintaining the workbook's non-trade sheets by hand. The app should become the source of truth only after all sections are covered and verified.
