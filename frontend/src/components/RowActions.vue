@@ -4,10 +4,14 @@ import { onBeforeUnmount, ref } from 'vue'
 const props = defineProps<{
   /** Show a 收訖 action first in the menu. */
   receive?: boolean
+  /** Show a 隱藏/顯示 action; `hidden` flips the label. */
+  hideable?: boolean
+  hidden?: boolean
 }>()
 
 const emit = defineEmits<{
   receive: []
+  hide: []
   edit: []
   remove: []
 }>()
@@ -32,9 +36,10 @@ function close() {
   document.removeEventListener('keydown', onKeydown)
 }
 
-function pick(action: 'receive' | 'edit' | 'remove') {
+function pick(action: 'receive' | 'hide' | 'edit' | 'remove') {
   close()
   if (action === 'receive') emit('receive')
+  else if (action === 'hide') emit('hide')
   else if (action === 'edit') emit('edit')
   else emit('remove')
 }
@@ -50,6 +55,9 @@ onBeforeUnmount(() => document.removeEventListener('keydown', onKeydown))
       <div class="menu">
         <button v-if="props.receive" type="button" class="link" @click="pick('receive')">
           收訖
+        </button>
+        <button v-if="props.hideable" type="button" class="link" @click="pick('hide')">
+          {{ props.hidden ? '顯示' : '隱藏' }}
         </button>
         <button type="button" class="link" @click="pick('edit')">編輯</button>
         <button type="button" class="link danger" @click="pick('remove')">刪除</button>

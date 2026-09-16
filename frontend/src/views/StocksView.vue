@@ -45,6 +45,18 @@ function onSaved(stock: Stock) {
   void load()
 }
 
+async function toggleHide(stock: Stock) {
+  error.value = ''
+  message.value = ''
+  try {
+    await api.updateStock(stock.id, { is_active: !stock.is_active })
+    message.value = stock.is_active ? `已隱藏 ${stock.code}` : `已顯示 ${stock.code}`
+    await load()
+  } catch (err) {
+    error.value = err instanceof ApiError ? err.message : String(err)
+  }
+}
+
 async function remove(stock: Stock) {
   error.value = ''
   message.value = ''
@@ -83,7 +95,7 @@ watch(() => props.market, () => {
       <p v-if="message" class="ok">{{ message }}</p>
       <p v-if="error" class="error">{{ error }}</p>
 
-      <StockTable :stocks="stocks" @edit="startEdit" @remove="remove" />
+      <StockTable :stocks="stocks" @hide="toggleHide" @edit="startEdit" @remove="remove" />
     </div>
   </section>
 </template>

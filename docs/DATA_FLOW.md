@@ -359,6 +359,21 @@ What is not changed:
 
 If the reorder request fails, the frontend reloads the previous summary order.
 
+## Hide a stock from 持倉總覽
+
+```text
+⋯ menu on a row in 股票管理 → 隱藏 (or 顯示 to undo)
+  → PATCH /api/stocks/:id { is_active: false }
+  → backend updates stocks.is_active
+  → 持倉總覽 omits inactive rows on the next load
+```
+
+Hiding is display-only:
+
+- Hidden stocks remain in the summary response and still count toward totals and sector rollups.
+- Their trades, dividends and prices are untouched, and they stay selectable in the trade and dividend forms.
+- Hidden rows stay in the registry, shown muted, so they can be unhidden; a stock with records still cannot be deleted.
+
 ## Filter trades
 
 ```text

@@ -8,6 +8,7 @@ const props = defineProps<{
 }>()
 
 const emit = defineEmits<{
+  hide: [Stock]
   edit: [Stock]
   remove: [Stock]
 }>()
@@ -31,7 +32,7 @@ const emit = defineEmits<{
       </tr>
     </thead>
     <tbody>
-      <tr v-for="stock in props.stocks" :key="stock.id">
+      <tr v-for="stock in props.stocks" :key="stock.id" :class="{ inactive: !stock.is_active }">
         <td>{{ stock.code }}</td>
         <td>{{ stock.ticker ?? '' }}</td>
         <td>{{ stock.exchange ?? '' }}</td>
@@ -43,7 +44,13 @@ const emit = defineEmits<{
         <td class="num">{{ fmtPrice(stock.low52) }}</td>
         <td class="note">{{ stock.note ?? '' }}</td>
         <td class="row-actions">
-          <RowActions @edit="emit('edit', stock)" @remove="emit('remove', stock)" />
+          <RowActions
+            hideable
+            :hidden="!stock.is_active"
+            @hide="emit('hide', stock)"
+            @edit="emit('edit', stock)"
+            @remove="emit('remove', stock)"
+          />
         </td>
       </tr>
       <tr v-if="props.stocks.length === 0">
@@ -60,5 +67,8 @@ const emit = defineEmits<{
 }
 .row-actions {
   white-space: nowrap;
+}
+.inactive {
+  opacity: 0.45;
 }
 </style>

@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { onMounted, ref, watch } from 'vue'
+import { computed, onMounted, ref, watch } from 'vue'
 import { api, ApiError, type Market, type SummaryResponse, type SummaryStock } from '../api'
 import { fmtMoney, fmtPercent, fmtPrice, fmtShares, signClass } from '../format'
 
@@ -24,6 +24,11 @@ async function load() {
     error.value = err instanceof ApiError ? err.message : String(err)
   }
 }
+
+// Hidden stocks stay in summary.stocks so totals, rollups and reorder are
+// unaffected; only the table rows are filtered.
+const visibleStocks = computed(() => summary.value?.stocks.filter((s) => s.is_active) ?? [])
+const hiddenCount = computed(() => (summary.value?.stocks.length ?? 0) - visibleStocks.value.length)
 
 function priceClass(stock: SummaryStock): string {
   if (stock.current_price === null || stock.weighted_avg_buy_price <= 0) return ''
@@ -217,7 +222,7 @@ watch(() => props.market, load)
       </thead>
       <tbody>
         <tr
-          v-for="stock in summary.stocks"
+          v-for="stock in visibleStocks"
           :key="stock.id"
           :class="{ 'drag-over': dragOverId === stock.id, dragging: draggingId === stock.id }"
           @dragover="onDragOver(stock.id, $event)"
@@ -278,6 +283,10 @@ watch(() => props.market, load)
         </tr>
       </tbody>
     </table>
+
+    <p v-if="hiddenCount > 0" class="muted">
+      已隱藏 {{ hiddenCount }} 支股票 — 在股票管理中可重新顯示（其數值仍計入合計）
+    </p>
 
     <p v-if="summary.totals.excluded_codes.length > 0" class="muted">
       未計入市值與淨額（未輸入現價或持倉為 0）：{{ summary.totals.excluded_codes.join('、') }}
