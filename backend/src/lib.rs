@@ -3,6 +3,7 @@ pub mod db;
 pub mod error;
 pub mod import;
 pub mod models;
+pub mod mpf;
 pub mod parity;
 pub mod prices;
 pub mod routes;

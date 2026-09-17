@@ -1,8 +1,10 @@
 pub mod deposits;
 pub mod dividends;
+pub mod mpf;
 pub mod stocks;
 pub mod summary;
 pub mod trades;
+pub mod yearly;
 
 use axum::routing::{get, patch, post};
 use axum::Router;
@@ -33,6 +35,12 @@ pub fn api_router(state: AppState) -> Router {
         .route("/trades", get(trades::list).post(trades::create))
         .route("/trades/{id}", patch(trades::update).delete(trades::remove))
         .route("/summary", get(summary::show))
+        .route("/summary/yearly", get(yearly::list))
+        .route("/summary/yearly/{market}/{year}", patch(yearly::update))
+        .route(
+            "/summary/yearly/{market}/{year}/freeze",
+            post(yearly::freeze),
+        )
         .route("/deposits", get(deposits::list).post(deposits::create))
         .route("/deposits/summary", get(deposits::summary))
         .route(
@@ -44,6 +52,14 @@ pub fn api_router(state: AppState) -> Router {
         .route(
             "/dividends/{id}",
             patch(dividends::update).delete(dividends::remove),
+        )
+        .route("/mpf", get(mpf::overview))
+        .route("/mpf/accounts", post(mpf::create))
+        .route("/mpf/accounts/{id}", patch(mpf::update).delete(mpf::remove))
+        .route("/mpf/note", patch(mpf::update_note))
+        .route(
+            "/mpf/history/{id}",
+            axum::routing::delete(mpf::remove_history),
         )
         .with_state(state)
 }

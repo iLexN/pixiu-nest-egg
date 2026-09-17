@@ -74,7 +74,7 @@ For every stored trade the system SHALL report 平均單價 for that trade, comp
 - **THEN** 平均單價 is reported as empty rather than as an error or infinity
 
 ### Requirement: Browsing trade history
-The system SHALL list stored trades for a chosen market, allowing filtering by stock and by date range, and SHALL present them ordered by 日期 with the derived fee, total, per-trade 平均單價, and the stock's stored 現價 for each row. For BUY rows the 現價 cell SHALL be shown in the positive (green) style when 現價 is higher than that row's 平均單價（含 fee）and in the negative (red) style when lower; the styles SHALL match those used for 未實現金額 in 持倉總覽.
+The system SHALL list stored trades for a chosen market, allowing filtering by stock and by date range, and SHALL present them ordered by 日期 with the derived fee, total, per-trade 平均單價, the stock's stored 現價, and a per-trade 報酬率 column equal to `(現價 − 平均單價（含 fee）) ÷ 平均單價（含 fee）` for each row. For BUY rows the 現價 and 報酬率 cells SHALL be shown in the positive (green) style when 現價 is higher than that row's 平均單價（含 fee）and in the negative (red) style when lower; the styles SHALL match those used for 未實現金額 in 持倉總覽. The 報酬率 cell SHALL be empty when 現價 or 平均單價 is missing.
 
 #### Scenario: Filter by stock
 - **WHEN** the user filters HK trades by stock `中移動`

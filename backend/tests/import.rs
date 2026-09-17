@@ -114,6 +114,46 @@ async fn imports_every_dividend_row_then_skips_them_on_a_second_run() {
 }
 
 #[tokio::test]
+async fn imports_mpf_accounts_then_skips_them_on_a_second_run() {
+    let pool = db::connect_memory().await.expect("db");
+    let data = xlsx::read(&workbook_path()).expect("workbook");
+
+    let first = import::import(&pool, &data).await.expect("first import");
+    assert_eq!(first.mpf.accounts_created, 2);
+    assert_eq!(first.mpf.accounts_skipped, 0);
+    assert_eq!(count(&pool, "mpf_accounts").await, 2);
+    // Each account seeded one synthetic last-month history row.
+    assert_eq!(count(&pool, "mpf_history").await, 2);
+
+    // The seeded max rate reproduces the sheet's cached max column.
+    let seed: Option<f64> =
+        sqlx::query_scalar("SELECT seed_max_rate FROM mpf_accounts WHERE label = '強積金個人帳戶'")
+            .fetch_one(&pool)
+            .await
+            .expect("seed max rate");
+    assert!((seed.expect("seed") - 0.5273351333828047).abs() < 1e-9);
+
+    // With two accounts the frozen last-month figures recover the actual
+    // month-end contributions: the 'new type' seed backs out the 3,000
+    // added in September, while the other account is unchanged.
+    let past: f64 = sqlx::query_scalar(
+        "SELECT h.contributions FROM mpf_history h \
+         JOIN mpf_accounts a ON a.id = h.account_id \
+         WHERE a.label = 'new type' AND h.synthetic = 1",
+    )
+    .fetch_one(&pool)
+    .await
+    .expect("seeded contributions");
+    assert!((past - 122_171.43).abs() < 0.01);
+
+    let second = import::import(&pool, &data).await.expect("second import");
+    assert_eq!(second.mpf.accounts_created, 0);
+    assert_eq!(second.mpf.accounts_skipped, 2);
+    assert_eq!(count(&pool, "mpf_accounts").await, 2);
+    assert_eq!(count(&pool, "mpf_history").await, 2);
+}
+
+#[tokio::test]
 async fn imported_stock_order_matches_the_summary_sheets() {
     let pool = db::connect_memory().await.expect("db");
     let data = xlsx::read(&workbook_path()).expect("workbook");
@@ -205,6 +245,9 @@ async fn duplicate_source_rows_are_kept_once_and_only_once() {
         },
         deposits: Vec::new(),
         deposit_cached: Default::default(),
+        year_figures: Vec::new(),
+        mpf: Vec::new(),
+        mpf_cached: Default::default(),
     };
 
     let first = import::import(&pool, &data).await.expect("first import");

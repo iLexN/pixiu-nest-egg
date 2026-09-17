@@ -6,11 +6,15 @@
 use std::collections::HashMap;
 
 use anyhow::{anyhow, Context};
+use chrono::Datelike;
 use sqlx::{Row, SqlitePool};
 
-use crate::calc::{validate_deposit, validate_dividend, validate_trade, DepositInput, TradeInput};
+use crate::calc::{
+    validate_deposit, validate_dividend, validate_mpf_account, validate_trade, DepositInput,
+    MpfAccountInput, TradeInput,
+};
 use crate::models::Market;
-use crate::xlsx::{MarketSheets, SheetDeposit, SheetStock, WorkbookData};
+use crate::xlsx::{MarketSheets, SheetDeposit, SheetStock, SheetYearFigure, WorkbookData};
 
 #[derive(Debug, Default, Clone, PartialEq, Eq)]
 pub struct MarketReport {
@@ -32,10 +36,25 @@ pub struct DepositReport {
 }
 
 #[derive(Debug, Default, Clone, PartialEq, Eq)]
+pub struct SnapshotReport {
+    pub snapshots_seeded: usize,
+    /// Current-year figures and rows with no figures at all skip.
+    pub snapshots_skipped: usize,
+}
+
+#[derive(Debug, Default, Clone, PartialEq, Eq)]
+pub struct MpfReport {
+    pub accounts_created: usize,
+    pub accounts_skipped: usize,
+}
+
+#[derive(Debug, Default, Clone, PartialEq, Eq)]
 pub struct ImportReport {
     pub hk: MarketReport,
     pub us: MarketReport,
     pub deposits: DepositReport,
+    pub snapshots: SnapshotReport,
+    pub mpf: MpfReport,
 }
 
 impl ImportReport {
@@ -52,7 +71,169 @@ pub async fn import(pool: &SqlitePool, data: &WorkbookData) -> anyhow::Result<Im
         hk: import_market(pool, &data.hk).await?,
         us: import_market(pool, &data.us).await?,
         deposits: import_deposits(pool, &data.deposits).await?,
+        snapshots: import_year_snapshots(pool, &data.year_figures).await?,
+        mpf: import_mpf(pool, data).await?,
     })
+}
+
+/// MPF accounts are keyed by label. Each new account seeds one synthetic
+/// last-month history row from the sheet's cached last-month rate. With two
+/// accounts, the portfolio's cached last-month rate+gain pin down the actual
+/// last-month contributions exactly (`mpf_last_month_contributions`); with
+/// more or fewer, the seed falls back to the current contributions and its
+/// gain only approximates. The cached max rate plus a reconstructed max gain
+/// seed the `seed_max_*` floor; the portfolio-level cached maxima go to
+/// `app_meta` — per-account history cannot rebuild them.
+async fn import_mpf(pool: &SqlitePool, data: &WorkbookData) -> anyhow::Result<MpfReport> {
+    let mut report = MpfReport::default();
+    let today = crate::routes::today();
+    let first_of_month = chrono::NaiveDate::from_ymd_opt(today.year(), today.month(), 1)
+        .ok_or_else(|| anyhow!("today {today} has no first of month"))?;
+    let prev_month_end = first_of_month - chrono::Days::new(1);
+
+    let past_contributions = mpf_seed_contributions(data);
+
+    for (index, account) in data.mpf.iter().enumerate() {
+        let existing: Option<i64> =
+            sqlx::query_scalar("SELECT id FROM mpf_accounts WHERE label = ?")
+                .bind(&account.label)
+                .fetch_optional(pool)
+                .await?;
+        if existing.is_some() {
+            report.accounts_skipped += 1;
+            continue;
+        }
+
+        let contributions = account.contributions.unwrap_or(0.0);
+        let balance = account.balance.unwrap_or(0.0);
+        validate_mpf_account(MpfAccountInput {
+            label: &account.label,
+            contributions,
+            balance,
+        })
+        .map_err(|errors| {
+            anyhow!(
+                "row {} of the {} sheet is not valid: {}",
+                account.source_row,
+                crate::xlsx::MPF_SHEET,
+                errors
+                    .iter()
+                    .map(|e| format!("{}: {}", e.field, e.message))
+                    .collect::<Vec<_>>()
+                    .join("; ")
+            )
+        })?;
+
+        let now = crate::routes::now_timestamp();
+        let id: i64 = sqlx::query_scalar(
+            "INSERT INTO mpf_accounts (label, trustee, contributions, balance, plan_name, \
+             member_no, sort_order, seed_max_rate, seed_max_gain, created_at, \
+             updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?) RETURNING id",
+        )
+        .bind(&account.label)
+        .bind(account.trustee.as_deref())
+        .bind(contributions)
+        .bind(balance)
+        .bind(account.plan_name.as_deref())
+        .bind(account.member_no.as_deref())
+        .bind(account.sort_order)
+        .bind(account.max_rate)
+        .bind(account.max_rate.map(|rate| rate * contributions))
+        .bind(&now)
+        .bind(&now)
+        .fetch_one(pool)
+        .await
+        .with_context(|| format!("inserting MPF row {}", account.source_row))?;
+
+        if let Some(rate) = account.last_month_rate {
+            let past = past_contributions
+                .map(|pair| if index == 0 { pair.0 } else { pair.1 })
+                .unwrap_or(contributions);
+            sqlx::query(
+                "INSERT INTO mpf_history \
+                 (account_id, recorded_on, contributions, balance, synthetic) \
+                 VALUES (?, ?, ?, ?, 1)",
+            )
+            .bind(id)
+            .bind(prev_month_end.to_string())
+            .bind(past)
+            .bind(past * (1.0 + rate))
+            .execute(pool)
+            .await?;
+        }
+        report.accounts_created += 1;
+    }
+
+    for (key, value) in [
+        (crate::mpf::SEED_MAX_RATE_KEY, data.mpf_cached.max_rate),
+        (crate::mpf::SEED_MAX_GAIN_KEY, data.mpf_cached.max_gain),
+    ] {
+        if let Some(value) = value {
+            sqlx::query("INSERT OR IGNORE INTO app_meta (key, value) VALUES (?, ?)")
+                .bind(key)
+                .bind(value.to_string())
+                .execute(pool)
+                .await?;
+        }
+    }
+
+    Ok(report)
+}
+
+/// With exactly two accounts the sheet's per-account last-month rates plus
+/// the portfolio last-month rate+gain recover the actual last-month
+/// contributions; any other shape or missing figure falls back to None and
+/// the seed uses current values instead.
+fn mpf_seed_contributions(data: &WorkbookData) -> Option<(f64, f64)> {
+    let [first, second] = data.mpf.as_slice() else {
+        return None;
+    };
+    let rates = (first.last_month_rate?, second.last_month_rate?);
+    crate::calc::mpf_last_month_contributions(
+        rates,
+        data.mpf_cached.last_month_rate?,
+        data.mpf_cached.last_month_gain?,
+    )
+}
+
+/// Frozen year-end figures seed `year_snapshots`, but only for years before
+/// the current one — the current year's row is meant to stay live until the
+/// owner freezes it, and the sheet's live-formula cells would otherwise pin
+/// a mid-year value. The upsert fills only NULL fields, so a stored value —
+/// seeded earlier or edited by hand — is never overwritten by a re-import.
+async fn import_year_snapshots(
+    pool: &SqlitePool,
+    figures: &[SheetYearFigure],
+) -> anyhow::Result<SnapshotReport> {
+    let current_year = crate::routes::today().year();
+    let mut report = SnapshotReport::default();
+    for figure in figures {
+        if figure.year >= current_year
+            || (figure.invested.is_none() && figure.cost.is_none() && figure.market_value.is_none())
+        {
+            report.snapshots_skipped += 1;
+            continue;
+        }
+        sqlx::query(
+            "INSERT INTO year_snapshots \
+             (market, year, invested, cost, market_value, updated_at) \
+             VALUES (?, ?, ?, ?, ?, ?) \
+             ON CONFLICT (market, year) DO UPDATE SET \
+             invested = COALESCE(year_snapshots.invested, excluded.invested), \
+             cost = COALESCE(year_snapshots.cost, excluded.cost), \
+             market_value = COALESCE(year_snapshots.market_value, excluded.market_value)",
+        )
+        .bind(figure.market.as_str())
+        .bind(figure.year)
+        .bind(figure.invested)
+        .bind(figure.cost)
+        .bind(figure.market_value)
+        .bind(crate::routes::now_timestamp())
+        .execute(pool)
+        .await?;
+        report.snapshots_seeded += 1;
+    }
+    Ok(report)
 }
 
 async fn import_market(pool: &SqlitePool, sheets: &MarketSheets) -> anyhow::Result<MarketReport> {

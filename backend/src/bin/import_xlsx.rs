@@ -51,6 +51,16 @@ async fn main() -> anyhow::Result<()> {
         report.deposits.deposits_imported,
         report.deposits.deposits_skipped,
     );
+    println!(
+        "year snapshots: {} seeded, {} skipped (current year or empty)",
+        report.snapshots.snapshots_seeded, report.snapshots.snapshots_skipped,
+    );
+    println!(
+        "MPF: {} account row(s) in the sheet -> {} imported, {} skipped (already present)",
+        data.mpf.len(),
+        report.mpf.accounts_created,
+        report.mpf.accounts_skipped,
+    );
 
     pool.close().await;
     Ok(())

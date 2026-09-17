@@ -96,6 +96,58 @@ One row per 派息 event per stock (from the trade sheets' J–O block). The sna
 | `note` | Optional free-text note (imported rows keep the sheet's M formula) |
 | `created_at`, `updated_at` | Audit timestamps |
 
+### `year_snapshots`
+
+One row per (market, year) holding the frozen figures the yearly table cannot recompute — the values the spreadsheet workflow used to copy as raw numbers at year end. A NULL column means no override: the yearly row falls back to the figure computed from trades/dividends (or stays empty for a past year's 總市值).
+
+| Column | Meaning |
+|---|---|
+| `market` | `HK` or `US` |
+| `year` | Calendar year |
+| `invested` | Override for the year's net invested |
+| `cost` | Frozen 年末總成本 (cumulative buy cost) |
+| `market_value` | Frozen 年末總市值 |
+| `updated_at` | When the snapshot was last written |
+
+### `mpf_accounts`
+
+One row per MPF account (from the `MPF` sheet's account table).
+
+| Column | Meaning |
+|---|---|
+| `id` | Internal account ID |
+| `label` | The sheet's account label, e.g. `new type`, `強積金個人帳戶` |
+| `trustee` | 受託人, e.g. 宏利 |
+| `contributions` | 總供款額, the monthly-edited input |
+| `balance` | 帳戶結存, the monthly-edited input |
+| `plan_name`, `member_no` | Optional account metadata |
+| `sort_order` | Workbook row order |
+| `seed_max_rate`, `seed_max_gain` | The workbook's all-time marks, written once at import and never raised; the reported max is `MAX(seed, history, current)` |
+| `created_at`, `updated_at` | Audit timestamps |
+
+### `mpf_history`
+
+One row per account per recorded day — `UNIQUE(account_id, recorded_on)`, so a same-day correction replaces the row rather than appending.
+
+| Column | Meaning |
+|---|---|
+| `id` | Internal history ID |
+| `account_id` | Links to `mpf_accounts.id` |
+| `recorded_on` | `YYYY-MM-DD` text date |
+| `contributions`, `balance` | The account's values on that date |
+| `synthetic` | `1` for month-end rows the backend backfilled automatically or seeded at import; `0` for real updates |
+
+When a contributions/balance update arrives in a later month and whole calendar months passed with no rows, the update backfills a synthetic month-end row per empty month carrying the pre-update values — the values that actually stood during those months.
+
+### `app_meta`
+
+A generic key-value table for section-level state that no account row can hold. Currently: `mpf.note` (the MPF page's free-text note) and the portfolio-level seeded maxima `mpf.seed_max_rate` / `mpf.seed_max_gain`.
+
+| Column | Meaning |
+|---|---|
+| `key` | The entry's name, unique |
+| `value` | Free-text value |
+
 ### Values not stored
 
 These are calculated by the backend when needed:
@@ -119,12 +171,17 @@ These are calculated by the backend when needed:
 - Dividend second `rate` = amount ÷ (`received_price` × `shares_held`)
 - Dividend variance = `received_amount − estimated_amount`
 - Per-year received rollups
+- Yearly `invested`, `cost`, `dividends` and the derived yield/YoY columns
+- MPF per-account `rate` = (`balance` − `contributions`) ÷ `contributions`, and `gain` = `balance` − `contributions`
+- MPF `last month` figures (the latest `mpf_history` row in the previous calendar month)
+- MPF `max` rate and `max` gain, each independently the largest of the seed, every history row, and the current values
+- MPF portfolio totals/last-month/max, via the as-of merge described below
 
 This avoids stale copied totals.
 
 ## Feature flows
 
-## Add a stock in 股票管理
+## Add a stock in 股票 → 管理
 
 The 新增港股股票 / 新增美股股票 button reveals the StocksView form, which collapses after a successful save.
 
@@ -161,7 +218,7 @@ What is calculated:
 
 A stock with trades or dividend records cannot be deleted. Delete those rows first, or keep the stock for history.
 
-## Update stock metadata in 股票管理
+## Update stock metadata in 股票 → 管理
 
 ```text
 StockForm edit mode (via 編輯 in a StockTable row's ⋯ menu)
@@ -177,7 +234,7 @@ Fields such as `ticker`, `exchange`, `sector`, `pe`, `eps`, `high52`, `low52`, a
 - Metadata edits do not modify any trades.
 - Sending `null` for an optional field clears that field.
 
-## Update 現價 in 持倉總覽
+## Update 現價 in 股票 → 總覽
 
 ```text
 Edit price in SummaryView
@@ -293,7 +350,7 @@ Editing a trade changes only that trade row. Summary values are not stored; they
 
 Because summary figures are calculated from `trades`, deleting a trade changes holdings and buy cost on the next summary load.
 
-## Load 持倉總覽
+## Load 股票 → 總覽
 
 ```text
 SummaryView
@@ -337,7 +394,7 @@ Important spreadsheet-compatible behavior:
 
 The totals row also shows 累計派息 and 淨投入總本金 summed across all stocks in the market, plus an aggregate 實質動態總回報% = (total market value − 淨投入總本金 of priced stocks) ÷ 淨投入總本金 of priced stocks. Stocks without 現價 are excluded from that denominator, matching how the unpriced subset is excluded from 未實現報酬率.
 
-## Reorder stocks in 持倉總覽
+## Reorder stocks in 股票 → 總覽
 
 ```text
 Drag the ↕ handle in SummaryView
@@ -359,10 +416,10 @@ What is not changed:
 
 If the reorder request fails, the frontend reloads the previous summary order.
 
-## Hide a stock from 持倉總覽
+## Hide a stock from 股票 → 總覽
 
 ```text
-⋯ menu on a row in 股票管理 → 隱藏 (or 顯示 to undo)
+⋯ menu on a row in 股票 → 管理 → 隱藏 (or 顯示 to undo)
   → PATCH /api/stocks/:id { is_active: false }
   → backend updates stocks.is_active
   → 持倉總覽 omits inactive rows on the next load
@@ -384,7 +441,7 @@ Filter controls in TradesView
 
 Filtering does not change saved data. It only changes which `trades` rows are returned.
 
-## Add a deposit in 定期記錄
+## Add a deposit in 定期 → 記錄
 
 The 新增定期 button reveals DepositForm, which collapses after a successful save.
 
@@ -410,16 +467,16 @@ DepositForm edit mode (via 編輯 in a DepositTable row's ⋯ menu)
 
 Derived fields (`total`, `status`, end month/year) change automatically on the next read.
 
-## Load the 定期 view
+## Load the 定期 views
 
 ```text
-DepositsView (定期 tab)
+DepositsView (定期 → 總覽)
   → GET /api/deposits/summary
       → upcoming list (end_date > today, earliest first)
       → active totals, month buckets, bank rollups
       → year tables for every end year present, plus the current year
 
-DepositHistoryView (定期記錄 tab)
+DepositHistoryView (定期 → 記錄)
   → GET /api/deposits/summary
       → history_years for the year selector
   → GET /api/deposits?year=YYYY&order=desc
@@ -430,7 +487,7 @@ Status and rollups are point-in-time: they derive from today, so a deposit moves
 
 The 手動步驟提醒 checklists (定期 start step / 定期 end step) are static hints for the still-unmigrated `Month Stat`, `回報率`, `Overview`, and money-master bookkeeping in the workbook.
 
-## Record a dividend in 派息
+## Record a dividend in 股票 → 派息
 
 ```text
 DividendForm (記錄派息)
@@ -459,10 +516,10 @@ The snapshots are stored, not recomputed: buying more of the same stock later do
 
 The 現價 entered at receipt is stored on the dividend record only. It does not update the stock's 現價 unless 同時更新現價 is checked, because the receipt price may be recorded on a different day than the price update.
 
-## Load the 派息 view
+## Load the 股票 → 派息 view
 
 ```text
-DividendsView (派息 tab, market-scoped like 交易記錄)
+DividendsView (股票 → 派息 tab, market-scoped like 交易記錄)
   → GET /api/dividends/summary?market=...
       → pending list, per-year received totals, per-stock breakdown,
         history_years for the year selector
@@ -473,6 +530,40 @@ DividendsView (派息 tab, market-scoped like 交易記錄)
 ```
 
 Derived on every read, never stored: `status`, effective `amount`, `yield_on_cost` (amount ÷ buy_cost), `yield_on_price` (amount ÷ received_price × shares_held), `variance` (received − estimated). Yields are empty when their denominator is missing.
+
+## Update MPF figures in MPF → 總覽
+
+```text
+MpfView edit form (via 編輯 in the account row's ⋯ menu)
+  → PATCH /api/mpf/accounts/:id
+  → backend merges the patch and validates (label required, amounts ≥ 0)
+  → UPDATE one mpf_accounts row
+  → if contributions or balance changed, inside the same transaction:
+      → backfill a synthetic month-end mpf_history row per empty elapsed
+        month, carrying the pre-update values
+      → upsert today's mpf_history row
+        (ON CONFLICT account_id+recorded_on → replace)
+  → GET /api/mpf reloads accounts, totals, note, and history
+```
+
+Editing only metadata (label, trustee, plan/contract/member numbers) writes **no** history row. Deleting a history row via 記錄 → 刪除 removes just that row; last-month and max figures recompute on the next read, since they are derived rather than stored.
+
+Derived on every read:
+
+```text
+per-account rate      = (balance − contributions) ÷ contributions   (empty when 0)
+per-account last month = latest history row in the previous month
+per-account max        = MAX(seed_max_*, all history rows, current),
+                          rate and gain tracked independently
+portfolio buy/now/%/gain = Σ contributions, Σ balance, derived
+portfolio last month     = the as-of portfolio at last month-end
+portfolio max            = the largest rate / largest gain independently over
+                          the as-of timeline and the app_meta seeds
+```
+
+The as-of merge: for every recorded history date (plus last month-end and today), each account contributes its latest row at or before that date — an account with no eligible row falls back to its current values once it existed (`created_at` ≤ date), or is excluded before that. This carries an untouched account forward through months it was never edited and yields a true portfolio max rather than summing per-account peaks that may never have co-occurred.
+
+The 備註 block saves free text via `PATCH /api/mpf/note` into `app_meta`; clearing it removes the entry.
 
 ## Import workbook data
 
@@ -490,12 +581,50 @@ The importer reads:
 - `港股`
 - `美股`
 - `定期Info` (表_定期List) and `定期` (cached aggregates for parity)
+- `MPF` — the account table under the 總供款額/帳戶結存 headers; the fund-details table below it and the remark row are ignored
+- The market sheets' year blocks (B year, C net invested, F 成本, H 總市值) and `YearInReview`'s 股票 rows — seeded into `year_snapshots` for years before the current one; the current year stays live
 
 For each dividend row the importer stores J (stock), K (pay date, Excel serial dates accepted), M (派息 amount, cached value), and O (股數 snapshot). The remaining snapshots are recovered from the cached rates the same way the sheet computed them — `buy_cost = M ÷ L`, `received_price = M ÷ (N × O)` — falling back to trade-derived snapshots when a rate is absent. The M formula text, when present, is kept in `note`. Rows with an N rate, or a pay date already past, import as received; future rows without it import as pending estimates.
 
-The import is idempotent. A second run skips trades already stored with the same stock, date, type, shares, and total, deposits already stored with the same label, end date, principal, and interest, and dividends already stored with the same stock, pay date, and amount.
+The import is idempotent. A second run skips trades already stored with the same stock, date, type, shares, and total, deposits already stored with the same label, end date, principal, and interest, and dividends already stored with the same stock, pay date, and amount. Year snapshots merge at field level: a stored value — seeded or edited — is never overwritten, while empty fields on an existing row are filled from the workbook. MPF accounts are keyed by label: a second run skips them entirely.
+
+Each new MPF account also seeds one synthetic `mpf_history` row at last month-end. With exactly two accounts, the per-account last-month rates plus the portfolio's cached last-month rate+gain pin down the actual month-end contributions exactly, and the seeded balance is `contributions × (1 + rate)`; with any other account count the seed uses the current contributions, so the rate stays exact while the net gain approximates. The sheet's per-account max rate seeds `seed_max_rate`, and a reconstructed `rate × contributions` seeds `seed_max_gain`. The portfolio-level `max`/`last month` cells go to `app_meta` as floors, because per-account history cannot rebuild them.
 
 The workbook is never modified.
+
+## Load the yearly table in 股票 → 總覽
+
+```text
+SummaryView loads GET /api/summary/yearly?market=HK|US
+  → routes/yearly.rs reads the market's trades, received dividends and
+    year_snapshots, plus the live market totals
+  → calc.rs::yearly_rows builds one row per year from the earliest activity
+    year through the current year
+  → the frontend formats and displays the rows
+```
+
+Each row carries:
+
+- `invested` — Σ BUY − Σ SELL of trades dated in the year; a stored snapshot value wins
+- `sold_pl` — reserved, empty for now
+- `cost` — 年末總成本, cumulative Σ BUY total through Dec 31; a stored snapshot value wins
+- `market_value` — 年末總市值, the stored snapshot; the live total for the current year when it has no snapshot; empty for a past year without one
+- `dividends` — Σ `received_amount` with pay_date in the year (estimates excluded)
+- `yield_on_cost` — 派息 ÷ 成本; `yield_on_value` — 派息 ÷ 總市值; `monthly_dividend` — 派息 ÷ 12; `dividend_yoy` and `invested_yoy` — the sheet's (J−J′)/J′ and (F−F′)/F′ changes
+
+## Freeze or edit a year's figures
+
+```text
+Click a year's invested/成本/總市值 cell, type the sheet's number, save
+  → PATCH /api/summary/yearly/:market/:year upserts the snapshot
+  → null clears a field; clearing the last stored field deletes the row
+
+Click 凍結 on the current year's row
+  → POST /api/summary/yearly/:market/:year/freeze stores the computed
+    cumulative 成本 and the live 總市值 (invested is left alone)
+```
+
+Frozen cells are marked `*` with the snapshot's `updated_at` in the tooltip. Once frozen, later price edits or new trades no longer move that year's row — the spreadsheet's copy-raw-value step becomes explicit.
 
 ## Run parity check
 
@@ -508,9 +637,13 @@ cargo run -p wealth-backend --bin check_parity -- "財富分析報告.xlsx"
     and the 定期Info year tables
   → counts stored dividends and totals the effective amount per market,
     compared against the J–O block's row count and Σ 派息
+  → recomputes MPF per-account 總供款額/帳戶結存/回報率 and portfolio
+    buy/now/回報率/淨收益 strictly against the MPF sheet's cached cells,
+    and the seeded last-month/max figures with a loose tolerance, since
+    they reconstruct values the sheet stored only as rates
 ```
 
-This verifies that the database reproduces the spreadsheet's trade-derived figures, deposit rollups, and dividend totals. Deposit parity is point-in-time: the cached values reflect the workbook's last recalculation, so a deposit that matures after that point shows as a difference.
+This verifies that the database reproduces the spreadsheet's trade-derived figures, deposit rollups, dividend totals, and MPF figures. Deposit parity is point-in-time: the cached values reflect the workbook's last recalculation, so a deposit that matures after that point shows as a difference. MPF parity is the same: once the app is edited after import, its current figures legitimately diverge from the frozen sheet.
 
 ## Frontend vs backend responsibilities
 
@@ -532,6 +665,9 @@ This verifies that the database reproduces the spreadsheet's trade-derived figur
 | Deposit totals/status/rollups | Displays them | Calculates them |
 | Dividend CRUD + receipt | Forms | Yes, validates and snapshots |
 | Dividend rates/variance/rollups | Displays them | Calculates them |
+| Yearly rollup columns | Displays them; inline edit + freeze button | Calculates them; stores snapshots |
+| MPF account editing | Form | Yes, validates + records history |
+| MPF last-month/max figures | Displays them | Derives them from history + seeds |
 | Workbook import | — | Yes |
 | Parity check | — | Yes |
 

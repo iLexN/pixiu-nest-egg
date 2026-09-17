@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import { computed } from 'vue'
 import type { Stock, Trade } from '../api'
-import { fmtMoney, fmtPrice, fmtShares, signClass } from '../format'
+import { fmtMoney, fmtPercent, fmtPrice, fmtShares, signClass } from '../format'
 import RowActions from './RowActions.vue'
 
 const props = defineProps<{
@@ -37,6 +37,17 @@ function priceClassFor(trade: Trade): string {
   }
   return signClass(current - trade.unit_price_incl_fee)
 }
+
+function returnPercent(trade: Trade): number | null {
+  const current = currentPrice(trade)
+  const avg = trade.unit_price_incl_fee
+  if (current === null || avg === null || avg === 0) return null
+  return (current - avg) / avg
+}
+
+function returnClassFor(trade: Trade): string {
+  return trade.trade_type === 'BUY' ? signClass(returnPercent(trade)) : ''
+}
 </script>
 
 <template>
@@ -52,8 +63,9 @@ function priceClassFor(trade: Trade): string {
         <th class="num">單價</th>
         <th class="num">fee</th>
         <th class="num">buy total</th>
-        <th class="num" title="buy total ÷ 股數">平均單價（含 fee）</th>
+        <th class="num" title="buy total ÷ 股數">平均單價</th>
         <th class="num">現價</th>
+        <th class="num" title="(現價 − 平均單價（含 fee）) ÷ 平均單價（含 fee）">報酬率</th>
         <th>備註</th>
         <th></th>
       </tr>
@@ -69,20 +81,21 @@ function priceClassFor(trade: Trade): string {
         <td class="num">{{ fmtMoney(trade.total) }}</td>
         <td class="num">{{ fmtPrice(trade.unit_price_incl_fee) }}</td>
         <td class="num" :class="priceClassFor(trade)">{{ fmtPrice(currentPrice(trade)) }}</td>
+        <td class="num" :class="returnClassFor(trade)">{{ fmtPercent(returnPercent(trade)) }}</td>
         <td class="note">{{ trade.note ?? '' }}</td>
         <td class="row-actions">
           <RowActions @edit="emit('edit', trade)" @remove="emit('remove', trade)" />
         </td>
       </tr>
       <tr v-if="props.trades.length === 0">
-        <td colspan="11" class="muted">沒有符合條件的交易</td>
+        <td colspan="12" class="muted">沒有符合條件的交易</td>
       </tr>
     </tbody>
     <tfoot v-if="props.trades.length > 0">
       <tr>
         <td colspan="6">{{ props.trades.length }} 筆交易</td>
         <td class="num">{{ fmtMoney(totalCost) }}</td>
-        <td colspan="4" class="muted">BUY 合計</td>
+        <td colspan="5" class="muted">BUY 合計</td>
       </tr>
     </tfoot>
   </table>

@@ -47,6 +47,7 @@ pub struct ParityReport {
     pub rows: Vec<ParityRow>,
     pub deposits: Vec<NamedParityRow>,
     pub dividends: Vec<NamedParityRow>,
+    pub mpf: Vec<NamedParityRow>,
 }
 
 impl ParityReport {
@@ -69,8 +70,15 @@ impl ParityReport {
         Self::named_problems(&self.dividends)
     }
 
+    pub fn mpf_problems(&self) -> impl Iterator<Item = &NamedParityRow> {
+        Self::named_problems(&self.mpf)
+    }
+
     pub fn problem_count(&self) -> usize {
-        self.problems().count() + self.deposit_problems().count() + self.dividend_problems().count()
+        self.problems().count()
+            + self.deposit_problems().count()
+            + self.dividend_problems().count()
+            + self.mpf_problems().count()
     }
 
     pub fn is_clean(&self) -> bool {
@@ -85,6 +93,7 @@ pub async fn check(pool: &SqlitePool, data: &WorkbookData) -> anyhow::Result<Par
     }
     check_deposits(pool, data, &mut report).await?;
     check_dividends(pool, data, &mut report).await?;
+    check_mpf(pool, data, &mut report).await?;
     Ok(report)
 }
 
@@ -418,6 +427,193 @@ async fn check_deposits(
             );
         }
     }
+
+    Ok(())
+}
+
+/// Seeded last-month/max net gains are reconstructions (the sheet stores
+/// rates only), so those two comparisons use a loose relative tolerance while
+/// everything else matches the usual figures exactly.
+const MPF_SEED_GAIN_TOLERANCE: f64 = 0.02;
+
+fn loose_eq(computed: f64, sheet: f64) -> bool {
+    (computed - sheet).abs() <= MPF_SEED_GAIN_TOLERANCE * sheet.abs().max(1.0)
+}
+
+fn mpf_row(report: &mut ParityReport, name: impl Into<String>, outcome: Outcome) {
+    named_row(&mut report.mpf, name, outcome);
+}
+
+/// One named comparison: `sheet None` means nothing to compare (skipped);
+/// `computed None` against a sheet value is a difference.
+fn compare_named(
+    report: &mut ParityReport,
+    name: impl Into<String>,
+    field: &'static str,
+    computed: Option<f64>,
+    sheet: Option<f64>,
+    loose: bool,
+) {
+    let Some(sheet_value) = sheet else { return };
+    let computed_value = computed.unwrap_or(f64::NAN);
+    let equal = if loose {
+        loose_eq(computed_value, sheet_value)
+    } else {
+        approx_eq(computed_value, sheet_value)
+    };
+    mpf_row(
+        report,
+        name,
+        if equal {
+            Outcome::Match
+        } else {
+            Outcome::Difference {
+                field,
+                computed: computed_value,
+                sheet: sheet_value,
+            }
+        },
+    );
+}
+
+/// MPF accounts and portfolio totals against the workbook's cached MPF sheet.
+async fn check_mpf(
+    pool: &SqlitePool,
+    data: &WorkbookData,
+    report: &mut ParityReport,
+) -> anyhow::Result<()> {
+    use crate::routes::mpf as mpf_routes;
+
+    let today = crate::routes::today();
+    let stored = mpf_routes::load_all_stored(pool)
+        .await
+        .map_err(|err| anyhow!("loading MPF accounts failed: {err}"))?;
+    let history = mpf_routes::load_history(pool, None)
+        .await
+        .map_err(|err| anyhow!("loading MPF history failed: {err}"))?;
+    let accounts: Vec<crate::models::MpfAccount> = stored
+        .iter()
+        .map(|account| mpf_routes::present_account(account, &history, today))
+        .collect();
+    let facts: Vec<crate::calc::MpfAccountFacts> = stored
+        .iter()
+        .map(|account| mpf_routes::facts_of(account, &history))
+        .collect();
+    let totals = crate::calc::mpf_totals(
+        &facts,
+        today,
+        mpf_routes::meta_f64(pool, crate::mpf::SEED_MAX_RATE_KEY).await?,
+        mpf_routes::meta_f64(pool, crate::mpf::SEED_MAX_GAIN_KEY).await?,
+    );
+
+    for sheet_account in &data.mpf {
+        let name = format!("MPF {}", sheet_account.label);
+        let Some(computed) = accounts
+            .iter()
+            .find(|account| account.label == sheet_account.label)
+        else {
+            mpf_row(report, name, Outcome::MissingStock);
+            continue;
+        };
+        let mut outcome = Outcome::Match;
+        for (field, sheet_value, computed_value) in [
+            (
+                "總供款額",
+                sheet_account.contributions,
+                Some(computed.contributions),
+            ),
+            ("帳戶結存", sheet_account.balance, Some(computed.balance)),
+            ("回報率", sheet_account.rate, computed.rate),
+            // The seeded row reproduces the sheet's rate exactly.
+            (
+                "last month",
+                sheet_account.last_month_rate,
+                computed.last_month.and_then(|figures| figures.rate),
+            ),
+        ] {
+            let Some(sheet_value) = sheet_value else {
+                continue;
+            };
+            let computed_value = computed_value.unwrap_or(f64::NAN);
+            if !approx_eq(computed_value, sheet_value) {
+                outcome = Outcome::Difference {
+                    field,
+                    computed: computed_value,
+                    sheet: sheet_value,
+                };
+                break;
+            }
+        }
+        mpf_row(report, name, outcome);
+    }
+
+    let cached = &data.mpf_cached;
+    compare_named(
+        report,
+        "MPF buy",
+        "總供款額",
+        Some(totals.buy),
+        cached.buy,
+        false,
+    );
+    compare_named(
+        report,
+        "MPF now",
+        "帳戶結存",
+        Some(totals.now),
+        cached.now,
+        false,
+    );
+    compare_named(
+        report,
+        "MPF 回報率",
+        "回報率",
+        totals.rate,
+        cached.rate,
+        false,
+    );
+    compare_named(
+        report,
+        "MPF 淨收益",
+        "gain",
+        Some(totals.gain),
+        cached.gain,
+        false,
+    );
+    // The sheet's portfolio last-month rate is a hand-entered snapshot, not
+    // a contribution-weighted figure, so it gets the loose comparison too.
+    compare_named(
+        report,
+        "MPF last month rate",
+        "last month",
+        totals.last_month.and_then(|f| f.rate),
+        cached.last_month_rate,
+        true,
+    );
+    compare_named(
+        report,
+        "MPF last month gain",
+        "last month",
+        totals.last_month.map(|f| f.gain),
+        cached.last_month_gain,
+        true,
+    );
+    compare_named(
+        report,
+        "MPF max rate",
+        "max",
+        totals.max.rate,
+        cached.max_rate,
+        false,
+    );
+    compare_named(
+        report,
+        "MPF max gain",
+        "max",
+        Some(totals.max.gain),
+        cached.max_gain,
+        true,
+    );
 
     Ok(())
 }

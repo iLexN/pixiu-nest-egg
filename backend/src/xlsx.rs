@@ -18,6 +18,8 @@ pub const US_TRADE_SHEET: &str = "美股Trade";
 pub const US_SUMMARY_SHEET: &str = "美股";
 pub const DEPOSIT_SHEET: &str = "定期";
 pub const DEPOSIT_INFO_SHEET: &str = "定期Info";
+pub const YEAR_IN_REVIEW_SHEET: &str = "YearInReview";
+pub const MPF_SHEET: &str = "MPF";
 
 #[derive(Debug, Clone)]
 pub struct SheetTrade {
@@ -152,12 +154,75 @@ pub struct DepositSheetCached {
     pub years: Vec<SheetYearTable>,
 }
 
+/// One row of the MPF sheet's account table: the columns under the
+/// 總供款額/帳戶結存 header. The sheet's derived 回報率 is read for parity;
+/// the fund-details table below the accounts is ignored.
+#[derive(Debug, Clone)]
+pub struct SheetMpfAccount {
+    /// The sheet's account label, e.g. `new type`, `強積金個人帳戶`.
+    pub label: String,
+    pub trustee: Option<String>,
+    /// 總供款額.
+    pub contributions: Option<f64>,
+    /// 帳戶結存.
+    pub balance: Option<f64>,
+    /// Cached 回報率 column, compared by the parity check.
+    pub rate: Option<f64>,
+    /// Cached `last month` rate column.
+    pub last_month_rate: Option<f64>,
+    /// Cached `max` rate column.
+    pub max_rate: Option<f64>,
+    pub plan_name: Option<String>,
+    pub member_no: Option<String>,
+    /// 1-based position within the table, stored as sort_order.
+    pub sort_order: i64,
+    /// 1-based row number in the source sheet, for error messages.
+    pub source_row: usize,
+}
+
+/// The workbook's cached MPF top block, for the parity check and the
+/// portfolio-level seeded maxima that per-account data cannot rebuild.
+#[derive(Debug, Clone, Default)]
+pub struct MpfSheetCached {
+    /// MPF top block: buy (Σ 總供款額) and now (Σ 帳戶結存).
+    pub buy: Option<f64>,
+    pub now: Option<f64>,
+    pub rate: Option<f64>,
+    pub gain: Option<f64>,
+    /// The `last month` cells beside the top block: rate and net gain.
+    pub last_month_rate: Option<f64>,
+    pub last_month_gain: Option<f64>,
+    /// The `max` cells beside the top block: rate and net gain.
+    pub max_rate: Option<f64>,
+    pub max_gain: Option<f64>,
+}
+
+/// One year row of a market sheet's B–M year block, or of a YearInReview
+/// 股票 row: the frozen figures the yearly summary seeds snapshots from.
+#[derive(Debug, Clone)]
+pub struct SheetYearFigure {
+    pub market: Market,
+    pub year: i32,
+    /// C: the year's net invested.
+    pub invested: Option<f64>,
+    /// F: cumulative 成本 at year end.
+    pub cost: Option<f64>,
+    /// H: year-end 總市值.
+    pub market_value: Option<f64>,
+}
+
 #[derive(Debug, Clone)]
 pub struct WorkbookData {
     pub hk: MarketSheets,
     pub us: MarketSheets,
     pub deposits: Vec<SheetDeposit>,
     pub deposit_cached: DepositSheetCached,
+    /// Frozen per-(market, year) figures from the market sheets' year blocks
+    /// and YearInReview's 股票 rows.
+    pub year_figures: Vec<SheetYearFigure>,
+    /// The MPF sheet's account table.
+    pub mpf: Vec<SheetMpfAccount>,
+    pub mpf_cached: MpfSheetCached,
 }
 
 impl WorkbookData {
@@ -185,6 +250,16 @@ pub fn read(path: &Path) -> anyhow::Result<WorkbookData> {
     let us_summary = sheet_rows(&mut workbook, US_SUMMARY_SHEET, path)?;
     let deposit_info = sheet_rows(&mut workbook, DEPOSIT_INFO_SHEET, path)?;
     let deposit_view = sheet_rows(&mut workbook, DEPOSIT_SHEET, path)?;
+    // YearInReview is optional: a workbook without it just seeds nothing.
+    let year_review: Option<Rows> = workbook
+        .worksheet_range(YEAR_IN_REVIEW_SHEET)
+        .ok()
+        .map(|range| range.rows().map(<[Data]>::to_vec).collect());
+    // MPF is optional the same way.
+    let mpf: Option<Rows> = workbook
+        .worksheet_range(MPF_SHEET)
+        .ok()
+        .map(|range| range.rows().map(<[Data]>::to_vec).collect());
     // Formula text is a second pass; formats without formulas error, which is
     // fine — the note just stays empty then.
     let hk_formulas = workbook.worksheet_formula(HK_TRADE_SHEET).ok();
@@ -207,6 +282,17 @@ pub fn read(path: &Path) -> anyhow::Result<WorkbookData> {
         },
         deposits: parse_deposits(&deposit_info)?,
         deposit_cached: parse_deposit_cached(&deposit_view, &deposit_info),
+        year_figures: [
+            parse_year_figures(&hk_summary, Market::Hk),
+            parse_year_figures(&us_summary, Market::Us),
+            year_review
+                .as_ref()
+                .map(parse_year_review)
+                .unwrap_or_default(),
+        ]
+        .concat(),
+        mpf: mpf.as_ref().map(parse_mpf).unwrap_or_default(),
+        mpf_cached: mpf.as_ref().map(parse_mpf_cached).unwrap_or_default(),
     })
 }
 
@@ -576,6 +662,92 @@ fn parse_deposits(rows: &Rows) -> anyhow::Result<Vec<SheetDeposit>> {
     Ok(deposits)
 }
 
+// MPF sheet: the account table sits under a header row holding 總供款額 and
+// 帳戶結存; columns are located by header name where they have one, and by
+// fixed position where they don't (label A, trustee B). The fund-details
+// table and remark row below are ignored.
+fn parse_mpf(rows: &Rows) -> Vec<SheetMpfAccount> {
+    let Some(header) = rows.iter().position(|row| {
+        row.iter()
+            .any(|c| matches!(c, Data::String(v) if v.trim() == "總供款額"))
+            && row
+                .iter()
+                .any(|c| matches!(c, Data::String(v) if v.trim() == "帳戶結存"))
+    }) else {
+        return Vec::new();
+    };
+    let find = |name: &str| -> Option<usize> {
+        rows[header]
+            .iter()
+            .position(|c| matches!(c, Data::String(v) if v.trim() == name))
+    };
+    let rate_col = find("回報率");
+    let last_month_col = find("last month");
+    let max_col = find("max");
+    let plan_col = find("計劃名稱");
+    let member_col = find("成員編號");
+
+    let mut accounts = Vec::new();
+    for (offset, row) in rows.iter().enumerate().skip(header + 1) {
+        let Some(label) = text(row, 0) else {
+            break; // blank separator ends the account table
+        };
+        accounts.push(SheetMpfAccount {
+            label,
+            trustee: text(row, 1),
+            contributions: number(row, 2),
+            balance: number(row, 3),
+            rate: rate_col.and_then(|col| number(row, col)),
+            last_month_rate: last_month_col.and_then(|col| number(row, col)),
+            max_rate: max_col.and_then(|col| number(row, col)),
+            plan_name: plan_col.and_then(|col| text(row, col)),
+            member_no: member_col.and_then(|col| text(row, col)),
+            sort_order: accounts.len() as i64 + 1,
+            source_row: offset + 1,
+        });
+    }
+    accounts
+}
+
+/// The MPF sheet's cached top block: `buy`/`now`/rate/gain on row 2, and the
+/// `last month` / `max` rate+gain pairs in the G:H cells beside it.
+fn parse_mpf_cached(rows: &Rows) -> MpfSheetCached {
+    // Row 2 (index 1): buy, now, rate, gain in A:D.
+    let top = rows.get(1);
+    // The F1:H2 block: "last month"/"max" labels in F, rate in G, gain in H.
+    let mut last_month_rate = None;
+    let mut last_month_gain = None;
+    let mut max_rate = None;
+    let mut max_gain = None;
+    for row in rows {
+        for (index, c) in row.iter().enumerate() {
+            match c {
+                // The account table's header row repeats both labels; only
+                // the first occurrence (the top block's) carries figures.
+                Data::String(v) if v.trim() == "last month" && last_month_rate.is_none() => {
+                    last_month_rate = number(row, index + 1);
+                    last_month_gain = number(row, index + 2);
+                }
+                Data::String(v) if v.trim() == "max" && max_rate.is_none() => {
+                    max_rate = number(row, index + 1);
+                    max_gain = number(row, index + 2);
+                }
+                _ => {}
+            }
+        }
+    }
+    MpfSheetCached {
+        buy: top.and_then(|row| number(row, 0)),
+        now: top.and_then(|row| number(row, 1)),
+        rate: top.and_then(|row| number(row, 2)),
+        gain: top.and_then(|row| number(row, 3)),
+        last_month_rate,
+        last_month_gain,
+        max_rate,
+        max_gain,
+    }
+}
+
 /// The "1月".."12月" row labels used by the 定期 month table and the
 /// 定期Info year tables.
 fn month_number(label: &str) -> Option<u32> {
@@ -649,6 +821,64 @@ fn parse_deposit_cached(view: &Rows, info: &Rows) -> DepositSheetCached {
         }
     }
     cached
+}
+
+// A market summary sheet's year block sits below the stock table: a header
+// row with C "net invested" / D "sold P/L" / H "Year end value", then one
+// row per year in column B. C is the year's net invested, F the cumulative
+// 成本, H the year-end 總市值. Formula cells read as cached values, so a
+// live row (the current year) yields its latest figure — the importer, not
+// this parser, decides which years are worth freezing.
+fn parse_year_figures(rows: &Rows, market: Market) -> Vec<SheetYearFigure> {
+    let Some(header) = header_row(rows, 2, "net invested") else {
+        return Vec::new();
+    };
+    let mut figures = Vec::new();
+    for row in rows.iter().skip(header + 1) {
+        let Some(year) = number(row, 1).map(|year| year as i32) else {
+            break;
+        };
+        if !(2000..=2100).contains(&year) {
+            break;
+        }
+        figures.push(SheetYearFigure {
+            market,
+            year,
+            invested: number(row, 2),
+            cost: number(row, 5),
+            market_value: number(row, 7),
+        });
+    }
+    figures
+}
+
+// YearInReview keeps one block per year, opened by the year in column A; the
+// block's 股票 row (column H) carries the stock portfolio's year-end cost in
+// I and value in L. Those figures mirror the 港股 sheet's own year block, so
+// they are attributed to HK — the sheet's US figures are HKD-converted and
+// not attributable to a single market.
+fn parse_year_review(rows: &Rows) -> Vec<SheetYearFigure> {
+    let mut figures = Vec::new();
+    let mut current_year: Option<i32> = None;
+    for row in rows {
+        if let Some(year) = number(row, 0).map(|year| year as i32) {
+            if (2000..=2100).contains(&year) {
+                current_year = Some(year);
+            }
+        }
+        if text(row, 7).as_deref() == Some("股票") {
+            if let Some(year) = current_year {
+                figures.push(SheetYearFigure {
+                    market: Market::Hk,
+                    year,
+                    invested: None,
+                    cost: number(row, 8),
+                    market_value: number(row, 11),
+                });
+            }
+        }
+    }
+    figures
 }
 
 #[cfg(test)]
@@ -807,6 +1037,40 @@ mod tests {
         assert_eq!(jan.interest, 807.0);
         assert_eq!(jan.payout, 80807.0);
         assert_eq!(jan.total, 81614.0);
+    }
+
+    #[test]
+    fn reads_year_figures_from_the_market_block_and_year_in_review() {
+        let data = read(&workbook_path()).expect("workbook is readable");
+
+        // The 港股 year block: 2023–2026 rows with invested/成本/市值.
+        let hk = |year: i32| {
+            data.year_figures
+                .iter()
+                .find(|f| f.market == Market::Hk && f.year == year && f.invested.is_some())
+        };
+        let near =
+            |value: Option<f64>, expected: f64| (value.expect("figure") - expected).abs() < 1e-6;
+        let y2023 = hk(2023).expect("HK 2023");
+        assert!(near(y2023.invested, 96523.15));
+        assert!(near(y2023.cost, 96523.15));
+        assert!(near(y2023.market_value, 89400.0));
+        let y2025 = hk(2025).expect("HK 2025");
+        assert!(near(y2025.invested, 428635.41));
+        assert!(near(y2025.market_value, 1022027.0));
+
+        // YearInReview's 股票 rows attribute to HK too (no invested there).
+        let review2024 = data
+            .year_figures
+            .iter()
+            .find(|f| f.market == Market::Hk && f.year == 2024 && f.invested.is_none())
+            .expect("YearInReview 2024");
+        assert!(near(review2024.cost, 358800.34));
+        assert!(near(review2024.market_value, 405850.0));
+
+        // 美股 carries no year block, and YearInReview's US figures are
+        // HKD-combined — nothing is attributed to US.
+        assert!(!data.year_figures.iter().any(|f| f.market == Market::Us));
     }
 
     #[test]

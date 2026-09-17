@@ -1,11 +1,20 @@
 <script setup lang="ts">
 import { computed, onMounted, ref, watch } from 'vue'
-import { api, ApiError, type Market, type SummaryResponse, type SummaryStock } from '../api'
-import { fmtMoney, fmtPercent, fmtPrice, fmtShares, signClass } from '../format'
+import {
+  api,
+  ApiError,
+  type Market,
+  type SummaryResponse,
+  type SummaryStock,
+  type YearlySummary,
+  type YearRow,
+} from '../api'
+import { fmtDateTime, fmtMoney, fmtPercent, fmtPrice, fmtShares, signClass } from '../format'
 
 const props = defineProps<{ market: Market }>()
 
 const summary = ref<SummaryResponse | null>(null)
+const yearly = ref<YearlySummary | null>(null)
 const error = ref('')
 const editingPrice = ref<number | null>(null)
 const priceDraft = ref('')
@@ -19,8 +28,16 @@ const uploadMessage = ref('')
 async function load() {
   error.value = ''
   try {
-    summary.value = await api.summary(props.market)
+    const [nextSummary, nextYearly] = await Promise.all([
+      api.summary(props.market),
+      api.yearlySummary(props.market),
+    ])
+    summary.value = nextSummary
+    yearly.value = nextYearly
   } catch (err) {
+    // Drop the previous market's data so it can't show under the wrong tab.
+    summary.value = null
+    yearly.value = null
     error.value = err instanceof ApiError ? err.message : String(err)
   }
 }
@@ -134,6 +151,60 @@ function onDragEnd() {
   dragOverId.value = null
 }
 
+type YearField = 'invested' | 'cost' | 'market_value'
+const editingYearCell = ref<string | null>(null)
+const yearDraft = ref('')
+const freezing = ref(false)
+
+/** A cell counts as frozen when the snapshot carries a value for it. */
+function frozen(row: YearRow, field: YearField): boolean {
+  return row.snapshot?.[field] !== null && row.snapshot?.[field] !== undefined
+}
+
+function frozenTitle(row: YearRow): string {
+  return row.snapshot ? `已凍結 ${fmtDateTime(row.snapshot.updated_at)}` : ''
+}
+
+function startYearEdit(row: YearRow, field: YearField) {
+  editingYearCell.value = `${row.year}:${field}`
+  const current = row.snapshot?.[field] ?? row[field]
+  yearDraft.value = current === null ? '' : String(current)
+}
+
+async function saveYearEdit(row: YearRow, field: YearField) {
+  const text = String(yearDraft.value).trim()
+  const parsed = text === '' ? null : Number(text)
+  if (parsed !== null && (!Number.isFinite(parsed) || parsed < 0)) {
+    error.value = '數值必須是非負數字'
+    return
+  }
+  try {
+    await api.updateYearly(props.market, row.year, { [field]: parsed })
+    editingYearCell.value = null
+    await load()
+  } catch (err) {
+    error.value = err instanceof ApiError ? err.message : String(err)
+  }
+}
+
+async function freezeYear(row: YearRow) {
+  if (
+    row.snapshot &&
+    !window.confirm(`${row.year} 已有凍結數值，確定用現在的計算值覆蓋？`)
+  ) {
+    return
+  }
+  freezing.value = true
+  try {
+    await api.freezeYearly(props.market, row.year)
+    await load()
+  } catch (err) {
+    error.value = err instanceof ApiError ? err.message : String(err)
+  } finally {
+    freezing.value = false
+  }
+}
+
 onMounted(load)
 watch(() => props.market, load)
 </script>
@@ -207,8 +278,8 @@ watch(() => props.market, load)
           <th>股票代碼</th>
           <th>Stock</th>
           <th class="num">股數</th>
-          <th class="num" :title="summary.average_price_definition">加權平均買入單價</th>
-          <th class="num">總買入成本</th>
+          <th class="num" :title="summary.average_price_definition">平均單價</th>
+          <th class="num">成本</th>
           <th class="num">現價</th>
           <th class="num">當前總市值</th>
           <th class="num">未實現金額</th>
@@ -299,10 +370,10 @@ watch(() => props.market, load)
       <thead>
         <tr>
           <th>類別</th>
-          <th class="num">buy total</th>
-          <th class="num">now total</th>
+          <th class="num">成本</th>
+          <th class="num">當前總市值</th>
           <th class="num">佔市值</th>
-          <th class="num">% change</th>
+          <th class="num">未實現報酬率</th>
         </tr>
       </thead>
       <tbody>
@@ -320,6 +391,103 @@ watch(() => props.market, load)
         </tr>
       </tbody>
     </table>
+
+    <template v-if="yearly">
+      <h4>每年總覽</h4>
+      <p class="muted">
+        年末成本與總市值為凍結值（*），年底按「凍結」或點擊儲存格輸入；其餘由交易與派息即時計算。
+      </p>
+      <table>
+        <thead>
+          <tr>
+            <th>年份</th>
+            <th class="num">net invested</th>
+            <th class="num">成本</th>
+            <th class="num">總市值</th>
+            <th class="num">派息 ÷ 成本</th>
+            <th class="num">派息 ÷ 市值</th>
+            <th class="num">派息</th>
+            <th class="num">月均派息</th>
+            <th class="num">派息 YoY</th>
+            <th class="num">invested YoY</th>
+            <th aria-label="凍結"></th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr v-for="row in yearly.years" :key="row.year">
+            <td>{{ row.year }}</td>
+            <td
+              class="num year-cell"
+              :class="{ frozen: frozen(row, 'invested') }"
+              :title="frozen(row, 'invested') ? frozenTitle(row) : ''"
+            >
+              <template v-if="editingYearCell === `${row.year}:invested`">
+                <input
+                  v-model="yearDraft"
+                  type="number"
+                  step="any"
+                  @keyup.enter="saveYearEdit(row, 'invested')"
+                />
+                <button type="button" class="link" @click="saveYearEdit(row, 'invested')">
+                  儲存
+                </button>
+                <button type="button" class="link" @click="editingYearCell = null">取消</button>
+              </template>
+              <button v-else type="button" class="link" @click="startYearEdit(row, 'invested')">
+                {{ fmtMoney(row.invested) || '輸入' }}{{ frozen(row, 'invested') ? '*' : '' }}
+              </button>
+            </td>
+            <td
+              v-for="field in ['cost', 'market_value'] as const"
+              :key="field"
+              class="num year-cell"
+              :class="{ frozen: frozen(row, field) }"
+              :title="frozen(row, field) ? frozenTitle(row) : ''"
+            >
+              <template v-if="editingYearCell === `${row.year}:${field}`">
+                <input
+                  v-model="yearDraft"
+                  type="number"
+                  step="any"
+                  @keyup.enter="saveYearEdit(row, field)"
+                />
+                <button type="button" class="link" @click="saveYearEdit(row, field)">儲存</button>
+                <button type="button" class="link" @click="editingYearCell = null">取消</button>
+              </template>
+              <button v-else type="button" class="link" @click="startYearEdit(row, field)">
+                {{ fmtMoney(row[field]) || '輸入' }}{{ frozen(row, field) ? '*' : '' }}
+              </button>
+            </td>
+            <td class="num" :class="signClass(row.yield_on_cost)">
+              {{ row.yield_on_cost === null ? '—' : fmtPercent(row.yield_on_cost) }}
+            </td>
+            <td class="num" :class="signClass(row.yield_on_value)">
+              {{ row.yield_on_value === null ? '—' : fmtPercent(row.yield_on_value) }}
+            </td>
+            <td class="num">{{ fmtMoney(row.dividends) }}</td>
+            <td class="num">{{ fmtMoney(row.monthly_dividend) }}</td>
+            <td class="num" :class="signClass(row.dividend_yoy)">
+              {{ row.dividend_yoy === null ? '—' : fmtPercent(row.dividend_yoy) }}
+            </td>
+            <td class="num" :class="signClass(row.invested_yoy)">
+              {{ row.invested_yoy === null ? '—' : fmtPercent(row.invested_yoy) }}
+            </td>
+            <td>
+              <button
+                v-if="row.year === Number(yearly.today.slice(0, 4))"
+                type="button"
+                class="link"
+                :disabled="freezing"
+                title="把現在的成本與總市值存為今年的凍結值"
+                @click="freezeYear(row)"
+              >
+                凍結
+              </button>
+            </td>
+          </tr>
+        </tbody>
+      </table>
+    </template>
   </section>
 </template>
 
@@ -376,6 +544,12 @@ watch(() => props.market, load)
 }
 .drag-over td {
   border-top: 2px solid var(--highlight);
+}
+.year-cell input {
+  width: 7rem;
+}
+.year-cell.frozen .link {
+  text-decoration: underline dotted;
 }
 h4 {
   margin: 1.5rem 0 0.5rem;

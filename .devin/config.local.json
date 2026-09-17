@@ -32,7 +32,9 @@
       "Exec(git show)",
       "Exec(cp)",
       "Exec(curl)",
-      "Exec(graft callers)"
+      "Exec(graft callers)",
+      "Exec(unzip)",
+      "Exec(pkill)"
     ]
   }
 }

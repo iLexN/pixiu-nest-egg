@@ -18,7 +18,7 @@ const showForm = ref(false)
 const filterCode = ref('')
 const from = ref('')
 const to = ref('')
-const order = ref<'asc' | 'desc'>('asc')
+const order = ref<'asc' | 'desc'>('desc')
 
 const ISO_DATE = /^\d{4}-\d{2}-\d{2}$/
 

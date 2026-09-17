@@ -88,6 +88,47 @@ export interface SummaryResponse {
   totals: MarketTotals
 }
 
+/** The stored frozen figures for one year; a null field means "no override". */
+export interface YearSnapshot {
+  invested: number | null
+  cost: number | null
+  market_value: number | null
+  updated_at: string
+}
+
+/** The PATCH/freeze response: the snapshot row keyed by market + year. */
+export interface YearSnapshotRow extends YearSnapshot {
+  market: Market
+  year: number
+}
+
+export interface YearRow {
+  year: number
+  invested: number
+  cost: number
+  market_value: number | null
+  dividends: number
+  yield_on_cost: number | null
+  yield_on_value: number | null
+  monthly_dividend: number
+  dividend_yoy: number | null
+  invested_yoy: number | null
+  sold_pl: number | null
+  snapshot: YearSnapshot | null
+}
+
+export interface YearlySummary {
+  market: Market
+  today: string
+  years: YearRow[]
+}
+
+export interface YearlyPatch {
+  invested?: number | null
+  cost?: number | null
+  market_value?: number | null
+}
+
 export interface NewStock {
   market: Market
   code: string
@@ -291,6 +332,76 @@ export interface DividendFilters {
   order?: 'asc' | 'desc'
 }
 
+/** A rate + net gain pair; `rate` is null when contributions are zero. */
+export interface MpfFigures {
+  rate: number | null
+  gain: number
+}
+
+export interface MpfAccount {
+  id: number
+  label: string
+  trustee: string | null
+  /** 總供款額 */
+  contributions: number
+  /** 帳戶結存 */
+  balance: number
+  plan_name: string | null
+  member_no: string | null
+  sort_order: number
+  rate: number | null
+  gain: number
+  last_month: MpfFigures | null
+  max: MpfFigures
+}
+
+export interface MpfHistoryRow {
+  id: number
+  account_id: number
+  recorded_on: string
+  contributions: number
+  balance: number
+  /** true for month-end rows backfilled automatically, not real updates. */
+  synthetic: boolean
+  rate: number | null
+  gain: number
+}
+
+export interface MpfTotals {
+  buy: number
+  now: number
+  rate: number | null
+  gain: number
+  last_month: MpfFigures | null
+  max: MpfFigures
+}
+
+export interface MpfOverview {
+  today: string
+  accounts: MpfAccount[]
+  totals: MpfTotals
+  note: string | null
+  history: MpfHistoryRow[]
+}
+
+export interface NewMpfAccount {
+  label: string
+  trustee?: string | null
+  contributions?: number | null
+  balance?: number | null
+  plan_name?: string | null
+  member_no?: string | null
+}
+
+export interface MpfAccountPatch {
+  label?: string
+  trustee?: string | null
+  contributions?: number | null
+  balance?: number | null
+  plan_name?: string | null
+  member_no?: string | null
+}
+
 /** Carries the server's field-level messages so forms can show them inline. */
 export class ApiError extends Error {
   status: number
@@ -317,7 +428,14 @@ async function request<T>(path: string, init?: RequestInit): Promise<T> {
     return undefined as T
   }
   const text = await response.text()
-  const body: unknown = text ? JSON.parse(text) : null
+  // The proxy can answer with an HTML error page when the backend is down;
+  // don't let a parse failure mask the real HTTP status.
+  let body: unknown = null
+  try {
+    body = text ? JSON.parse(text) : null
+  } catch {
+    /* non-JSON body */
+  }
   if (!response.ok) {
     const payload = (body ?? {}) as { message?: string; fields?: FieldError[] }
     throw new ApiError(
@@ -377,6 +495,18 @@ export const api = {
   summary(market: Market): Promise<SummaryResponse> {
     return request(`/summary${queryString({ market })}`)
   },
+  yearlySummary(market: Market): Promise<YearlySummary> {
+    return request(`/summary/yearly${queryString({ market })}`)
+  },
+  updateYearly(market: Market, year: number, patch: YearlyPatch): Promise<YearSnapshotRow> {
+    return request(`/summary/yearly/${market}/${year}`, {
+      method: 'PATCH',
+      body: JSON.stringify(patch),
+    })
+  },
+  freezeYearly(market: Market, year: number): Promise<YearSnapshotRow> {
+    return request(`/summary/yearly/${market}/${year}/freeze`, { method: 'POST' })
+  },
   listDeposits(filters: DepositFilters = {}): Promise<Deposit[]> {
     return request(`/deposits${queryString({ ...filters })}`)
   },
@@ -406,5 +536,23 @@ export const api = {
   },
   dividendSummary(market: Market): Promise<DividendSummary> {
     return request(`/dividends/summary${queryString({ market })}`)
+  },
+  mpfOverview(): Promise<MpfOverview> {
+    return request('/mpf')
+  },
+  createMpfAccount(account: NewMpfAccount): Promise<MpfAccount> {
+    return request('/mpf/accounts', { method: 'POST', body: JSON.stringify(account) })
+  },
+  updateMpfAccount(id: number, patch: MpfAccountPatch): Promise<MpfAccount> {
+    return request(`/mpf/accounts/${id}`, { method: 'PATCH', body: JSON.stringify(patch) })
+  },
+  deleteMpfAccount(id: number): Promise<void> {
+    return request(`/mpf/accounts/${id}`, { method: 'DELETE' })
+  },
+  updateMpfNote(note: string | null): Promise<{ note: string | null }> {
+    return request('/mpf/note', { method: 'PATCH', body: JSON.stringify({ note }) })
+  },
+  deleteMpfHistory(id: number): Promise<void> {
+    return request(`/mpf/history/${id}`, { method: 'DELETE' })
   },
 }
