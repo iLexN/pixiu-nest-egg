@@ -48,6 +48,25 @@ export function signClass(value: number | null | undefined): string {
   return value > 0 ? 'positive' : 'negative'
 }
 
+/** Green when `value` beats `reference` (now vs. last month), red when worse. */
+export function compareClass(
+  value: number | null | undefined,
+  reference: number | null | undefined,
+): string {
+  if (value === null || value === undefined || reference === null || reference === undefined) {
+    return ''
+  }
+  return signClass(value - reference)
+}
+
+/** A `percent / amount` pair like the 上月/最高 cells; `—` for missing parts. */
+export function fmtFigures(
+  percent: number | null | undefined,
+  amount: number | null | undefined,
+): string {
+  return `${fmtPercent(percent) || '—'} / ${fmtMoney(amount) || '—'}`
+}
+
 /** Bank codes used by the deposit list; unknown codes display as-is. */
 const BANK_NAMES: Record<string, string> = {
   SC: '渣打',

@@ -1,13 +1,7 @@
 <script setup lang="ts">
 import { computed, onMounted, ref } from 'vue'
-import {
-  api,
-  ApiError,
-  type MpfAccount,
-  type MpfFigures,
-  type MpfOverview,
-} from '../api'
-import { fmtMoney, fmtPercent, signClass } from '../format'
+import { api, ApiError, type MpfAccount, type MpfOverview } from '../api'
+import { compareClass, fmtFigures, fmtMoney, fmtPercent, signClass } from '../format'
 import RowActions from '../components/RowActions.vue'
 
 const overview = ref<MpfOverview | null>(null)
@@ -28,8 +22,8 @@ async function load() {
 interface AccountDraft {
   label: string
   trustee: string
-  contributions: string
-  balance: string
+  contributions: string | number
+  balance: string | number
   plan_name: string
   member_no: string
 }
@@ -67,9 +61,10 @@ function startEdit(account: MpfAccount | 'new') {
 }
 
 function parseAmount(field: 'contributions' | 'balance'): number | null {
-  const text = draft.value[field].trim()
-  const parsed = Number(text)
-  if (text === '' || !Number.isFinite(parsed)) {
+  // type="number" inputs store numbers, empty ones stay ''.
+  const raw = draft.value[field]
+  const parsed = Number(raw)
+  if (String(raw).trim() === '' || !Number.isFinite(parsed)) {
     error.value = `${field === 'contributions' ? '總供款額' : '帳戶結存'}必須是數字`
     return null
   }
@@ -160,23 +155,6 @@ async function removeHistory(id: number) {
   }
 }
 
-function fmtFigures(pair: MpfFigures | null): string {
-  if (!pair) return '—'
-  const rate = fmtPercent(pair.rate) || '—'
-  return `${rate} / ${fmtMoney(pair.gain)}`
-}
-
-/** Green when `value` beats `reference` (now vs. last month), red when worse. */
-function compareClass(
-  value: number | null | undefined,
-  reference: number | null | undefined,
-): string {
-  if (value === null || value === undefined || reference === null || reference === undefined) {
-    return ''
-  }
-  return signClass(value - reference)
-}
-
 onMounted(load)
 </script>
 
@@ -223,7 +201,7 @@ onMounted(load)
         </div>
         <div class="total-card">
           <span>最高</span>
-          <strong>{{ fmtFigures(overview.totals.max) }}</strong>
+          <strong>{{ fmtFigures(overview.totals.max.rate, overview.totals.max.gain) }}</strong>
         </div>
       </div>
 
@@ -263,7 +241,7 @@ onMounted(load)
               </template>
               <template v-else>—</template>
             </td>
-            <td class="num">{{ fmtFigures(account.max) }}</td>
+            <td class="num">{{ fmtFigures(account.max.rate, account.max.gain) }}</td>
             <td class="note">{{ account.plan_name ?? '' }}</td>
             <td>{{ account.member_no ?? '' }}</td>
             <td class="row-actions">

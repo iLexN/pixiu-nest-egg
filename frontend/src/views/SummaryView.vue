@@ -9,7 +9,16 @@ import {
   type YearlySummary,
   type YearRow,
 } from '../api'
-import { fmtDateTime, fmtMoney, fmtPercent, fmtPrice, fmtShares, signClass } from '../format'
+import {
+  compareClass,
+  fmtDateTime,
+  fmtFigures,
+  fmtMoney,
+  fmtPercent,
+  fmtPrice,
+  fmtShares,
+  signClass,
+} from '../format'
 
 const props = defineProps<{ market: Market }>()
 
@@ -246,6 +255,30 @@ watch(() => props.market, load)
         <span>未實現報酬率</span>
         <strong :class="signClass(summary.totals.net_percent)">
           {{ fmtPercent(summary.totals.net_percent) }}
+        </strong>
+      </div>
+      <div class="total-card">
+        <span>上月</span>
+        <strong>
+          <template v-if="summary.last_month">
+            <span
+              :class="compareClass(summary.totals.net_percent, summary.last_month.percent)"
+              >{{ fmtPercent(summary.last_month.percent) || '—' }}</span
+            >
+            /
+            <span
+              :class="compareClass(summary.totals.net_amount, summary.last_month.amount)"
+              >{{ fmtMoney(summary.last_month.amount) }}</span
+            >
+          </template>
+          <template v-else>—</template>
+        </strong>
+      </div>
+      <div class="total-card">
+        <span>最高</span>
+        <strong>
+          <template v-if="summary.max">{{ fmtFigures(summary.max.percent, summary.max.amount) }}</template>
+          <template v-else>—</template>
         </strong>
       </div>
       <div class="total-card">
@@ -510,7 +543,7 @@ watch(() => props.market, load)
   border-radius: 8px;
   padding: 0.75rem;
 }
-.total-card span {
+.total-card > span {
   color: var(--muted);
   display: block;
   font-size: 0.78rem;

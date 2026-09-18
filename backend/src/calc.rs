@@ -1252,24 +1252,24 @@ fn fold_max(acc: Option<f64>, value: Option<f64>) -> Option<f64> {
 
 /// All-time maxima over the seeded marks, every history row, and the current
 /// values. Rate and gain are tracked independently and may peak at different
-/// moments.
+/// moments. `current` is optional: the seeded marks and history alone still
+/// define a max when no current values exist.
 pub fn mpf_max(
     history: &[MpfPoint],
-    current: MpfPoint,
+    current: Option<MpfPoint>,
     seed_max_rate: Option<f64>,
     seed_max_gain: Option<f64>,
 ) -> MpfFigures {
-    let current_figures = mpf_figures(current.contributions, current.balance);
     let mut rate = seed_max_rate;
     let mut gain = seed_max_gain;
-    for point in history.iter().copied().chain([current]) {
+    for point in history.iter().copied().chain(current) {
         let figures = mpf_figures(point.contributions, point.balance);
         rate = fold_max(rate, figures.rate);
         gain = fold_max(gain, Some(figures.gain));
     }
     MpfFigures {
         rate,
-        gain: gain.unwrap_or(current_figures.gain),
+        gain: gain.unwrap_or(0.0),
     }
 }
 
@@ -2365,7 +2365,7 @@ mod tests {
             mpf_point("2026-08-10", 120.0, 180.0), // rate 50%, gain 60
         ];
         let current = mpf_point("2026-10-01", 200.0, 300.0); // rate 50%, gain 100
-        let max = mpf_max(&history, current, None, None);
+        let max = mpf_max(&history, Some(current), None, None);
         assert!(approx_eq(max.rate.unwrap(), 0.5));
         assert!(approx_eq(max.gain, 100.0));
     }
@@ -2373,7 +2373,7 @@ mod tests {
     #[test]
     fn mpf_max_is_floored_by_the_seeded_marks() {
         let current = mpf_point("2026-09-17", 100.0, 110.0);
-        let max = mpf_max(&[], current, Some(0.4792), Some(278_899.91));
+        let max = mpf_max(&[], Some(current), Some(0.4792), Some(278_899.91));
         assert!(approx_eq(max.rate.unwrap(), 0.4792));
         assert!(approx_eq(max.gain, 278_899.91));
     }

@@ -86,5 +86,6 @@ mod tests {
         assert!(tables.contains(&"stocks".to_string()));
         assert!(tables.contains(&"trades".to_string()));
         assert!(tables.contains(&"deposits".to_string()));
+        assert!(tables.contains(&"market_history".to_string()));
     }
 }

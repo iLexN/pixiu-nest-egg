@@ -91,6 +91,8 @@ pub struct MarketSheets {
     pub stocks: Vec<SheetStock>,
     pub summary: Vec<SheetSummary>,
     pub dividends: Vec<SheetDividend>,
+    /// The sheet's cached `last month`/`max` cells, for seeding and parity.
+    pub cached: MarketSheetCached,
 }
 
 /// One row of 定期Info's 表_定期List. The sheet's derived columns
@@ -197,6 +199,20 @@ pub struct MpfSheetCached {
     pub max_gain: Option<f64>,
 }
 
+/// A market sheet's cached last-month/max cells: `last month` (a rate only),
+/// `max Balance %` (max rate) and `max net` (max unrealized amount). On 美股
+/// each figure sits in the J column; the K column repeats it HKD-converted
+/// and is ignored — the app tracks US figures in USD.
+#[derive(Debug, Clone, Default)]
+pub struct MarketSheetCached {
+    /// 港股!B1 / 美股!J4 — last month's 未實現報酬率.
+    pub last_month_percent: Option<f64>,
+    /// 港股!B2 / 美股!J5 — the all-time high 未實現報酬率.
+    pub max_percent: Option<f64>,
+    /// 港股!B3 / 美股!J6 — the all-time high 未實現金額.
+    pub max_amount: Option<f64>,
+}
+
 /// One year row of a market sheet's B–M year block, or of a YearInReview
 /// 股票 row: the frozen figures the yearly summary seeds snapshots from.
 #[derive(Debug, Clone)]
@@ -272,6 +288,7 @@ pub fn read(path: &Path) -> anyhow::Result<WorkbookData> {
             stocks: parse_hk_stocks(&hk_summary),
             summary: parse_summary(&hk_summary, Market::Hk),
             dividends: parse_dividends(&hk_trades, hk_formulas.as_ref()),
+            cached: parse_market_cached(&hk_summary),
         },
         us: MarketSheets {
             market: Market::Us,
@@ -279,6 +296,7 @@ pub fn read(path: &Path) -> anyhow::Result<WorkbookData> {
             stocks: parse_us_stocks(&us_summary),
             summary: parse_summary(&us_summary, Market::Us),
             dividends: parse_dividends(&us_trades, us_formulas.as_ref()),
+            cached: parse_market_cached(&us_summary),
         },
         deposits: parse_deposits(&deposit_info)?,
         deposit_cached: parse_deposit_cached(&deposit_view, &deposit_info),
@@ -748,6 +766,35 @@ fn parse_mpf_cached(rows: &Rows) -> MpfSheetCached {
     }
 }
 
+/// A market sheet's cached last-month/max cells: `label → number` pairs like
+/// the MPF top block, except each cell holds a single figure — `last month`
+/// carries a rate only, `max Balance %` a rate, `max net` an amount. On 美股
+/// the HKD-converted K column sits beside the J value and is skipped by
+/// reading only the cell next to the label. Only the first occurrence of
+/// each label counts; non-finite cached values are ignored.
+fn parse_market_cached(rows: &Rows) -> MarketSheetCached {
+    let mut cached = MarketSheetCached::default();
+    for row in rows {
+        for (index, c) in row.iter().enumerate() {
+            match c {
+                Data::String(v)
+                    if v.trim() == "last month" && cached.last_month_percent.is_none() =>
+                {
+                    cached.last_month_percent = number(row, index + 1).filter(|v| v.is_finite());
+                }
+                Data::String(v) if v.trim() == "max Balance %" && cached.max_percent.is_none() => {
+                    cached.max_percent = number(row, index + 1).filter(|v| v.is_finite());
+                }
+                Data::String(v) if v.trim() == "max net" && cached.max_amount.is_none() => {
+                    cached.max_amount = number(row, index + 1).filter(|v| v.is_finite());
+                }
+                _ => {}
+            }
+        }
+    }
+    cached
+}
+
 /// The "1月".."12月" row labels used by the 定期 month table and the
 /// 定期Info year tables.
 fn month_number(label: &str) -> Option<u32> {
@@ -922,6 +969,22 @@ mod tests {
             .expect("adjustment row");
         assert_eq!(adjustment.total, Some(-0.01));
         assert!(adjustment.note.is_some());
+    }
+
+    #[test]
+    fn reads_market_cached_last_month_and_max_cells() {
+        let data = read(&workbook_path()).expect("workbook is readable");
+
+        for market in [&data.hk, &data.us] {
+            let cached = &market.cached;
+            // The cached numbers change monthly; assert presence and sanity,
+            // not exact values. Rates are fractions; amounts are positive.
+            for rate in [cached.last_month_percent, cached.max_percent] {
+                let rate = rate.expect("cached rate");
+                assert!((-1.0..5.0).contains(&rate), "{rate}");
+            }
+            assert!(cached.max_amount.unwrap_or_default() > 0.0);
+        }
     }
 
     #[test]

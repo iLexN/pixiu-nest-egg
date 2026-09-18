@@ -371,6 +371,14 @@ pub struct MpfFigures {
     pub gain: f64,
 }
 
+/// A 未實現報酬率 + 未實現金額 pair for a market's last-month or max figures.
+/// `percent` is empty when the recorded `buy_cost_priced` is zero.
+#[derive(Debug, Clone, Copy, Serialize)]
+pub struct MarketFigures {
+    pub percent: Option<f64>,
+    pub amount: f64,
+}
+
 /// An MPF (強積金) account. `rate`, `gain`, `last_month` and `max` are derived
 /// on read from the stored values plus the history rows; `seed_max_*` are the
 /// imported high-water marks that act as a floor for the reported maxima.

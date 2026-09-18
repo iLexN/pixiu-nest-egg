@@ -72,6 +72,8 @@ cd frontend && pnpm build && pnpm exec vue-tsc --noEmit
 
 The backend is the source of truth for validation, persistence, and all financial calculations. The Vue frontend collects input, renders API responses, formats values for display, and shows temporary previews before submission; previews are not treated as authoritative results.
 
+Frontend form inputs declared `type="number"` (or bound with `v-model.number`) store numbers in the model, not strings — coerce with `Number(...)`/`String(...)` instead of calling `.trim()` on them.
+
 ### Updating 現價
 
 1. `SummaryView.vue` sends `PATCH /api/stocks/:id` with `manual_price`.
@@ -96,6 +98,13 @@ The backend is the source of truth for validation, persistence, and all financia
 4. The response includes the stored row plus per-trade `平均單價`; summaries recompute from trades on the next summary request.
 
 The live formula preview in `TradeForm.vue` mirrors those rules only so the user can check the numbers before submitting.
+
+### Market 上月/最高 figures
+
+1. `GET /api/summary?market=HK|US` (`backend/src/routes/summary.rs`) upserts today's `market_history` row with the totals' `buy_cost_priced`/`market_value` whenever at least one stock is priced, backfilling a synthetic month-end row per fully elapsed empty month (`backend/src/market_history.rs`). `prices::apply` triggers the same build per touched market so bulk/CLI price imports are captured too.
+2. The response's `last_month`/`max` are derived on read by reusing the MPF math (`mpf_last_month`, `mpf_max`) over history rows mapped to `(contributions, balance)`; the two maxima are independent.
+3. `import_xlsx` seeds a synthetic `YYYY-12-31` row per `year_snapshots` year that has both 成本 and 總市值 (HK only — the workbook attributes none to US), plus each market's cached `last month` rate as a synthetic previous-month-end row `(Σ BUY total, Σ BUY total × (1 + rate))` and the cached `max Balance %`/`max net` cells as `app_meta` marks (`market.<MKT>.seed_max_percent`/`.seed_max_amount`) flooring the derived 最高.
+4. `SummaryView.vue` shows the `percent / amount` pairs in the totals strip, colored against the current figures.
 
 ### Reordering stocks
 
@@ -132,7 +141,7 @@ The live formula preview in `TradeForm.vue` mirrors those rules only so the user
 
 ## Migration roadmap
 
-Completed so far: HK/US trade registry, trade history, per-stock summaries, manual prices/metadata, 定期 deposits (registry, upcoming/history views, month/bank/year rollups), stock 派息 (estimate → receipt lifecycle with frozen holdings/cost/price snapshots), MPF (accounts, monthly balance updates with history, derived last-month/max, page note), workbook import, and parity check.
+Completed so far: HK/US trade registry, trade history, per-stock summaries, manual prices/metadata, 定期 deposits (registry, upcoming/history views, month/bank/year rollups), stock 派息 (estimate → receipt lifecycle with frozen holdings/cost/price snapshots), MPF (accounts, monthly balance updates with history, derived last-month/max, page note), market 上月/最高 figures (daily totals history with month-end backfill, year-end seeding), workbook import, and parity check.
 
 Remaining spreadsheet sections, in intended order:
 

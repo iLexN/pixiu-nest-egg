@@ -235,6 +235,7 @@ async fn duplicate_source_rows_are_kept_once_and_only_once() {
             }],
             summary: Vec::new(),
             dividends: Vec::new(),
+            cached: Default::default(),
         },
         us: MarketSheets {
             market: Market::Us,
@@ -242,6 +243,7 @@ async fn duplicate_source_rows_are_kept_once_and_only_once() {
             stocks: Vec::new(),
             summary: Vec::new(),
             dividends: Vec::new(),
+            cached: Default::default(),
         },
         deposits: Vec::new(),
         deposit_cached: Default::default(),
@@ -311,6 +313,130 @@ async fn parity_flags_a_stock_with_trades_but_no_cached_figures() {
     assert!(report.problems().any(
         |row| matches!(row.outcome, Outcome::MissingSheetValue { .. }) && row.code == "中國銀行"
     ));
+}
+
+#[tokio::test]
+async fn reimport_refreshes_the_synthetic_last_month_seed_but_never_a_real_row() {
+    use chrono::Datelike;
+
+    let pool = db::connect_memory().await.expect("db");
+    let mut data = xlsx::read(&workbook_path()).expect("workbook");
+    import::import(&pool, &data).await.expect("first import");
+
+    let today = wealth_backend::routes::today();
+    let first_of_month = chrono::NaiveDate::from_ymd_opt(today.year(), today.month(), 1).unwrap();
+    let seed_date = (first_of_month - chrono::Days::new(1)).to_string();
+
+    let seeded: Option<(f64, i64)> = sqlx::query_as(
+        "SELECT market_value, synthetic FROM market_history \
+         WHERE market = 'HK' AND recorded_on = ?",
+    )
+    .bind(&seed_date)
+    .fetch_optional(&pool)
+    .await
+    .expect("seed row");
+    let (value_before, synthetic) = seeded.expect("HK last-month seed");
+    assert_eq!(synthetic, 1);
+
+    // A changed cached rate refreshes the synthetic seed on re-import.
+    let rate = data.hk.cached.last_month_percent.expect("cached rate");
+    data.hk.cached.last_month_percent = Some(rate + 0.01);
+    import::import(&pool, &data).await.expect("second import");
+
+    let (cost, refreshed): (f64, f64) = sqlx::query_as(
+        "SELECT buy_cost_priced, market_value FROM market_history \
+         WHERE market = 'HK' AND recorded_on = ?",
+    )
+    .bind(&seed_date)
+    .fetch_one(&pool)
+    .await
+    .expect("refreshed row");
+    assert_ne!(refreshed, value_before);
+    assert!((refreshed - cost * (1.0 + rate + 0.01)).abs() < 0.01);
+
+    // A real record on the seed date is never overwritten.
+    sqlx::query(
+        "UPDATE market_history SET synthetic = 0, market_value = 12345.0 \
+         WHERE market = 'HK' AND recorded_on = ?",
+    )
+    .bind(&seed_date)
+    .execute(&pool)
+    .await
+    .expect("mark real");
+    import::import(&pool, &data).await.expect("third import");
+
+    let value: f64 = sqlx::query_scalar(
+        "SELECT market_value FROM market_history \
+         WHERE market = 'HK' AND recorded_on = ?",
+    )
+    .bind(&seed_date)
+    .fetch_one(&pool)
+    .await
+    .expect("row");
+    assert_eq!(value, 12345.0);
+}
+
+#[tokio::test]
+async fn parity_treats_the_seeded_max_marks_as_floors() {
+    let pool = db::connect_memory().await.expect("db");
+    let data = xlsx::read(&workbook_path()).expect("workbook");
+    import::import(&pool, &data).await.expect("import");
+
+    // A recorded value far above the sheet's max net raises the derived
+    // 最高金額 — beating the mark is the expected outcome, not a difference.
+    let huge = data.us.cached.max_amount.expect("us max net") * 10.0;
+    sqlx::query(
+        "INSERT INTO market_history \
+         (market, recorded_on, buy_cost_priced, market_value, synthetic) \
+         VALUES ('US', '2025-06-30', 1.0, ?, 0)",
+    )
+    .bind(huge)
+    .execute(&pool)
+    .await
+    .expect("insert history");
+
+    let report = parity::check(&pool, &data).await.expect("parity");
+    let row = report
+        .market_figures
+        .iter()
+        .find(|row| row.name == "US 最高金額")
+        .expect("US 最高金額 row");
+    assert_eq!(row.outcome, Outcome::Match);
+    assert!(
+        report.is_clean(),
+        "unexpected differences: {:?}",
+        report.market_figure_problems().collect::<Vec<_>>()
+    );
+}
+
+#[tokio::test]
+async fn parity_flags_a_shortfall_below_the_seeded_max_mark() {
+    let pool = db::connect_memory().await.expect("db");
+    let data = xlsx::read(&workbook_path()).expect("workbook");
+    import::import(&pool, &data).await.expect("import");
+
+    // Unpriced US leaves no derived 最高金額 to compare — a real shortfall
+    // against the sheet's mark, unlike exceeding it.
+    sqlx::query("UPDATE stocks SET manual_price = NULL WHERE market = 'US'")
+        .execute(&pool)
+        .await
+        .expect("unprice");
+    sqlx::query("DELETE FROM market_history WHERE market = 'US'")
+        .execute(&pool)
+        .await
+        .expect("clear history");
+    sqlx::query("DELETE FROM app_meta WHERE key = 'market.US.seed_max_amount'")
+        .execute(&pool)
+        .await
+        .expect("clear mark");
+
+    let report = parity::check(&pool, &data).await.expect("parity");
+    let row = report
+        .market_figures
+        .iter()
+        .find(|row| row.name == "US 最高金額")
+        .expect("US 最高金額 row");
+    assert!(matches!(row.outcome, Outcome::Difference { .. }));
 }
 
 #[tokio::test]

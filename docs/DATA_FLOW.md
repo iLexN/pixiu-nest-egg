@@ -148,6 +148,22 @@ A generic key-value table for section-level state that no account row can hold. 
 | `key` | The entry's name, unique |
 | `value` | Free-text value |
 
+The market sheets' cached `max Balance %` / `max net` cells seed `market.HK.seed_max_percent`, `market.HK.seed_max_amount`, `market.US.seed_max_percent`, `market.US.seed_max_amount` — per-market maxima marks that floor the derived 最高, exactly like the MPF seeds.
+
+### `market_history`
+
+One row per market per day a summary is computed — `UNIQUE(market, recorded_on)`, so rebuilding the same market's summary again on the same day replaces the row rather than appending.
+
+| Column | Meaning |
+|---|---|
+| `id` | Internal history ID |
+| `market` | `HK` or `US` |
+| `recorded_on` | `YYYY-MM-DD` text date |
+| `buy_cost_priced`, `market_value` | The market totals' priced cost basis and market value on that date |
+| `synthetic` | `1` for month-end rows backfilled automatically or seeded at import; `0` for real records |
+
+When a summary is computed and whole calendar months passed with no rows, the build backfills a synthetic month-end row per empty month carrying the last-recorded values — the values that actually stood during those months. `import_xlsx` also seeds a synthetic `YYYY-12-31` row per market per `year_snapshots` year that has both 成本 and 總市值, so 最高 has real history from day one, plus one synthetic previous-month-end row per market reconstructed from the sheet's cached `last month` rate and the market's Σ BUY total (the rate matches the sheet exactly; the amount approximates). A market with no priced stock records nothing.
+
 ### Values not stored
 
 These are calculated by the backend when needed:
@@ -161,6 +177,7 @@ These are calculated by the backend when needed:
 - 未實現報酬率
 - Sector rollups
 - Market totals
+- Market 上月/最高 figures (derived from `market_history` plus current values)
 - Deposit `total` (principal + interest)
 - Deposit status (`End` once end_date is today or past)
 - Deposit end month/year
@@ -361,6 +378,11 @@ SummaryView
   → backend groups trades by stock_id
   → backend calculates every stock row
   → backend calculates sector rollups and market totals
+  → backend upserts today's market_history row when at least one stock is
+    priced, backfilling synthetic month-end rows for fully elapsed months
+  → backend derives 上月 (latest history row in the previous calendar month)
+    and 最高 (maxima over all history rows plus the current values) for
+    未實現報酬率 and 未實現金額
   → frontend formats and displays the response
 ```
 

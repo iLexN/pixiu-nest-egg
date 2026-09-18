@@ -45,6 +45,8 @@ pub struct NamedParityRow {
 #[derive(Debug, Clone, Default)]
 pub struct ParityReport {
     pub rows: Vec<ParityRow>,
+    /// Market-level cached 上月/最高 cells versus the derived figures.
+    pub market_figures: Vec<NamedParityRow>,
     pub deposits: Vec<NamedParityRow>,
     pub dividends: Vec<NamedParityRow>,
     pub mpf: Vec<NamedParityRow>,
@@ -62,6 +64,10 @@ impl ParityReport {
             .filter(|row| !matches!(row.outcome, Outcome::Match | Outcome::SkippedNoData))
     }
 
+    pub fn market_figure_problems(&self) -> impl Iterator<Item = &NamedParityRow> {
+        Self::named_problems(&self.market_figures)
+    }
+
     pub fn deposit_problems(&self) -> impl Iterator<Item = &NamedParityRow> {
         Self::named_problems(&self.deposits)
     }
@@ -76,6 +82,7 @@ impl ParityReport {
 
     pub fn problem_count(&self) -> usize {
         self.problems().count()
+            + self.market_figure_problems().count()
             + self.deposit_problems().count()
             + self.dividend_problems().count()
             + self.mpf_problems().count()
@@ -227,6 +234,59 @@ async fn check_market(
             code: sheet.code.clone(),
             outcome,
         });
+    }
+
+    // The sheet's cached last-month/max cells versus the derived figures.
+    // 上月 compares loosely both ways: real records may legitimately drift
+    // from the sheet's stale cached rate once they supersede the seed. The
+    // 最高 marks are floors — beating them is the expected outcome, so only
+    // a shortfall beyond the loose tolerance counts as a difference.
+    let cached = &data.market(market).cached;
+    for (code, field, computed, sheet_value, floor) in [
+        (
+            "上月",
+            "last month",
+            summary.last_month.and_then(|figures| figures.percent),
+            cached.last_month_percent,
+            false,
+        ),
+        (
+            "最高報酬率",
+            "max Balance %",
+            summary.max.and_then(|figures| figures.percent),
+            cached.max_percent,
+            true,
+        ),
+        (
+            "最高金額",
+            "max net",
+            summary.max.map(|figures| figures.amount),
+            cached.max_amount,
+            true,
+        ),
+    ] {
+        let Some(sheet_value) = sheet_value else {
+            continue;
+        };
+        let computed_value = computed.unwrap_or(f64::NAN);
+        let equal = if floor {
+            floor_eq(computed_value, sheet_value)
+        } else {
+            loose_eq(computed_value, sheet_value)
+        };
+        named_row(
+            &mut report.market_figures,
+            format!("{} {code}", market.as_str()),
+            if equal {
+                Outcome::Match
+            } else {
+                Outcome::Difference {
+                    field,
+                    computed: computed_value,
+                    sheet: sheet_value,
+                }
+            },
+        );
     }
 
     Ok(())
@@ -438,6 +498,12 @@ const MPF_SEED_GAIN_TOLERANCE: f64 = 0.02;
 
 fn loose_eq(computed: f64, sheet: f64) -> bool {
     (computed - sheet).abs() <= MPF_SEED_GAIN_TOLERANCE * sheet.abs().max(1.0)
+}
+
+/// Seeded 最高 marks are floors: meeting or beating the sheet's mark is the
+/// expected outcome, so only a shortfall beyond the loose tolerance counts.
+fn floor_eq(computed: f64, sheet: f64) -> bool {
+    computed >= sheet - MPF_SEED_GAIN_TOLERANCE * sheet.abs().max(1.0)
 }
 
 fn mpf_row(report: &mut ParityReport, name: impl Into<String>, outcome: Outcome) {

@@ -80,12 +80,20 @@ export interface MarketTotals {
   real_total_return: number | null
 }
 
+/** A 未實現報酬率 + 未實現金額 pair for a market's last-month or max figures. */
+export interface MarketFigures {
+  percent: number | null
+  amount: number
+}
+
 export interface SummaryResponse {
   market: Market
   average_price_definition: string
   stocks: SummaryStock[]
   sectors: SectorRollup[]
   totals: MarketTotals
+  last_month: MarketFigures | null
+  max: MarketFigures | null
 }
 
 /** The stored frozen figures for one year; a null field means "no override". */

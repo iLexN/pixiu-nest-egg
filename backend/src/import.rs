@@ -67,13 +67,109 @@ impl ImportReport {
 }
 
 pub async fn import(pool: &SqlitePool, data: &WorkbookData) -> anyhow::Result<ImportReport> {
+    let hk = import_market(pool, &data.hk).await?;
+    let us = import_market(pool, &data.us).await?;
+    let deposits = import_deposits(pool, &data.deposits).await?;
+    let snapshots = import_year_snapshots(pool, &data.year_figures).await?;
+    let mpf = import_mpf(pool, data).await?;
+    seed_market_history(pool).await?;
+    seed_market_figures(pool, data).await?;
     Ok(ImportReport {
-        hk: import_market(pool, &data.hk).await?,
-        us: import_market(pool, &data.us).await?,
-        deposits: import_deposits(pool, &data.deposits).await?,
-        snapshots: import_year_snapshots(pool, &data.year_figures).await?,
-        mpf: import_mpf(pool, data).await?,
+        hk,
+        us,
+        deposits,
+        snapshots,
+        mpf,
     })
+}
+
+/// Seed `market_history` with one synthetic Dec-31 row per market per year
+/// that has both 成本 and 總市值, so 上月/最高 have real history from day
+/// one. `INSERT OR IGNORE` keeps a re-import from duplicating rows or
+/// overwriting a real record that happens to land on a year-end date.
+async fn seed_market_history(pool: &SqlitePool) -> anyhow::Result<()> {
+    sqlx::query(
+        "INSERT OR IGNORE INTO market_history \
+         (market, recorded_on, buy_cost_priced, market_value, synthetic) \
+         SELECT market, printf('%04d-12-31', year), cost, market_value, 1 \
+         FROM year_snapshots WHERE cost IS NOT NULL AND market_value IS NOT NULL",
+    )
+    .execute(pool)
+    .await?;
+    Ok(())
+}
+
+/// Seed each market's cached last-month/max cells. The `last month` cell
+/// holds a rate only, so the synthetic previous-month-end row reconstructs
+/// `(buy_cost_priced, market_value)` as `(cost, cost × (1 + rate))` with
+/// `cost` = the market's imported Σ BUY total — the rate reproduces the
+/// sheet exactly while the amount approximates last month's true figure,
+/// the same concession MPF's import makes. `max Balance %`/`max net` are
+/// lone maxima with no recoverable (cost, value) pair, so they live as
+/// `app_meta` marks that floor the derived 最高. Re-imports are safe: the
+/// upsert refreshes a synthetic seed on the same date but never overwrites
+/// a real record (the `WHERE synthetic = 1` guard), and the marks just take
+/// the sheet's latest values.
+async fn seed_market_figures(pool: &SqlitePool, data: &WorkbookData) -> anyhow::Result<()> {
+    let today = crate::routes::today();
+    let first_of_month = chrono::NaiveDate::from_ymd_opt(today.year(), today.month(), 1)
+        .ok_or_else(|| anyhow!("today {today} has no first of month"))?;
+    let prev_month_end = first_of_month - chrono::Days::new(1);
+    for market in [Market::Hk, Market::Us] {
+        let cached = &data.market(market).cached;
+        if let Some(rate) = cached.last_month_percent {
+            let mut cost: f64 = sqlx::query_scalar(
+                "SELECT COALESCE(SUM(t.total), 0.0) FROM trades t \
+                 JOIN stocks s ON s.id = t.stock_id \
+                 WHERE s.market = ? AND t.trade_type = 'BUY'",
+            )
+            .bind(market.as_str())
+            .fetch_one(pool)
+            .await?;
+            // The rate reproduces the sheet exactly whatever cost we assume,
+            // so shrink the assumed cost if the implied amount would exceed
+            // the sheet's own `max net` — the row stays consistent with both
+            // cached figures.
+            if rate > 0.0 && cost > 0.0 {
+                if let Some(max_amount) = cached.max_amount.filter(|m| *m > 0.0) {
+                    cost = cost.min(max_amount / rate);
+                }
+            }
+            // A rate at or below −100% — or a non-finite cell — would seed a
+            // worthless row, so skip it rather than store garbage.
+            let market_value = cost * (1.0 + rate);
+            if cost > 0.0 && market_value > 0.0 {
+                sqlx::query(
+                    "INSERT INTO market_history \
+                     (market, recorded_on, buy_cost_priced, market_value, synthetic) \
+                     VALUES (?, ?, ?, ?, 1) \
+                     ON CONFLICT (market, recorded_on) DO UPDATE SET \
+                     buy_cost_priced = excluded.buy_cost_priced, \
+                     market_value = excluded.market_value \
+                     WHERE market_history.synthetic = 1",
+                )
+                .bind(market.as_str())
+                .bind(prev_month_end.to_string())
+                .bind(cost)
+                .bind(market_value)
+                .execute(pool)
+                .await?;
+            }
+        }
+        crate::mpf::meta_put(
+            pool,
+            &crate::market_history::seed_max_percent_key(market),
+            cached.max_percent.map(|v| v.to_string()).as_deref(),
+        )
+        .await?;
+        crate::mpf::meta_put(
+            pool,
+            &crate::market_history::seed_max_amount_key(market),
+            cached.max_amount.map(|v| v.to_string()).as_deref(),
+        )
+        .await?;
+    }
+    Ok(())
 }
 
 /// MPF accounts are keyed by label. Each new account seeds one synthetic

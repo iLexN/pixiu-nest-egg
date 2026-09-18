@@ -159,7 +159,7 @@ pub fn present_account(
         last_month: mpf_last_month(&facts.history, today),
         max: mpf_max(
             &facts.history,
-            current,
+            Some(current),
             account.seed_max_rate,
             account.seed_max_gain,
         ),

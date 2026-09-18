@@ -34,7 +34,8 @@
       "Exec(curl)",
       "Exec(graft callers)",
       "Exec(unzip)",
-      "Exec(pkill)"
+      "Exec(pkill)",
+      "Exec(WEALTH_DB=/tmp/wealth-test-seed.db cargo run)"
     ]
   }
 }

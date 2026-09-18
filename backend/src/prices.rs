@@ -93,6 +93,15 @@ pub async fn apply(pool: &SqlitePool, upload: PriceUpload) -> Result<PriceReport
     }
     transaction.commit().await?;
 
+    // Record today's totals for every touched market: a bulk import can
+    // change both markets without any summary view following it (the CLI
+    // `import_prices` bin shares this path).
+    for market in [Market::Hk, Market::Us] {
+        if resolved.iter().any(|entry| entry.market == market) {
+            crate::routes::summary::build(pool, market).await?;
+        }
+    }
+
     let not_updated = hk
         .iter()
         .chain(us.iter())
@@ -125,17 +134,32 @@ mod tests {
     use super::*;
     use crate::db;
 
-    async fn add_stock(pool: &SqlitePool, market: &str, code: &str, ticker: Option<&str>) {
-        sqlx::query(
+    async fn add_stock(pool: &SqlitePool, market: &str, code: &str, ticker: Option<&str>) -> i64 {
+        sqlx::query_scalar(
             "INSERT INTO stocks (market, code, ticker, is_active, sort_order) \
-             VALUES (?, ?, ?, 1, 1)",
+             VALUES (?, ?, ?, 1, 1) RETURNING id",
         )
         .bind(market)
         .bind(code)
         .bind(ticker)
+        .fetch_one(pool)
+        .await
+        .expect("insert stock")
+    }
+
+    async fn add_buy(pool: &SqlitePool, stock_id: i64, shares: f64, total: f64) {
+        sqlx::query(
+            "INSERT INTO trades (stock_id, trade_type, trade_date, shares, unit_price, fee, \
+             total, input_mode, created_at, updated_at) \
+             VALUES (?, 'BUY', '2026-01-01', ?, ?, 0.0, ?, 'US_FEE', 'x', 'x')",
+        )
+        .bind(stock_id)
+        .bind(shares)
+        .bind(total / shares)
+        .bind(total)
         .execute(pool)
         .await
-        .expect("insert stock");
+        .expect("insert trade");
     }
 
     #[test]
@@ -181,5 +205,38 @@ mod tests {
         .expect("BRK.B row");
         assert_eq!(price, 514.95);
         assert!(stamped.is_some());
+    }
+
+    #[tokio::test]
+    async fn apply_records_history_for_every_updated_market() {
+        let pool = db::connect_memory().await.expect("memory db");
+        let hk_id = add_stock(&pool, "HK", "中國銀行", Some("3988")).await;
+        let us_id = add_stock(&pool, "US", "VOO", Some("VOO")).await;
+        add_buy(&pool, hk_id, 100.0, 500.0).await;
+        add_buy(&pool, us_id, 10.0, 5000.0).await;
+
+        let upload = parse(
+            r#"{"stocks": [
+                {"symbol": "3988.HK", "price": 6.0},
+                {"symbol": "VOO", "price": 700.0}
+            ]}"#,
+        )
+        .expect("parse");
+        apply(&pool, upload).await.expect("apply");
+
+        let rows: Vec<(String, f64, f64)> = sqlx::query_as(
+            "SELECT market, buy_cost_priced, market_value FROM market_history \
+             ORDER BY market",
+        )
+        .fetch_all(&pool)
+        .await
+        .expect("history");
+        assert_eq!(
+            rows,
+            vec![
+                ("HK".to_string(), 500.0, 600.0),
+                ("US".to_string(), 5000.0, 7000.0),
+            ]
+        );
     }
 }
