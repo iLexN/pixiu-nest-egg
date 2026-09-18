@@ -145,12 +145,36 @@ async fn main() -> anyhow::Result<ExitCode> {
         }
     }
 
+    let mut bonds_compared = 0usize;
+    for row in &report.bonds {
+        match &row.outcome {
+            Outcome::Match => bonds_compared += 1,
+            Outcome::SkippedNoData => {}
+            Outcome::Difference {
+                field,
+                computed,
+                sheet,
+            } => println!(
+                "DIFF {} {field}: computed {computed}, sheet {sheet}",
+                row.name
+            ),
+            Outcome::MissingSheetValue { field } => println!(
+                "DIFF {}: the sheet has no cached {field} to compare against",
+                row.name
+            ),
+            Outcome::MissingStock => println!(
+                "DIFF {}: listed on the sheet but not in the database",
+                row.name
+            ),
+        }
+    }
+
     let problems = report.problem_count();
     println!(
         "{compared} stock(s) match, {market_figures_compared} market figure(s) match, \
          {deposits_compared} deposit figure(s) match, \
          {dividends_compared} dividend figure(s) match, {mpf_compared} MPF figure(s) match, \
-         {problems} difference(s)"
+         {bonds_compared} bond figure(s) match, {problems} difference(s)"
     );
     Ok(if problems == 0 {
         ExitCode::SUCCESS

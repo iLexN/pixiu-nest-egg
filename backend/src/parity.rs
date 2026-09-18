@@ -50,6 +50,7 @@ pub struct ParityReport {
     pub deposits: Vec<NamedParityRow>,
     pub dividends: Vec<NamedParityRow>,
     pub mpf: Vec<NamedParityRow>,
+    pub bonds: Vec<NamedParityRow>,
 }
 
 impl ParityReport {
@@ -80,12 +81,17 @@ impl ParityReport {
         Self::named_problems(&self.mpf)
     }
 
+    pub fn bond_problems(&self) -> impl Iterator<Item = &NamedParityRow> {
+        Self::named_problems(&self.bonds)
+    }
+
     pub fn problem_count(&self) -> usize {
         self.problems().count()
             + self.market_figure_problems().count()
             + self.deposit_problems().count()
             + self.dividend_problems().count()
             + self.mpf_problems().count()
+            + self.bond_problems().count()
     }
 
     pub fn is_clean(&self) -> bool {
@@ -101,6 +107,7 @@ pub async fn check(pool: &SqlitePool, data: &WorkbookData) -> anyhow::Result<Par
     check_deposits(pool, data, &mut report).await?;
     check_dividends(pool, data, &mut report).await?;
     check_mpf(pool, data, &mut report).await?;
+    check_bonds(pool, data, &mut report).await?;
     Ok(report)
 }
 
@@ -731,6 +738,105 @@ async fn check_dividends(
             );
         } else {
             named_row(&mut report.dividends, name, Outcome::Match);
+        }
+    }
+    Ok(())
+}
+
+fn bond_row(report: &mut ParityReport, name: impl Into<String>, outcome: Outcome) {
+    named_row(&mut report.bonds, name, outcome);
+}
+
+/// Bond figures against the 債券 sheet's cached values: the `Total` cell
+/// against Σ active principal, and each coupon's derived expected amount
+/// against the cached interest column. 待定 cells carry no cached figure and
+/// are skipped. Status is date-derived, so a bond that matured since the
+/// workbook last recalculated legitimately shows a difference.
+async fn check_bonds(
+    pool: &SqlitePool,
+    data: &WorkbookData,
+    report: &mut ParityReport,
+) -> anyhow::Result<()> {
+    let bonds = crate::routes::bonds::load_all_bonds(pool)
+        .await
+        .map_err(|err| anyhow!("loading bonds failed: {err}"))?;
+
+    let active_principal: f64 = bonds
+        .iter()
+        .filter(|bond| bond.status == crate::models::BondStatus::Active)
+        .map(|bond| bond.principal)
+        .sum();
+    match data.bond_cached.total_principal {
+        Some(sheet) if approx_eq(active_principal, sheet) => {
+            bond_row(report, "債券 total principal", Outcome::Match)
+        }
+        Some(sheet) => bond_row(
+            report,
+            "債券 total principal",
+            Outcome::Difference {
+                field: "principal",
+                computed: active_principal,
+                sheet,
+            },
+        ),
+        None => bond_row(
+            report,
+            "債券 total principal",
+            Outcome::MissingSheetValue { field: "principal" },
+        ),
+    }
+
+    for sheet_bond in &data.bonds {
+        let computed_bond =
+            bonds
+                .iter()
+                .find(|bond| match (&bond.issue_no, &sheet_bond.issue_no) {
+                    (Some(stored), Some(sheet)) => stored == sheet,
+                    _ => {
+                        bond.label == sheet_bond.label
+                            && approx_eq(bond.principal, sheet_bond.principal)
+                            && bond.maturity_date == sheet_bond.maturity_date
+                    }
+                });
+        let Some(computed_bond) = computed_bond else {
+            bond_row(
+                report,
+                format!("債券 {}", sheet_bond.label),
+                Outcome::MissingStock,
+            );
+            continue;
+        };
+        let coupons = crate::routes::bonds::load_bond_coupons(pool, computed_bond.id)
+            .await
+            .map_err(|err| anyhow!("loading coupons of bond {} failed: {err}", computed_bond.id))?;
+        for sheet_coupon in &sheet_bond.coupons {
+            let Some(sheet_interest) = sheet_coupon.interest else {
+                continue; // 待定 rows carry no cached figure to compare
+            };
+            let name = format!("債券 {} {}", sheet_bond.label, sheet_coupon.pay_date);
+            // The sheet's interest column is what the coupon paid/pays — the
+            // effective amount (received else expected), like the dividend
+            // check's COALESCE. The cached cell can disagree with 每1萬利息
+            // (a hand-entered E wins), so comparing expected alone would flag
+            // the sheet's own inconsistency as an app difference.
+            let effective = coupons
+                .iter()
+                .find(|coupon| coupon.pay_date == sheet_coupon.pay_date)
+                .and_then(|coupon| coupon.received_amount.or(coupon.expected));
+            match effective {
+                Some(effective) if approx_eq(effective, sheet_interest) => {
+                    bond_row(report, name, Outcome::Match)
+                }
+                effective => bond_row(
+                    report,
+                    name,
+                    Outcome::Difference {
+                        field: "interest",
+                        computed: effective.unwrap_or(f64::NAN),
+                        sheet: sheet_interest,
+                    },
+                ),
+            }
         }
     }
     Ok(())

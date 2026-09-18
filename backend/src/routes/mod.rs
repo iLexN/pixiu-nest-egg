@@ -1,3 +1,4 @@
+pub mod bonds;
 pub mod deposits;
 pub mod dividends;
 pub mod mpf;
@@ -13,12 +14,13 @@ use sqlx::sqlite::SqliteRow;
 use sqlx::{Row, SqlitePool};
 
 use crate::calc::{
-    deposit_active, deposit_total, dividend_amount, dividend_variance, unit_price_incl_fee,
-    yield_on_cost, yield_on_price,
+    bond_active, coupon_expected, coupon_status, coupon_variance, deposit_active, deposit_total,
+    dividend_amount, dividend_variance, unit_price_incl_fee, yield_on_cost, yield_on_price,
 };
 use crate::error::ApiError;
 use crate::models::{
-    Deposit, DepositStatus, Dividend, DividendStatus, InputMode, Market, Stock, Trade, TradeType,
+    Bond, BondCoupon, BondStatus, Deposit, DepositStatus, Dividend, DividendStatus, InputMode,
+    Market, Stock, Trade, TradeType,
 };
 
 #[derive(Clone)]
@@ -52,6 +54,17 @@ pub fn api_router(state: AppState) -> Router {
         .route(
             "/dividends/{id}",
             patch(dividends::update).delete(dividends::remove),
+        )
+        .route("/bonds", get(bonds::list).post(bonds::create))
+        .route("/bonds/summary", get(bonds::summary))
+        .route("/bonds/{id}", patch(bonds::update).delete(bonds::remove))
+        .route(
+            "/coupons",
+            get(bonds::list_coupons).post(bonds::create_coupon),
+        )
+        .route(
+            "/coupons/{id}",
+            patch(bonds::update_coupon).delete(bonds::remove_coupon),
         )
         .route("/mpf", get(mpf::overview))
         .route("/mpf/accounts", post(mpf::create))
@@ -203,5 +216,58 @@ pub fn row_to_deposit(row: &SqliteRow, today: chrono::NaiveDate) -> Result<Depos
         },
         end_year: parsed.year(),
         end_month: parsed.month(),
+    })
+}
+
+/// `next_pay_date` comes from a scalar subquery on non-received coupons.
+pub const BOND_SELECT: &str = "SELECT b.id, b.label, b.issue_no, b.principal, b.maturity_date, \
+     b.note, b.sort_order, (SELECT MIN(c.pay_date) FROM bond_coupons c \
+     WHERE c.bond_id = b.id AND c.received_amount IS NULL) AS next_pay_date FROM bonds b";
+
+pub fn row_to_bond(row: &SqliteRow, today: chrono::NaiveDate) -> Result<Bond, ApiError> {
+    let maturity_date: String = row.try_get("maturity_date")?;
+    let parsed = chrono::NaiveDate::parse_from_str(&maturity_date, "%Y-%m-%d").map_err(|_| {
+        ApiError::Conflict(format!("stored maturity_date {maturity_date} is not valid"))
+    })?;
+    Ok(Bond {
+        id: row.try_get("id")?,
+        label: row.try_get("label")?,
+        issue_no: row.try_get("issue_no")?,
+        principal: row.try_get("principal")?,
+        maturity_date,
+        note: row.try_get("note")?,
+        sort_order: row.try_get("sort_order")?,
+        status: if bond_active(parsed, today) {
+            BondStatus::Active
+        } else {
+            BondStatus::Matured
+        },
+        next_pay_date: row.try_get("next_pay_date")?,
+    })
+}
+
+/// `principal` is joined from the parent bond so `expected` can be derived.
+pub const COUPON_SELECT: &str = "SELECT c.id, c.bond_id, c.pay_date, c.fixing_date, \
+     c.annual_rate, c.per_10k, c.received_amount, c.note, b.principal \
+     FROM bond_coupons c JOIN bonds b ON b.id = c.bond_id";
+
+pub fn row_to_coupon(row: &SqliteRow) -> Result<BondCoupon, ApiError> {
+    let annual_rate: Option<f64> = row.try_get("annual_rate")?;
+    let per_10k: Option<f64> = row.try_get("per_10k")?;
+    let received_amount: Option<f64> = row.try_get("received_amount")?;
+    let principal: f64 = row.try_get("principal")?;
+    let expected = coupon_expected(per_10k, principal);
+    Ok(BondCoupon {
+        id: row.try_get("id")?,
+        bond_id: row.try_get("bond_id")?,
+        pay_date: row.try_get("pay_date")?,
+        fixing_date: row.try_get("fixing_date")?,
+        annual_rate,
+        per_10k,
+        received_amount,
+        note: row.try_get("note")?,
+        status: coupon_status(received_amount, annual_rate, per_10k),
+        expected,
+        variance: coupon_variance(received_amount, expected),
     })
 }

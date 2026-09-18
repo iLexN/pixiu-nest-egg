@@ -18,6 +18,7 @@ pub const US_TRADE_SHEET: &str = "美股Trade";
 pub const US_SUMMARY_SHEET: &str = "美股";
 pub const DEPOSIT_SHEET: &str = "定期";
 pub const DEPOSIT_INFO_SHEET: &str = "定期Info";
+pub const BOND_SHEET: &str = "債券";
 pub const YEAR_IN_REVIEW_SHEET: &str = "YearInReview";
 pub const MPF_SHEET: &str = "MPF";
 
@@ -182,6 +183,53 @@ pub struct SheetMpfAccount {
     pub source_row: usize,
 }
 
+/// One row of the 債券 sheet's registry table (label / 發行編號 / principal /
+/// `end` maturity). The sheet only ever holds active bonds; ended ones are
+/// deleted there, so matured history accumulates in the app after import.
+#[derive(Debug, Clone)]
+pub struct SheetBond {
+    /// The sheet's label column, e.g. `silver bond`.
+    pub label: String,
+    /// 發行編號, e.g. `03GB2710R`.
+    pub issue_no: Option<String>,
+    pub principal: f64,
+    /// The sheet's `end` column.
+    pub maturity_date: String,
+    /// 1-based position within the table, stored as sort_order.
+    pub sort_order: i64,
+    /// 1-based row number in the source sheet, for error messages.
+    pub source_row: usize,
+    /// The bond's coupon schedule block.
+    pub coupons: Vec<SheetBondCoupon>,
+}
+
+/// One row of a bond's coupon block: 付息日 / 利息釐定日 / 年息率 / 每1萬利息.
+/// `annual_rate` and `per_10k` stay None for 待定 cells; `interest` is the
+/// sheet's cached interest column (per_10k × principal ÷ 10000), kept for
+/// receipt import and the parity check.
+#[derive(Debug, Clone)]
+pub struct SheetBondCoupon {
+    /// 付息日.
+    pub pay_date: String,
+    /// 利息釐定日.
+    pub fixing_date: Option<String>,
+    /// 年息率 as a fraction; None when the cell holds 待定.
+    pub annual_rate: Option<f64>,
+    /// 每1萬港元債券利息; None when the cell holds 待定.
+    pub per_10k: Option<f64>,
+    /// The sheet's cached interest value for this coupon.
+    pub interest: Option<f64>,
+    /// 1-based row number in the source sheet, for error messages.
+    pub source_row: usize,
+}
+
+/// The workbook's cached 債券 aggregate, for the parity check.
+#[derive(Debug, Clone, Default)]
+pub struct BondSheetCached {
+    /// 債券!B1: Σ principal over the registry rows.
+    pub total_principal: Option<f64>,
+}
+
 /// The workbook's cached MPF top block, for the parity check and the
 /// portfolio-level seeded maxima that per-account data cannot rebuild.
 #[derive(Debug, Clone, Default)]
@@ -239,6 +287,9 @@ pub struct WorkbookData {
     /// The MPF sheet's account table.
     pub mpf: Vec<SheetMpfAccount>,
     pub mpf_cached: MpfSheetCached,
+    /// The 債券 sheet's bond registry, each with its coupon schedule.
+    pub bonds: Vec<SheetBond>,
+    pub bond_cached: BondSheetCached,
 }
 
 impl WorkbookData {
@@ -276,6 +327,11 @@ pub fn read(path: &Path) -> anyhow::Result<WorkbookData> {
         .worksheet_range(MPF_SHEET)
         .ok()
         .map(|range| range.rows().map(<[Data]>::to_vec).collect());
+    // 債券 too: a workbook without it just seeds nothing.
+    let bond: Option<Rows> = workbook
+        .worksheet_range(BOND_SHEET)
+        .ok()
+        .map(|range| range.rows().map(<[Data]>::to_vec).collect());
     // Formula text is a second pass; formats without formulas error, which is
     // fine — the note just stays empty then.
     let hk_formulas = workbook.worksheet_formula(HK_TRADE_SHEET).ok();
@@ -311,6 +367,12 @@ pub fn read(path: &Path) -> anyhow::Result<WorkbookData> {
         .concat(),
         mpf: mpf.as_ref().map(parse_mpf).unwrap_or_default(),
         mpf_cached: mpf.as_ref().map(parse_mpf_cached).unwrap_or_default(),
+        bonds: bond
+            .as_ref()
+            .map(parse_bonds)
+            .transpose()?
+            .unwrap_or_default(),
+        bond_cached: bond.as_ref().map(parse_bond_cached).unwrap_or_default(),
     })
 }
 
@@ -764,6 +826,141 @@ fn parse_mpf_cached(rows: &Rows) -> MpfSheetCached {
         max_rate,
         max_gain,
     }
+}
+
+// 債券 sheet: a registry table whose maturity column is headed `end` (label /
+// 發行編號 / principal / end), then one coupon block per bond — a label line
+// carrying the 發行編號, the 付息日/利息釐定日/年息率/每1萬港元債券利息 header,
+// and coupon rows where 待定 cells read as absent. The only sample so far is
+// a single bond; multi-bond blocks repeat the same shape.
+fn parse_bonds(rows: &Rows) -> anyhow::Result<Vec<SheetBond>> {
+    // The `end` header cell marks the maturity column; label/issue/principal
+    // sit in the three columns before it.
+    let Some((end_row, end_col)) = rows.iter().enumerate().find_map(|(index, row)| {
+        row.iter()
+            .position(|c| matches!(c, Data::String(v) if v.trim() == "end"))
+            .map(|col| (index, col))
+    }) else {
+        return Err(anyhow!("{BOND_SHEET} sheet has no end column header"));
+    };
+    if end_col < 3 {
+        return Err(anyhow!(
+            "{BOND_SHEET} end column at index {end_col} leaves no room for label/issue/principal"
+        ));
+    }
+    let (label_col, issue_col, principal_col) = (end_col - 3, end_col - 2, end_col - 1);
+
+    let mut bonds = Vec::new();
+    for (offset, row) in rows.iter().enumerate().skip(end_row + 1) {
+        let (label, principal, maturity_date) = (
+            text(row, label_col),
+            number(row, principal_col),
+            serial_or_date(row, end_col),
+        );
+        let (Some(label), Some(principal), Some(maturity_date)) = (label, principal, maturity_date)
+        else {
+            break; // a blank row ends the registry table
+        };
+        bonds.push(SheetBond {
+            label,
+            issue_no: text(row, issue_col),
+            principal,
+            maturity_date,
+            sort_order: bonds.len() as i64 + 1,
+            source_row: offset + 1,
+            coupons: Vec::new(),
+        });
+    }
+
+    // Coupon blocks: the 付息日/年息率 header, with the bond's label line in
+    // the row directly above it.
+    let block_headers: Vec<usize> = rows
+        .iter()
+        .enumerate()
+        .filter_map(|(index, row)| {
+            let has = |name: &str| {
+                row.iter()
+                    .any(|c| matches!(c, Data::String(v) if v.trim() == name))
+            };
+            (has("付息日") && has("年息率")).then_some(index)
+        })
+        .collect();
+
+    for header in block_headers {
+        let find = |name: &str| -> Option<usize> {
+            rows[header]
+                .iter()
+                .position(|c| matches!(c, Data::String(v) if v.trim() == name))
+        };
+        let Some(pay_col) = find("付息日") else {
+            continue;
+        };
+        let fixing_col = find("利息釐定日");
+        let rate_col = find("年息率");
+        let per_10k_col = find("每1萬港元債券利息");
+        // The interest column sits right after 每1萬利息 and has no header.
+        let interest_col = per_10k_col.map(|col| col + 1);
+
+        let mut coupons = Vec::new();
+        for (offset, row) in rows.iter().enumerate().skip(header + 1) {
+            let Some(pay_date) = serial_or_date(row, pay_col) else {
+                break; // a blank row ends the block
+            };
+            coupons.push(SheetBondCoupon {
+                pay_date,
+                fixing_date: fixing_col.and_then(|col| serial_or_date(row, col)),
+                annual_rate: rate_col.and_then(|col| number(row, col)),
+                per_10k: per_10k_col.and_then(|col| number(row, col)),
+                interest: interest_col.and_then(|col| number(row, col)),
+                source_row: offset + 1,
+            });
+        }
+        if coupons.is_empty() {
+            continue;
+        }
+
+        // Attach the block to its bond via the 發行編號 in the label row
+        // above the header; a single-bond sheet needs no match.
+        let issue_ref = rows.get(header.wrapping_sub(1)).and_then(|label_row| {
+            label_row.iter().find_map(|c| match c {
+                Data::String(v) => v
+                    .split("發行編號")
+                    .nth(1)
+                    .map(|rest| rest.trim().trim_end_matches(')').trim().to_string())
+                    .filter(|issue| !issue.is_empty()),
+                _ => None,
+            })
+        });
+        let index = issue_ref
+            .as_deref()
+            .and_then(|issue| {
+                bonds
+                    .iter()
+                    .position(|bond| bond.issue_no.as_deref() == Some(issue))
+            })
+            .or((bonds.len() == 1).then_some(0));
+        match index {
+            Some(index) => bonds[index].coupons = coupons,
+            None => {
+                return Err(anyhow!(
+                    "{BOND_SHEET} coupon block at row {} matches no bond (發行編號 {:?})",
+                    header + 1,
+                    issue_ref
+                ))
+            }
+        }
+    }
+    Ok(bonds)
+}
+
+/// The 債券 sheet's cached `Total` cell (B1): Σ principal over the registry.
+fn parse_bond_cached(rows: &Rows) -> BondSheetCached {
+    let total_principal = rows.first().and_then(|row| {
+        (text(row, 0).as_deref() == Some("Total"))
+            .then(|| number(row, 1))
+            .flatten()
+    });
+    BondSheetCached { total_principal }
 }
 
 /// A market sheet's cached last-month/max cells: `label → number` pairs like

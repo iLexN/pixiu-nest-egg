@@ -8,9 +8,18 @@ import DepositsView from './views/DepositsView.vue'
 import DepositHistoryView from './views/DepositHistoryView.vue'
 import DividendsView from './views/DividendsView.vue'
 import MpfView from './views/MpfView.vue'
+import BondsView from './views/BondsView.vue'
 
-type Tab = 'trades' | 'summary' | 'stocks' | 'dividends' | 'deposits' | 'depositHistory' | 'mpf'
-type Group = 'stock' | 'deposit' | 'mpf'
+type Tab =
+  | 'trades'
+  | 'summary'
+  | 'stocks'
+  | 'dividends'
+  | 'deposits'
+  | 'depositHistory'
+  | 'mpf'
+  | 'bonds'
+type Group = 'stock' | 'deposit' | 'mpf' | 'bond'
 
 const NAV: { id: Group; label: string; tabs: { id: Tab; label: string }[] }[] = [
   {
@@ -35,6 +44,11 @@ const NAV: { id: Group; label: string; tabs: { id: Tab; label: string }[] }[] = 
     id: 'mpf',
     label: 'MPF',
     tabs: [{ id: 'mpf', label: '總覽' }],
+  },
+  {
+    id: 'bond',
+    label: '債券',
+    tabs: [{ id: 'bonds', label: '總覽' }],
   },
 ]
 
@@ -86,6 +100,7 @@ function selectGroup(g: (typeof NAV)[number]) {
     <DividendsView v-else-if="tab === 'dividends'" :market="market" />
     <DepositsView v-else-if="tab === 'deposits'" />
     <MpfView v-else-if="tab === 'mpf'" />
+    <BondsView v-else-if="tab === 'bonds'" />
     <DepositHistoryView v-else />
   </main>
 </template>

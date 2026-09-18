@@ -35,7 +35,8 @@
       "Exec(graft callers)",
       "Exec(unzip)",
       "Exec(pkill)",
-      "Exec(WEALTH_DB=/tmp/wealth-test-seed.db cargo run)"
+      "Exec(WEALTH_DB=/tmp/wealth-test-seed.db cargo run)",
+      "Exec(xargs grep)"
     ]
   }
 }

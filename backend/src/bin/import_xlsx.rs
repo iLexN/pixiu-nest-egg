@@ -61,6 +61,15 @@ async fn main() -> anyhow::Result<()> {
         report.mpf.accounts_created,
         report.mpf.accounts_skipped,
     );
+    println!(
+        "債券: {} bond row(s) in the sheet -> {} imported, {} skipped; 付息 {} row(s) -> {} imported, {} skipped",
+        data.bonds.len(),
+        report.bonds.bonds_imported,
+        report.bonds.bonds_skipped,
+        data.bonds.iter().map(|bond| bond.coupons.len()).sum::<usize>(),
+        report.bonds.coupons_imported,
+        report.bonds.coupons_skipped,
+    );
 
     pool.close().await;
     Ok(())

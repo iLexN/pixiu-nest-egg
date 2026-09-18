@@ -340,6 +340,85 @@ export interface DividendFilters {
   order?: 'asc' | 'desc'
 }
 
+export type BondStatus = 'ACTIVE' | 'MATURED'
+export type CouponStatus = 'PENDING_FIX' | 'PENDING' | 'RECEIVED'
+
+export interface Bond {
+  id: number
+  label: string
+  /** 發行編號, e.g. 03GB2710R */
+  issue_no: string | null
+  principal: number
+  maturity_date: string
+  note: string | null
+  sort_order: number
+  status: BondStatus
+  next_pay_date: string | null
+}
+
+export interface NewBond {
+  label: string
+  issue_no?: string | null
+  principal: number
+  maturity_date: string
+  note?: string | null
+}
+
+export interface BondCoupon {
+  id: number
+  bond_id: number
+  /** 付息日 */
+  pay_date: string
+  /** 利息釐定日 */
+  fixing_date: string | null
+  /** 年息率; null = 待定 */
+  annual_rate: number | null
+  /** 每1萬港元債券利息; null = 待定 */
+  per_10k: number | null
+  received_amount: number | null
+  note: string | null
+  status: CouponStatus
+  /** per_10k × principal ÷ 10000 */
+  expected: number | null
+  variance: number | null
+}
+
+export interface NewBondCoupon {
+  bond_id: number
+  pay_date: string
+  fixing_date?: string | null
+  annual_rate?: number | null
+  per_10k?: number | null
+  received_amount?: number | null
+  note?: string | null
+}
+
+export interface BondCouponPatch {
+  bond_id?: number
+  pay_date?: string
+  fixing_date?: string | null
+  annual_rate?: number | null
+  per_10k?: number | null
+  received_amount?: number | null
+  note?: string | null
+}
+
+export interface BondWithCoupons extends Bond {
+  coupons: BondCoupon[]
+}
+
+export interface UpcomingCoupon extends BondCoupon {
+  bond_label: string
+}
+
+export interface BondSummary {
+  today: string
+  totals: { active_principal: number }
+  active: BondWithCoupons[]
+  matured: BondWithCoupons[]
+  upcoming_coupons: UpcomingCoupon[]
+}
+
 /** A rate + net gain pair; `rate` is null when contributions are zero. */
 export interface MpfFigures {
   rate: number | null
@@ -544,6 +623,33 @@ export const api = {
   },
   dividendSummary(market: Market): Promise<DividendSummary> {
     return request(`/dividends/summary${queryString({ market })}`)
+  },
+  listBonds(status?: 'active' | 'matured'): Promise<Bond[]> {
+    return request(`/bonds${queryString({ status })}`)
+  },
+  createBond(bond: NewBond): Promise<Bond> {
+    return request('/bonds', { method: 'POST', body: JSON.stringify(bond) })
+  },
+  updateBond(id: number, patch: Partial<NewBond>): Promise<Bond> {
+    return request(`/bonds/${id}`, { method: 'PATCH', body: JSON.stringify(patch) })
+  },
+  deleteBond(id: number): Promise<void> {
+    return request(`/bonds/${id}`, { method: 'DELETE' })
+  },
+  bondSummary(): Promise<BondSummary> {
+    return request('/bonds/summary')
+  },
+  listCoupons(bondId?: number): Promise<BondCoupon[]> {
+    return request(`/coupons${queryString({ bond_id: bondId })}`)
+  },
+  createCoupon(coupon: NewBondCoupon): Promise<BondCoupon> {
+    return request('/coupons', { method: 'POST', body: JSON.stringify(coupon) })
+  },
+  updateCoupon(id: number, patch: BondCouponPatch): Promise<BondCoupon> {
+    return request(`/coupons/${id}`, { method: 'PATCH', body: JSON.stringify(patch) })
+  },
+  deleteCoupon(id: number): Promise<void> {
+    return request(`/coupons/${id}`, { method: 'DELETE' })
   },
   mpfOverview(): Promise<MpfOverview> {
     return request('/mpf')

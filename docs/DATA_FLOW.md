@@ -164,6 +164,39 @@ One row per market per day a summary is computed — `UNIQUE(market, recorded_on
 
 When a summary is computed and whole calendar months passed with no rows, the build backfills a synthetic month-end row per empty month carrying the last-recorded values — the values that actually stood during those months. `import_xlsx` also seeds a synthetic `YYYY-12-31` row per market per `year_snapshots` year that has both 成本 and 總市值, so 最高 has real history from day one, plus one synthetic previous-month-end row per market reconstructed from the sheet's cached `last month` rate and the market's Σ BUY total (the rate matches the sheet exactly; the amount approximates). A market with no priced stock records nothing.
 
+### `bonds`
+
+One row per 債券 (from the `債券` sheet's registry table). The sheet only ever lists active bonds — it deletes them on maturity — so matured rows survive here as history the workbook no longer keeps.
+
+| Column | Meaning |
+|---|---|
+| `id` | Internal bond ID |
+| `label` | The sheet's label, e.g. `silver bond` |
+| `issue_no` | 發行編號, e.g. `03GB2710R` — the dedupe key on import |
+| `principal` | Face value, e.g. 50000 |
+| `maturity_date` | `YYYY-MM-DD` text date (the sheet's `end` column) |
+| `note` | Optional free-text note |
+| `sort_order` | Workbook row order; new entries append |
+| `created_at`, `updated_at` | Audit timestamps |
+
+Deleting a bond cascades to its `bond_coupons` rows.
+
+### `bond_coupons`
+
+One row per coupon date per bond (from the bond's 付息日 block in the `債券` sheet). `annual_rate`/`per_10k` stay NULL while the sheet shows 待定; `received_amount` records the actual amount paid.
+
+| Column | Meaning |
+|---|---|
+| `id` | Internal coupon ID |
+| `bond_id` | Links to `bonds.id` |
+| `pay_date` | 付息日, `YYYY-MM-DD` text date |
+| `fixing_date` | 利息釐定日, optional |
+| `annual_rate` | 年息率 as a fraction (0.04 = 4%); NULL = 待定 |
+| `per_10k` | 每1萬港元債券利息; NULL = 待定 |
+| `received_amount` | 實收利息; empty while unreceived |
+| `note` | Optional free-text note |
+| `created_at`, `updated_at` | Audit timestamps |
+
 ### Values not stored
 
 These are calculated by the backend when needed:
@@ -193,6 +226,12 @@ These are calculated by the backend when needed:
 - MPF `last month` figures (the latest `mpf_history` row in the previous calendar month)
 - MPF `max` rate and `max` gain, each independently the largest of the seed, every history row, and the current values
 - MPF portfolio totals/last-month/max, via the as-of merge described below
+- Bond status (`matured` once maturity_date is today or past)
+- Bond `next_pay_date` (earliest unreceived coupon pay date)
+- Coupon expected amount = `per_10k × principal ÷ 10000`
+- Coupon status (`PENDING_FIX` while rate/per_10k are unset, `PENDING` once fixed, `RECEIVED` once `received_amount` is set)
+- Coupon variance = `received_amount − expected`
+- Active principal total and the upcoming unpaid coupon list
 
 This avoids stale copied totals.
 
@@ -587,6 +626,43 @@ The as-of merge: for every recorded history date (plus last month-end and today)
 
 The 備註 block saves free text via `PATCH /api/mpf/note` into `app_meta`; clearing it removes the entry.
 
+## Load the 債券 view
+
+```text
+BondsView (債券 → 總覽)
+  → GET /api/bonds/summary
+      → Σ active principal, active bonds with their coupon schedules,
+        matured bonds for history, and the unpaid coupons ordered by pay date
+```
+
+## Add or edit a bond or coupon
+
+```text
+新增債券 / 編輯 in a bond header's ⋯ menu
+  → POST /api/bonds or PATCH /api/bonds/:id
+  → validate label, principal > 0, valid maturity date
+
+新增付息 / 編輯 in a coupon row's ⋯ menu
+  → POST /api/coupons or PATCH /api/coupons/:id
+  → validate pay_date and non-negative amounts
+
+刪除 → DELETE /api/bonds/:id (cascades its coupons) or /api/coupons/:id
+```
+
+## Fix a coupon's rate or mark it received
+
+```text
+釐定 on a 待定 row
+  → PATCH /api/coupons/:id { fixing_date, annual_rate, per_10k }
+  → status becomes PENDING; the expected amount now shows
+
+收訖 on a pending row
+  → PATCH /api/coupons/:id { received_amount }
+  → status becomes RECEIVED; variance = received − expected shows
+```
+
+Rate fields are entered as a percent (4); the API stores the fraction. Clearing `received_amount` flips the coupon back to pending. A matured bond's coupons stay editable — the receipt history remains completable after maturity.
+
 ## Import workbook data
 
 ```text
@@ -604,11 +680,14 @@ The importer reads:
 - `美股`
 - `定期Info` (表_定期List) and `定期` (cached aggregates for parity)
 - `MPF` — the account table under the 總供款額/帳戶結存 headers; the fund-details table below it and the remark row are ignored
+- `債券` — the registry table under the `end` header (label / 發行編號 / principal / maturity), then each bond's coupon block under its 發行編號 label line: 付息日 / 利息釐定日 / 年息率 / 每1萬利息 / cached 利息; `待定` cells import as NULL
 - The market sheets' year blocks (B year, C net invested, F 成本, H 總市值) and `YearInReview`'s 股票 rows — seeded into `year_snapshots` for years before the current one; the current year stays live
 
 For each dividend row the importer stores J (stock), K (pay date, Excel serial dates accepted), M (派息 amount, cached value), and O (股數 snapshot). The remaining snapshots are recovered from the cached rates the same way the sheet computed them — `buy_cost = M ÷ L`, `received_price = M ÷ (N × O)` — falling back to trade-derived snapshots when a rate is absent. The M formula text, when present, is kept in `note`. Rows with an N rate, or a pay date already past, import as received; future rows without it import as pending estimates.
 
-The import is idempotent. A second run skips trades already stored with the same stock, date, type, shares, and total, deposits already stored with the same label, end date, principal, and interest, and dividends already stored with the same stock, pay date, and amount. Year snapshots merge at field level: a stored value — seeded or edited — is never overwritten, while empty fields on an existing row are filled from the workbook. MPF accounts are keyed by label: a second run skips them entirely.
+The import is idempotent. A second run skips trades already stored with the same stock, date, type, shares, and total, deposits already stored with the same label, end date, principal, and interest, dividends already stored with the same stock, pay date, and amount, bonds already stored with the same 發行編號 (or the same label/principal/maturity when the sheet has none), and coupons already stored with the same bond and pay date. Year snapshots merge at field level: a stored value — seeded or edited — is never overwritten, while empty fields on an existing row are filled from the workbook. MPF accounts are keyed by label: a second run skips them entirely.
+
+A bond coupon whose pay date is already past imports as received with the sheet's cached interest value as `received_amount`; future coupons stay unreceived — the same heuristic the dividend import uses. The sheet deletes matured bonds outright, so nothing is ever un-imported: history the app keeps simply stops appearing in later imports.
 
 Each new MPF account also seeds one synthetic `mpf_history` row at last month-end. With exactly two accounts, the per-account last-month rates plus the portfolio's cached last-month rate+gain pin down the actual month-end contributions exactly, and the seeded balance is `contributions × (1 + rate)`; with any other account count the seed uses the current contributions, so the rate stays exact while the net gain approximates. The sheet's per-account max rate seeds `seed_max_rate`, and a reconstructed `rate × contributions` seeds `seed_max_gain`. The portfolio-level `max`/`last month` cells go to `app_meta` as floors, because per-account history cannot rebuild them.
 
@@ -663,9 +742,13 @@ cargo run -p wealth-backend --bin check_parity -- "財富分析報告.xlsx"
     buy/now/回報率/淨收益 strictly against the MPF sheet's cached cells,
     and the seeded last-month/max figures with a loose tolerance, since
     they reconstruct values the sheet stored only as rates
+  → sums active bond principal and compares it to 債券!B1, then each
+    coupon's effective amount (received else per_10k-derived expected)
+    against the sheet's cached interest cell; 待定 rows carry no cached
+    figure and are skipped
 ```
 
-This verifies that the database reproduces the spreadsheet's trade-derived figures, deposit rollups, dividend totals, and MPF figures. Deposit parity is point-in-time: the cached values reflect the workbook's last recalculation, so a deposit that matures after that point shows as a difference. MPF parity is the same: once the app is edited after import, its current figures legitimately diverge from the frozen sheet.
+This verifies that the database reproduces the spreadsheet's trade-derived figures, deposit rollups, dividend totals, MPF figures, and bond figures. Deposit parity is point-in-time: the cached values reflect the workbook's last recalculation, so a deposit that matures after that point shows as a difference. MPF parity is the same: once the app is edited after import, its current figures legitimately diverge from the frozen sheet. Bond parity too: the sheet's `Total` cell only covers bonds it still lists, so a bond that matured since the workbook last recalculated — or an already-received coupon recorded with a different amount — shows as an informational difference.
 
 ## Frontend vs backend responsibilities
 

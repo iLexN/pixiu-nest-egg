@@ -114,6 +114,61 @@ async fn imports_every_dividend_row_then_skips_them_on_a_second_run() {
 }
 
 #[tokio::test]
+async fn imports_the_bond_and_its_coupons_then_skips_them_on_a_second_run() {
+    let pool = db::connect_memory().await.expect("db");
+    let data = xlsx::read(&workbook_path()).expect("workbook");
+
+    let first = import::import(&pool, &data).await.expect("first import");
+    assert_eq!(first.bonds.bonds_imported, 1);
+    assert_eq!(first.bonds.coupons_imported, 6);
+    assert_eq!(count(&pool, "bonds").await, 1);
+    assert_eq!(count(&pool, "bond_coupons").await, 6);
+
+    // The silver bond registry row and its serial-date maturity.
+    let bond: (String, String, f64, String) =
+        sqlx::query_as("SELECT label, issue_no, principal, maturity_date FROM bonds")
+            .fetch_one(&pool)
+            .await
+            .expect("the bond");
+    assert_eq!(bond.0, "silver bond");
+    assert_eq!(bond.1, "03GB2710R");
+    assert!((bond.2 - 50000.0).abs() < 0.01);
+    assert_eq!(bond.3, "2027-10-25");
+
+    // Past-dated coupons imported as received with the sheet's cached
+    // interest; the 待定 rows imported with null rate/per_10k.
+    let received: i64 =
+        sqlx::query_scalar("SELECT COUNT(*) FROM bond_coupons WHERE received_amount IS NOT NULL")
+            .fetch_one(&pool)
+            .await
+            .expect("received count");
+    assert_eq!(received, 3);
+    let unfixed: i64 = sqlx::query_scalar(
+        "SELECT COUNT(*) FROM bond_coupons WHERE annual_rate IS NULL AND per_10k IS NULL",
+    )
+    .fetch_one(&pool)
+    .await
+    .expect("unfixed count");
+    assert_eq!(unfixed, 3);
+    // The sheet's hand-entered 1000 (not 199.45 × 5) is what imported.
+    let amount: f64 = sqlx::query_scalar(
+        "SELECT received_amount FROM bond_coupons WHERE pay_date = '2026-04-23'",
+    )
+    .fetch_one(&pool)
+    .await
+    .expect("april coupon");
+    assert!((amount - 1000.0).abs() < 0.01);
+
+    let second = import::import(&pool, &data).await.expect("second import");
+    assert_eq!(second.bonds.bonds_imported, 0);
+    assert_eq!(second.bonds.bonds_skipped, 1);
+    assert_eq!(second.bonds.coupons_imported, 0);
+    assert_eq!(second.bonds.coupons_skipped, 6);
+    assert_eq!(count(&pool, "bonds").await, 1);
+    assert_eq!(count(&pool, "bond_coupons").await, 6);
+}
+
+#[tokio::test]
 async fn imports_mpf_accounts_then_skips_them_on_a_second_run() {
     let pool = db::connect_memory().await.expect("db");
     let data = xlsx::read(&workbook_path()).expect("workbook");
@@ -250,6 +305,8 @@ async fn duplicate_source_rows_are_kept_once_and_only_once() {
         year_figures: Vec::new(),
         mpf: Vec::new(),
         mpf_cached: Default::default(),
+        bonds: Vec::new(),
+        bond_cached: Default::default(),
     };
 
     let first = import::import(&pool, &data).await.expect("first import");

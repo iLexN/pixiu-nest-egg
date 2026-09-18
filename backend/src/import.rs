@@ -10,11 +10,13 @@ use chrono::Datelike;
 use sqlx::{Row, SqlitePool};
 
 use crate::calc::{
-    validate_deposit, validate_dividend, validate_mpf_account, validate_trade, DepositInput,
-    MpfAccountInput, TradeInput,
+    validate_bond, validate_coupon, validate_deposit, validate_dividend, validate_mpf_account,
+    validate_trade, BondInput, CouponInput, DepositInput, MpfAccountInput, TradeInput,
 };
 use crate::models::Market;
-use crate::xlsx::{MarketSheets, SheetDeposit, SheetStock, SheetYearFigure, WorkbookData};
+use crate::xlsx::{
+    MarketSheets, SheetBond, SheetDeposit, SheetStock, SheetYearFigure, WorkbookData,
+};
 
 #[derive(Debug, Default, Clone, PartialEq, Eq)]
 pub struct MarketReport {
@@ -49,12 +51,21 @@ pub struct MpfReport {
 }
 
 #[derive(Debug, Default, Clone, PartialEq, Eq)]
+pub struct BondReport {
+    pub bonds_imported: usize,
+    pub bonds_skipped: usize,
+    pub coupons_imported: usize,
+    pub coupons_skipped: usize,
+}
+
+#[derive(Debug, Default, Clone, PartialEq, Eq)]
 pub struct ImportReport {
     pub hk: MarketReport,
     pub us: MarketReport,
     pub deposits: DepositReport,
     pub snapshots: SnapshotReport,
     pub mpf: MpfReport,
+    pub bonds: BondReport,
 }
 
 impl ImportReport {
@@ -72,6 +83,7 @@ pub async fn import(pool: &SqlitePool, data: &WorkbookData) -> anyhow::Result<Im
     let deposits = import_deposits(pool, &data.deposits).await?;
     let snapshots = import_year_snapshots(pool, &data.year_figures).await?;
     let mpf = import_mpf(pool, data).await?;
+    let bonds = import_bonds(pool, &data.bonds).await?;
     seed_market_history(pool).await?;
     seed_market_figures(pool, data).await?;
     Ok(ImportReport {
@@ -80,6 +92,7 @@ pub async fn import(pool: &SqlitePool, data: &WorkbookData) -> anyhow::Result<Im
         deposits,
         snapshots,
         mpf,
+        bonds,
     })
 }
 
@@ -873,6 +886,193 @@ async fn existing_deposit_keys(pool: &SqlitePool) -> anyhow::Result<HashMap<Depo
             row.try_get("interest")?,
         );
         *keys.entry(key).or_insert(0) += 1;
+    }
+    Ok(keys)
+}
+
+/// 債券 registry rows dedupe by 發行編號 (falling back to the row's natural
+/// fields when the sheet has none); coupons dedupe by (bond, pay_date). A
+/// coupon already past its pay date imports as received — the sheet's
+/// interest value is what was actually paid — while future ones stay
+/// unreceived, the same heuristic dividends use.
+async fn import_bonds(pool: &SqlitePool, bonds: &[SheetBond]) -> anyhow::Result<BondReport> {
+    let mut report = BondReport::default();
+    let today = crate::routes::today();
+    let mut bond_ids = existing_bond_ids(pool).await?;
+    let mut coupon_keys = existing_coupon_keys(pool).await?;
+
+    for bond in bonds {
+        let existing_id = bond
+            .issue_no
+            .as_deref()
+            .and_then(|issue_no| bond_ids.by_issue.get(issue_no).copied())
+            .or_else(|| bond_ids.by_natural.get(&BondNaturalKey::new(bond)).copied());
+
+        let bond_id = match existing_id {
+            Some(id) => {
+                report.bonds_skipped += 1;
+                id
+            }
+            None => {
+                let validated = validate_bond(BondInput {
+                    label: &bond.label,
+                    issue_no: bond.issue_no.as_deref(),
+                    principal: bond.principal,
+                    maturity_date: &bond.maturity_date,
+                })
+                .map_err(|errors| {
+                    anyhow!(
+                        "row {} of the {} sheet is not valid: {}",
+                        bond.source_row,
+                        crate::xlsx::BOND_SHEET,
+                        errors
+                            .iter()
+                            .map(|e| format!("{}: {}", e.field, e.message))
+                            .collect::<Vec<_>>()
+                            .join("; ")
+                    )
+                })?;
+                let id = crate::routes::bonds::insert_bond(
+                    pool,
+                    &validated,
+                    bond.sort_order,
+                    &crate::models::NewBond {
+                        label: validated.label.clone(),
+                        issue_no: None,
+                        principal: validated.principal,
+                        maturity_date: validated.maturity_date.clone(),
+                        note: None,
+                    },
+                )
+                .await
+                .with_context(|| format!("inserting bond row {} of 債券", bond.source_row))?;
+                bond_ids.register(id, bond);
+                report.bonds_imported += 1;
+                id
+            }
+        };
+
+        for coupon in &bond.coupons {
+            if !coupon_keys.insert((bond_id, coupon.pay_date.clone())) {
+                report.coupons_skipped += 1;
+                continue;
+            }
+            let pay_date = chrono::NaiveDate::parse_from_str(&coupon.pay_date, "%Y-%m-%d")
+                .map_err(|_| {
+                    anyhow!(
+                        "row {} of the {} sheet has no usable 付息日",
+                        coupon.source_row,
+                        crate::xlsx::BOND_SHEET
+                    )
+                })?;
+            // Past-dated coupons auto-credited: the sheet's interest value is
+            // the amount received. A future or amountless row stays unreceived.
+            let received_amount = coupon.interest.filter(|_| pay_date <= today);
+            let validated = validate_coupon(CouponInput {
+                pay_date: &coupon.pay_date,
+                fixing_date: coupon.fixing_date.as_deref(),
+                annual_rate: coupon.annual_rate,
+                per_10k: coupon.per_10k,
+                received_amount,
+            })
+            .map_err(|errors| {
+                anyhow!(
+                    "row {} of the {} sheet is not valid: {}",
+                    coupon.source_row,
+                    crate::xlsx::BOND_SHEET,
+                    errors
+                        .iter()
+                        .map(|e| format!("{}: {}", e.field, e.message))
+                        .collect::<Vec<_>>()
+                        .join("; ")
+                )
+            })?;
+            crate::routes::bonds::insert_coupon(
+                pool,
+                &validated,
+                &crate::models::NewBondCoupon {
+                    bond_id,
+                    pay_date: validated.pay_date.clone(),
+                    fixing_date: None,
+                    annual_rate: None,
+                    per_10k: None,
+                    received_amount: None,
+                    note: None,
+                },
+            )
+            .await
+            .with_context(|| format!("inserting coupon row {} of 債券", coupon.source_row))?;
+            report.coupons_imported += 1;
+        }
+    }
+    Ok(report)
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+struct BondNaturalKey {
+    label: String,
+    principal: u64,
+    maturity_date: String,
+}
+
+impl BondNaturalKey {
+    fn new(bond: &SheetBond) -> Self {
+        Self {
+            label: bond.label.clone(),
+            principal: bond.principal.to_bits(),
+            maturity_date: bond.maturity_date.clone(),
+        }
+    }
+}
+
+#[derive(Debug, Default)]
+struct ExistingBonds {
+    by_issue: HashMap<String, i64>,
+    by_natural: HashMap<BondNaturalKey, i64>,
+}
+
+impl ExistingBonds {
+    fn register(&mut self, id: i64, bond: &SheetBond) {
+        if let Some(issue_no) = &bond.issue_no {
+            self.by_issue.insert(issue_no.clone(), id);
+        }
+        self.by_natural.insert(BondNaturalKey::new(bond), id);
+    }
+}
+
+async fn existing_bond_ids(pool: &SqlitePool) -> anyhow::Result<ExistingBonds> {
+    let rows = sqlx::query("SELECT id, label, issue_no, principal, maturity_date FROM bonds")
+        .fetch_all(pool)
+        .await?;
+
+    let mut existing = ExistingBonds::default();
+    for row in &rows {
+        let id: i64 = row.try_get("id")?;
+        let issue_no: Option<String> = row.try_get("issue_no")?;
+        if let Some(issue_no) = issue_no {
+            existing.by_issue.insert(issue_no, id);
+        }
+        existing.by_natural.insert(
+            BondNaturalKey {
+                label: row.try_get("label")?,
+                principal: row.try_get::<f64, _>("principal")?.to_bits(),
+                maturity_date: row.try_get("maturity_date")?,
+            },
+            id,
+        );
+    }
+    Ok(existing)
+}
+
+async fn existing_coupon_keys(
+    pool: &SqlitePool,
+) -> anyhow::Result<std::collections::HashSet<(i64, String)>> {
+    let rows = sqlx::query("SELECT bond_id, pay_date FROM bond_coupons")
+        .fetch_all(pool)
+        .await?;
+    let mut keys = std::collections::HashSet::new();
+    for row in &rows {
+        keys.insert((row.try_get("bond_id")?, row.try_get("pay_date")?));
     }
     Ok(keys)
 }
