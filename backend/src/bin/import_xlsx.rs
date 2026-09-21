@@ -70,6 +70,16 @@ async fn main() -> anyhow::Result<()> {
         report.bonds.coupons_imported,
         report.bonds.coupons_skipped,
     );
+    println!(
+        "AIA: {} policy row(s) in the sheet -> {} imported, {} skipped (already present); rate seeded: {}",
+        data.aia.len(),
+        report.aia.policies_imported,
+        report.aia.policies_skipped,
+        report.aia.rate_seeded == 1,
+    );
+    for warning in &report.aia.warnings {
+        println!("  AIA warning: {warning}");
+    }
 
     pool.close().await;
     Ok(())

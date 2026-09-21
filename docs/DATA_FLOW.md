@@ -663,6 +663,55 @@ BondsView (債券 → 總覽)
 
 Rate fields are entered as a percent (4); the API stores the fraction. Clearing `received_amount` flips the coupon back to pending. A matured bond's coupons stay editable — the receipt history remains completable after maturity.
 
+## Load the AIA view
+
+```text
+AiaView (AIA → 總覽)
+  → GET /api/aia/summary
+      → every policy row with its derived balance_pct and event history,
+        totals over non-excluded rows, the in-account display value, HKD
+        conversions via the stored rate, and the next premium-due date
+```
+
+Two flags reproduce the sheet's two sums: `excluded` rows sit in the AIA account but are not the user's money (the `irene 20%` share), so they drop out of the totals; `in_account` rows feed `display_value`, the figure that should match the AIA portal — rows held in another account (`irene 年金`) count in the totals but not in `display_value`.
+
+## Add or edit a policy, or update the rate
+
+```text
+新增保單 / 編輯 in a policy row's ⋯ menu
+  → POST /api/aia/policies or PATCH /api/aia/policies/:id
+  → validate label and non-negative USD figures
+  → changing value_usd refreshes value_updated_at
+
+編輯 on the USD → HKD card
+  → PATCH /api/aia/rate
+  → writes app_meta key aia.usd_hkd_rate — a manual copy of the
+    workbook's Overview!N3 GOOGLEFINANCE cell; all HKD figures derive
+    from it and are absent while unset
+```
+
+## Record a premium payment or withdrawal
+
+```text
+繳費 on a policy row
+  → POST /api/aia/events { kind: "payment", event_date, amount_usd, next_pay_date }
+  → one transaction: premium_usd += amount, remaining_years −= 1 (when
+    set, never below zero), next_pay_date = the submitted date (the form
+    proposes current +1 year); the event row snapshots the previous
+    next_pay_date/remaining_years
+
+提取 on a policy row
+  → POST /api/aia/events { kind: "withdrawal", ... }
+  → withdrew_usd += amount
+
+刪除 on an event row
+  → DELETE /api/aia/events/:id reverses it: the amount leaves its
+    cumulative field and the snapshotted fields restore — delete is the
+    undo for a misrecorded event
+```
+
+Recording a payment replaces the workbook's three manual edits (buy usd, remaining years, next pay) with one action. Amounts are entered in USD; the `irene 年金` premium paid in HKD is converted before entry.
+
 ## Import workbook data
 
 ```text
@@ -681,11 +730,13 @@ The importer reads:
 - `定期Info` (表_定期List) and `定期` (cached aggregates for parity)
 - `MPF` — the account table under the 總供款額/帳戶結存 headers; the fund-details table below it and the remark row are ignored
 - `債券` — the registry table under the `end` header (label / 發行編號 / principal / maturity), then each bond's coupon block under its 發行編號 label line: 付息日 / 利息釐定日 / 年息率 / 每1萬利息 / cached 利息; `待定` cells import as NULL
+- `AIA` — the D–O policy block: rows with numeric `buy usd`/`now usd` cells and a label or policy number; a blank label inherits the plan name above it, and the remark cells (L onward) join into `note`. A row resuming after a blank gap imports `in_account` false, and the row whose removal reconciles Σ premium/Σ value to the cached `buy usd`/`now usd` cells imports `excluded` — `irene 20%` and `irene 年金` respectively today; unresolvable cases flag nothing and report a warning
+- `Overview` — only `N3`, the cached USD→HKD rate, which seeds `aia.usd_hkd_rate` once (a user edit is never overwritten)
 - The market sheets' year blocks (B year, C net invested, F 成本, H 總市值) and `YearInReview`'s 股票 rows — seeded into `year_snapshots` for years before the current one; the current year stays live
 
 For each dividend row the importer stores J (stock), K (pay date, Excel serial dates accepted), M (派息 amount, cached value), and O (股數 snapshot). The remaining snapshots are recovered from the cached rates the same way the sheet computed them — `buy_cost = M ÷ L`, `received_price = M ÷ (N × O)` — falling back to trade-derived snapshots when a rate is absent. The M formula text, when present, is kept in `note`. Rows with an N rate, or a pay date already past, import as received; future rows without it import as pending estimates.
 
-The import is idempotent. A second run skips trades already stored with the same stock, date, type, shares, and total, deposits already stored with the same label, end date, principal, and interest, dividends already stored with the same stock, pay date, and amount, bonds already stored with the same 發行編號 (or the same label/principal/maturity when the sheet has none), and coupons already stored with the same bond and pay date. Year snapshots merge at field level: a stored value — seeded or edited — is never overwritten, while empty fields on an existing row are filled from the workbook. MPF accounts are keyed by label: a second run skips them entirely.
+The import is idempotent. A second run skips trades already stored with the same stock, date, type, shares, and total, deposits already stored with the same label, end date, principal, and interest, dividends already stored with the same stock, pay date, and amount, bonds already stored with the same 發行編號 (or the same label/principal/maturity when the sheet has none), and coupons already stored with the same bond and pay date. Year snapshots merge at field level: a stored value — seeded or edited — is never overwritten, while empty fields on an existing row are filled from the workbook. MPF accounts are keyed by label: a second run skips them entirely. AIA policies are keyed by `policy_no` (falling back to label + premium + value when the sheet has none), so a second run skips them too — and `aia.usd_hkd_rate` seeds only when unset, never clobbering an edit.
 
 A bond coupon whose pay date is already past imports as received with the sheet's cached interest value as `received_amount`; future coupons stay unreceived — the same heuristic the dividend import uses. The sheet deletes matured bonds outright, so nothing is ever un-imported: history the app keeps simply stops appearing in later imports.
 
@@ -746,9 +797,13 @@ cargo run -p wealth-backend --bin check_parity -- "財富分析報告.xlsx"
     coupon's effective amount (received else per_10k-derived expected)
     against the sheet's cached interest cell; 待定 rows carry no cached
     figure and are skipped
+  → recomputes AIA per-policy premium/value/balance_pct and the totals
+    (buy/now USD, overall return, display value, HKD cells via the stored
+    rate) against the sheet's cached G/H/I cells and B1–B9 block; cells
+    the sheet leaves blank skip quietly
 ```
 
-This verifies that the database reproduces the spreadsheet's trade-derived figures, deposit rollups, dividend totals, MPF figures, and bond figures. Deposit parity is point-in-time: the cached values reflect the workbook's last recalculation, so a deposit that matures after that point shows as a difference. MPF parity is the same: once the app is edited after import, its current figures legitimately diverge from the frozen sheet. Bond parity too: the sheet's `Total` cell only covers bonds it still lists, so a bond that matured since the workbook last recalculated — or an already-received coupon recorded with a different amount — shows as an informational difference.
+This verifies that the database reproduces the spreadsheet's trade-derived figures, deposit rollups, dividend totals, MPF figures, bond figures, and AIA figures. Deposit parity is point-in-time: the cached values reflect the workbook's last recalculation, so a deposit that matures after that point shows as a difference. MPF parity is the same: once the app is edited after import, its current figures legitimately diverge from the frozen sheet. Bond parity too: the sheet's `Total` cell only covers bonds it still lists, so a bond that matured since the workbook last recalculated — or an already-received coupon recorded with a different amount — shows as an informational difference.
 
 ## Frontend vs backend responsibilities
 
@@ -773,6 +828,8 @@ This verifies that the database reproduces the spreadsheet's trade-derived figur
 | Yearly rollup columns | Displays them; inline edit + freeze button | Calculates them; stores snapshots |
 | MPF account editing | Form | Yes, validates + records history |
 | MPF last-month/max figures | Displays them | Derives them from history + seeds |
+| AIA policies + events | Forms | Yes, validates; events update policies atomically |
+| AIA totals/HKD figures | Displays them | Calculates them from the stored rate |
 | Workbook import | — | Yes |
 | Parity check | — | Yes |
 

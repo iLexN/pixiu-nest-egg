@@ -1,10 +1,6 @@
-# app-navigation Specification
+# Spec Delta
 
-## Purpose
-
-Defines the app's top-level navigation: which pages are grouped under 股票, 定期, MPF, 債券, and AIA, the labels and order of each group's sub-tabs, when the 港股/美股 market toggle is visible, and which page the app opens on.
-
-## Requirements
+## MODIFIED Requirements
 
 ### Requirement: Grouped top navigation
 
@@ -39,24 +35,6 @@ The app SHALL present a two-level top navigation. The first level SHALL show one
 
 - **WHEN** the 股票 group is active
 - **THEN** the 定期, MPF, 債券, and AIA groups' sub-tabs are not shown in the nav
-
-### Requirement: Default page is 股票 → 總覽
-
-The app SHALL open on the 股票 group's 總覽 page (the stock portfolio summary) instead of 交易記錄.
-
-#### Scenario: Initial landing page
-
-- **WHEN** the app loads with no prior navigation
-- **THEN** the stock portfolio summary for the default market is displayed, with 總覽 marked as the active sub-tab
-
-### Requirement: Group selection opens the group's first sub-tab
-
-Clicking a group button SHALL switch to that group and open its first sub-tab (its 總覽). The app SHALL NOT remember a previously visited sub-tab within a group.
-
-#### Scenario: Return to a group
-
-- **WHEN** the user is on 股票 → 管理, clicks 定期, then clicks 股票 again
-- **THEN** the 股票 → 總覽 page is shown, not 管理
 
 ### Requirement: Market toggle is scoped to the 股票 group
 

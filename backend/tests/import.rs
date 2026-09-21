@@ -307,6 +307,8 @@ async fn duplicate_source_rows_are_kept_once_and_only_once() {
         mpf_cached: Default::default(),
         bonds: Vec::new(),
         bond_cached: Default::default(),
+        aia: Vec::new(),
+        aia_cached: Default::default(),
     };
 
     let first = import::import(&pool, &data).await.expect("first import");

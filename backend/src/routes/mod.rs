@@ -1,3 +1,4 @@
+pub mod aia;
 pub mod bonds;
 pub mod deposits;
 pub mod dividends;
@@ -74,6 +75,12 @@ pub fn api_router(state: AppState) -> Router {
             "/mpf/history/{id}",
             axum::routing::delete(mpf::remove_history),
         )
+        .route("/aia/policies", get(aia::list).post(aia::create))
+        .route("/aia/summary", get(aia::summary))
+        .route("/aia/rate", patch(aia::update_rate))
+        .route("/aia/policies/{id}", patch(aia::update).delete(aia::remove))
+        .route("/aia/events", get(aia::list_events).post(aia::create_event))
+        .route("/aia/events/{id}", axum::routing::delete(aia::remove_event))
         .with_state(state)
 }
 

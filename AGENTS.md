@@ -141,11 +141,10 @@ The live formula preview in `TradeForm.vue` mirrors those rules only so the user
 
 ## Migration roadmap
 
-Completed so far: HK/US trade registry, trade history, per-stock summaries, manual prices/metadata, 定期 deposits (registry, upcoming/history views, month/bank/year rollups), stock 派息 (estimate → receipt lifecycle with frozen holdings/cost/price snapshots), MPF (accounts, monthly balance updates with history, derived last-month/max, page note), market 上月/最高 figures (daily totals history with month-end backfill, year-end seeding), 債券 (registry with retained matured history, coupon schedule with 待定 → pending → received lifecycle), workbook import, and parity check.
+Completed so far: HK/US trade registry, trade history, per-stock summaries, manual prices/metadata, 定期 deposits (registry, upcoming/history views, month/bank/year rollups), stock 派息 (estimate → receipt lifecycle with frozen holdings/cost/price snapshots), MPF (accounts, monthly balance updates with history, derived last-month/max, page note), market 上月/最高 figures (daily totals history with month-end backfill, year-end seeding), 債券 (registry with retained matured history, coupon schedule with 待定 → pending → received lifecycle), AIA (policy registry with excluded/in-account flags, one-action premium-payment and withdrawal events with delete-to-undo, manual USD→HKD rate), workbook import, and parity check.
 
 Remaining spreadsheet sections, in intended order:
 
 1. Month Stat / Overview
-2. AIA
 
 Until those are migrated, continue maintaining the workbook's non-trade sheets by hand. The app should become the source of truth only after all sections are covered and verified.

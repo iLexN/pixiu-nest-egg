@@ -21,6 +21,8 @@ pub const DEPOSIT_INFO_SHEET: &str = "定期Info";
 pub const BOND_SHEET: &str = "債券";
 pub const YEAR_IN_REVIEW_SHEET: &str = "YearInReview";
 pub const MPF_SHEET: &str = "MPF";
+pub const AIA_SHEET: &str = "AIA";
+pub const OVERVIEW_SHEET: &str = "Overview";
 
 #[derive(Debug, Clone)]
 pub struct SheetTrade {
@@ -247,6 +249,64 @@ pub struct MpfSheetCached {
     pub max_gain: Option<f64>,
 }
 
+/// One row of the `AIA` sheet's policy table (columns D–O). A row counts when
+/// both `buy usd` (G) and `now usd` (H) hold numbers and the row carries a
+/// label or a policy number. The label column is sparse: several policy
+/// numbers sit under one plan name, so a blank label inherits the nearest
+/// label above it.
+#[derive(Debug, Clone)]
+pub struct SheetAiaPolicy {
+    /// Plan/group name, e.g. `年金 - 2024 - 2029`.
+    pub label: String,
+    /// e.g. `B632611401`.
+    pub policy_no: Option<String>,
+    /// The sheet's `next pay` column — the next premium-due date.
+    pub next_pay_date: Option<String>,
+    /// The sheet's `buy usd`.
+    pub premium_usd: f64,
+    /// The sheet's `now usd`.
+    pub value_usd: f64,
+    /// Cached `balance %%` column, compared by the parity check.
+    pub balance_pct: Option<f64>,
+    /// The sheet's `remaining years`.
+    pub remaining_years: Option<f64>,
+    /// The sheet's `Withdrew`, cumulative.
+    pub withdrew_usd: f64,
+    /// The remark cells (L onward) joined into one note.
+    pub note: Option<String>,
+    /// Counted in the sheet's `AIA display value` range — false for rows that
+    /// resume after a blank gap (the user's share held in another account).
+    pub in_account: bool,
+    /// 1-based position within the table, stored as sort_order.
+    pub sort_order: i64,
+    /// 1-based row number in the source sheet, for error messages.
+    pub source_row: usize,
+}
+
+/// The workbook's cached `AIA` summary block (B1–B9) plus the `Overview!N3`
+/// USD→HKD rate, for seeding the manual rate and the parity check.
+#[derive(Debug, Clone, Default)]
+pub struct AiaSheetCached {
+    /// AIA!B1: buy in HKD (buy usd × rate).
+    pub buy_hkd: Option<f64>,
+    /// AIA!B2: now in HKD (now usd × rate).
+    pub now_hkd: Option<f64>,
+    /// AIA!B3: drew in HKD (Σ Withdrew × rate).
+    pub drew_hkd: Option<f64>,
+    /// AIA!B4: overall `balance %%`.
+    pub balance_pct: Option<f64>,
+    /// AIA!B5: unlabeled scratch cell, `now − buy − drew` in HKD.
+    pub net_change_hkd: Option<f64>,
+    /// AIA!B7: buy in USD.
+    pub buy_usd: Option<f64>,
+    /// AIA!B8: now in USD.
+    pub now_usd: Option<f64>,
+    /// AIA!B9: the `AIA display value` figure.
+    pub display_value: Option<f64>,
+    /// Overview!N3: the cached GOOGLEFINANCE USD→HKD rate.
+    pub usd_hkd_rate: Option<f64>,
+}
+
 /// A market sheet's cached last-month/max cells: `last month` (a rate only),
 /// `max Balance %` (max rate) and `max net` (max unrealized amount). On 美股
 /// each figure sits in the J column; the K column repeats it HKD-converted
@@ -290,6 +350,9 @@ pub struct WorkbookData {
     /// The 債券 sheet's bond registry, each with its coupon schedule.
     pub bonds: Vec<SheetBond>,
     pub bond_cached: BondSheetCached,
+    /// The AIA sheet's policy table.
+    pub aia: Vec<SheetAiaPolicy>,
+    pub aia_cached: AiaSheetCached,
 }
 
 impl WorkbookData {
@@ -330,6 +393,15 @@ pub fn read(path: &Path) -> anyhow::Result<WorkbookData> {
     // 債券 too: a workbook without it just seeds nothing.
     let bond: Option<Rows> = workbook
         .worksheet_range(BOND_SHEET)
+        .ok()
+        .map(|range| range.rows().map(<[Data]>::to_vec).collect());
+    // AIA and Overview the same way; Overview is read only for its N3 rate.
+    let aia: Option<Rows> = workbook
+        .worksheet_range(AIA_SHEET)
+        .ok()
+        .map(|range| range.rows().map(<[Data]>::to_vec).collect());
+    let overview: Option<Rows> = workbook
+        .worksheet_range(OVERVIEW_SHEET)
         .ok()
         .map(|range| range.rows().map(<[Data]>::to_vec).collect());
     // Formula text is a second pass; formats without formulas error, which is
@@ -373,6 +445,8 @@ pub fn read(path: &Path) -> anyhow::Result<WorkbookData> {
             .transpose()?
             .unwrap_or_default(),
         bond_cached: bond.as_ref().map(parse_bond_cached).unwrap_or_default(),
+        aia: aia.as_ref().map(parse_aia).unwrap_or_default(),
+        aia_cached: parse_aia_cached(aia.as_ref(), overview.as_ref()),
     })
 }
 
@@ -963,6 +1037,98 @@ fn parse_bond_cached(rows: &Rows) -> BondSheetCached {
     BondSheetCached { total_principal }
 }
 
+// AIA policy table columns (D–O of the sheet).
+const AIA_LABEL: usize = 3;
+const AIA_NEXT_PAY: usize = 4;
+const AIA_POLICY_NO: usize = 5;
+const AIA_BUY: usize = 6;
+const AIA_NOW: usize = 7;
+const AIA_RATE: usize = 8;
+const AIA_REMAINING: usize = 9;
+const AIA_WITHDREW: usize = 10;
+const AIA_REMARK: usize = 11;
+
+/// A policy row holds a number in both `buy usd` and `now usd` plus a label
+/// or policy number — that is the whole D–O block (rows 2–8 and the detached
+/// `irene 年金` row) and nothing else on the sheet: the summary block keeps
+/// its figures in B, and the `GG` scratch cells have no numbers there.
+fn is_aia_policy_row(row: &[Data]) -> bool {
+    number(row, AIA_BUY).is_some()
+        && number(row, AIA_NOW).is_some()
+        && (text(row, AIA_LABEL).is_some() || text(row, AIA_POLICY_NO).is_some())
+}
+
+/// A remark cell (L onward) is free text; floats print like the sheet shows
+/// them, not at full precision.
+fn remark_text(row: &[Data], index: usize) -> Option<String> {
+    match cell(row, index)? {
+        Data::Float(value) => Some(format!("{value:.2}")),
+        _ => text(row, index),
+    }
+}
+
+fn parse_aia(rows: &Rows) -> Vec<SheetAiaPolicy> {
+    let mut policies = Vec::new();
+    let mut last_label: Option<String> = None;
+    // A blank gap after the block's first row ends the range the sheet's
+    // `AIA display value` sums over — rows resuming later are out of it.
+    let mut gap = false;
+    for (index, row) in rows.iter().enumerate() {
+        if !is_aia_policy_row(row) {
+            if !policies.is_empty() {
+                gap = true;
+            }
+            continue;
+        }
+        if let Some(label) = text(row, AIA_LABEL) {
+            last_label = Some(label);
+        }
+        let in_account = !gap;
+        gap = false;
+        let note_parts: Vec<String> = (AIA_REMARK..row.len())
+            .filter_map(|i| remark_text(row, i))
+            .collect();
+        policies.push(SheetAiaPolicy {
+            label: last_label
+                .clone()
+                .or_else(|| text(row, AIA_POLICY_NO))
+                .unwrap_or_default(),
+            policy_no: text(row, AIA_POLICY_NO),
+            next_pay_date: serial_or_date(row, AIA_NEXT_PAY),
+            premium_usd: number(row, AIA_BUY).unwrap_or(0.0),
+            value_usd: number(row, AIA_NOW).unwrap_or(0.0),
+            balance_pct: number(row, AIA_RATE),
+            remaining_years: number(row, AIA_REMAINING),
+            withdrew_usd: number(row, AIA_WITHDREW).unwrap_or(0.0),
+            note: (!note_parts.is_empty()).then(|| note_parts.join(" ")),
+            in_account,
+            sort_order: (policies.len() + 1) as i64,
+            source_row: index + 1,
+        });
+    }
+    policies
+}
+
+/// The summary block sits at fixed cells (B1–B9) beside the policy table;
+/// `Overview!N3` holds the GOOGLEFINANCE rate the HKD cells convert with.
+fn parse_aia_cached(rows: Option<&Rows>, overview: Option<&Rows>) -> AiaSheetCached {
+    let cell_num = |rows: Option<&Rows>, r: usize, c: usize| {
+        rows.and_then(|rows| rows.get(r))
+            .and_then(|row| number(row, c))
+    };
+    AiaSheetCached {
+        buy_hkd: cell_num(rows, 0, 1),
+        now_hkd: cell_num(rows, 1, 1),
+        drew_hkd: cell_num(rows, 2, 1),
+        balance_pct: cell_num(rows, 3, 1),
+        net_change_hkd: cell_num(rows, 4, 1),
+        buy_usd: cell_num(rows, 6, 1),
+        now_usd: cell_num(rows, 7, 1),
+        display_value: cell_num(rows, 8, 1),
+        usd_hkd_rate: cell_num(overview, 2, 13),
+    }
+}
+
 /// A market sheet's cached last-month/max cells: `label → number` pairs like
 /// the MPF top block, except each cell holds a single figure — `last month`
 /// carries a rate only, `max Balance %` a rate, `max net` an amount. On 美股
@@ -1331,6 +1497,57 @@ mod tests {
         // 美股 carries no year block, and YearInReview's US figures are
         // HKD-combined — nothing is attributed to US.
         assert!(!data.year_figures.iter().any(|f| f.market == Market::Us));
+    }
+
+    #[test]
+    fn reads_the_aia_policy_rows_and_cached_cells() {
+        let data = read(&workbook_path()).expect("workbook is readable");
+
+        // Eight policy lines: five plans plus the two share rows.
+        assert_eq!(data.aia.len(), 8);
+        let near = |a: f64, b: f64| (a - b).abs() < 1e-6;
+
+        let first = &data.aia[0];
+        assert_eq!(first.label, "年金 - 2024 - 2029");
+        assert_eq!(first.policy_no.as_deref(), Some("B632611401"));
+        assert_eq!(first.next_pay_date.as_deref(), Some("2026-07-01"));
+        assert!(near(first.premium_usd, 24960.0));
+        assert!(near(first.value_usd, 14284.35));
+        assert_eq!(first.remaining_years, Some(2.0));
+        assert!(first.in_account);
+
+        // A continuation row inherits the plan label from the row above.
+        let second = &data.aia[1];
+        assert_eq!(second.label, "年金 - 2024 - 2029");
+        assert_eq!(second.policy_no.as_deref(), Some("B335167809"));
+        assert!(near(second.withdrew_usd, 127.86));
+
+        // The irene share rows: `irene 20%` sits inside the block (display
+        // value covers it), `irene 年金` resumes after the blank gap.
+        let irene_share = data
+            .aia
+            .iter()
+            .find(|p| p.policy_no.as_deref() == Some("irene 20%"))
+            .expect("irene 20%");
+        assert_eq!(irene_share.label, "5yr 5.5 full paid");
+        assert!(irene_share.in_account);
+        let irene_annuity = &data.aia[7];
+        assert_eq!(irene_annuity.label, "irene 年金");
+        assert!(!irene_annuity.in_account);
+        assert!(near(irene_annuity.premium_usd, 3823.979998));
+
+        let cached = &data.aia_cached;
+        assert!(near(cached.buy_usd.expect("buy usd"), 124781.98));
+        assert!(near(cached.now_usd.expect("now usd"), 89260.78));
+        assert!(near(cached.display_value.expect("display"), 87274.32));
+        // B5 = B2 − B1 − B3 in the sheet.
+        let expected_net =
+            cached.now_hkd.unwrap() - cached.buy_hkd.unwrap() - cached.drew_hkd.unwrap();
+        assert!(near(
+            cached.net_change_hkd.expect("net change"),
+            expected_net
+        ));
+        assert!(near(cached.usd_hkd_rate.expect("rate"), 7.84522932));
     }
 
     #[test]

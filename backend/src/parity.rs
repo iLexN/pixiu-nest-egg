@@ -51,6 +51,7 @@ pub struct ParityReport {
     pub dividends: Vec<NamedParityRow>,
     pub mpf: Vec<NamedParityRow>,
     pub bonds: Vec<NamedParityRow>,
+    pub aia: Vec<NamedParityRow>,
 }
 
 impl ParityReport {
@@ -85,6 +86,10 @@ impl ParityReport {
         Self::named_problems(&self.bonds)
     }
 
+    pub fn aia_problems(&self) -> impl Iterator<Item = &NamedParityRow> {
+        Self::named_problems(&self.aia)
+    }
+
     pub fn problem_count(&self) -> usize {
         self.problems().count()
             + self.market_figure_problems().count()
@@ -92,6 +97,7 @@ impl ParityReport {
             + self.dividend_problems().count()
             + self.mpf_problems().count()
             + self.bond_problems().count()
+            + self.aia_problems().count()
     }
 
     pub fn is_clean(&self) -> bool {
@@ -108,6 +114,7 @@ pub async fn check(pool: &SqlitePool, data: &WorkbookData) -> anyhow::Result<Par
     check_dividends(pool, data, &mut report).await?;
     check_mpf(pool, data, &mut report).await?;
     check_bonds(pool, data, &mut report).await?;
+    check_aia(pool, data, &mut report).await?;
     Ok(report)
 }
 
@@ -837,6 +844,138 @@ async fn check_bonds(
                     },
                 ),
             }
+        }
+    }
+    Ok(())
+}
+
+fn aia_row(report: &mut ParityReport, name: impl Into<String>, outcome: Outcome) {
+    named_row(&mut report.aia, name, outcome);
+}
+
+/// Compare two figures where either side may be absent: both present means a
+/// real comparison; the sheet leaving a cell blank is its own omission and
+/// skips quietly (e.g. `irene 20%` has no `balance %%` formula), while a
+/// figure the app cannot produce against a cached cell still counts.
+fn compare_figures(computed: Option<f64>, sheet: Option<f64>, field: &'static str) -> Outcome {
+    match (computed, sheet) {
+        (Some(computed), Some(sheet)) if approx_eq(computed, sheet) => Outcome::Match,
+        (Some(computed), Some(sheet)) => Outcome::Difference {
+            field,
+            computed,
+            sheet,
+        },
+        (None, Some(_)) => Outcome::MissingSheetValue { field },
+        _ => Outcome::SkippedNoData,
+    }
+}
+
+/// AIA figures against the sheet's cached cells: per-policy `buy usd`,
+/// `now usd` and `balance %%` against each stored row; the summary block's
+/// USD totals, `AIA display value` and HKD conversions against the derived
+/// totals (HKD figures convert with the stored `aia.usd_hkd_rate`, seeded
+/// from the same `Overview!N3` the sheet's HKD cells use, so the comparison
+/// is meaningful on both sides).
+async fn check_aia(
+    pool: &SqlitePool,
+    data: &WorkbookData,
+    report: &mut ParityReport,
+) -> anyhow::Result<()> {
+    let policies = crate::routes::aia::load_all_policies(pool)
+        .await
+        .map_err(|err| anyhow!("loading aia policies failed: {err}"))?;
+    let rate = crate::mpf::meta_get(pool, crate::routes::aia::RATE_KEY)
+        .await?
+        .and_then(|raw| raw.parse::<f64>().ok());
+    let facts: Vec<crate::calc::AiaPolicyFacts> =
+        policies.iter().map(crate::routes::aia::facts_of).collect();
+    let totals = crate::calc::aia_totals(&facts, rate);
+    let cached = &data.aia_cached;
+
+    for (name, field, computed, sheet) in [
+        (
+            "AIA buy usd",
+            "premium",
+            Some(totals.premium),
+            cached.buy_usd,
+        ),
+        ("AIA now usd", "value", Some(totals.value), cached.now_usd),
+        (
+            "AIA balance %%",
+            "balance_pct",
+            totals.balance_pct,
+            cached.balance_pct,
+        ),
+        (
+            "AIA display value",
+            "value",
+            Some(totals.display_value),
+            cached.display_value,
+        ),
+        (
+            "AIA buy hkd",
+            "premium_hkd",
+            totals.premium_hkd,
+            cached.buy_hkd,
+        ),
+        ("AIA now hkd", "value_hkd", totals.value_hkd, cached.now_hkd),
+        (
+            "AIA drew hkd",
+            "withdrew_hkd",
+            totals.withdrew_hkd,
+            cached.drew_hkd,
+        ),
+        (
+            "AIA net change hkd",
+            "net_change_hkd",
+            totals.net_change_hkd,
+            cached.net_change_hkd,
+        ),
+    ] {
+        aia_row(report, name, compare_figures(computed, sheet, field));
+    }
+
+    for sheet_policy in &data.aia {
+        let stored =
+            policies.iter().find(
+                |policy| match (&policy.policy_no, &sheet_policy.policy_no) {
+                    (Some(stored), Some(sheet)) => stored == sheet,
+                    _ => {
+                        policy.label == sheet_policy.label
+                            && approx_eq(policy.premium_usd, sheet_policy.premium_usd)
+                            && approx_eq(policy.value_usd, sheet_policy.value_usd)
+                    }
+                },
+            );
+        let name = format!(
+            "AIA {}",
+            sheet_policy
+                .policy_no
+                .as_deref()
+                .unwrap_or(&sheet_policy.label)
+        );
+        let Some(stored) = stored else {
+            aia_row(report, name, Outcome::MissingStock);
+            continue;
+        };
+        for (field, computed, sheet) in [
+            (
+                "premium",
+                Some(stored.premium_usd),
+                Some(sheet_policy.premium_usd),
+            ),
+            (
+                "value",
+                Some(stored.value_usd),
+                Some(sheet_policy.value_usd),
+            ),
+            ("balance_pct", stored.balance_pct, sheet_policy.balance_pct),
+        ] {
+            aia_row(
+                report,
+                format!("{name} {field}"),
+                compare_figures(computed, sheet, field),
+            );
         }
     }
     Ok(())

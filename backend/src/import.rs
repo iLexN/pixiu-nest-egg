@@ -10,12 +10,14 @@ use chrono::Datelike;
 use sqlx::{Row, SqlitePool};
 
 use crate::calc::{
-    validate_bond, validate_coupon, validate_deposit, validate_dividend, validate_mpf_account,
-    validate_trade, BondInput, CouponInput, DepositInput, MpfAccountInput, TradeInput,
+    approx_eq, validate_aia_policy, validate_bond, validate_coupon, validate_deposit,
+    validate_dividend, validate_mpf_account, validate_trade, AiaPolicyInput, BondInput,
+    CouponInput, DepositInput, MpfAccountInput, TradeInput,
 };
 use crate::models::Market;
 use crate::xlsx::{
-    MarketSheets, SheetBond, SheetDeposit, SheetStock, SheetYearFigure, WorkbookData,
+    MarketSheets, SheetAiaPolicy, SheetBond, SheetDeposit, SheetStock, SheetYearFigure,
+    WorkbookData,
 };
 
 #[derive(Debug, Default, Clone, PartialEq, Eq)]
@@ -59,6 +61,17 @@ pub struct BondReport {
 }
 
 #[derive(Debug, Default, Clone, PartialEq, Eq)]
+pub struct AiaReport {
+    pub policies_imported: usize,
+    pub policies_skipped: usize,
+    /// 1 when the `aia.usd_hkd_rate` meta was seeded this run.
+    pub rate_seeded: usize,
+    /// Judgment calls worth eyeballing (e.g. the excluded flag could not be
+    /// reconciled against the cached totals).
+    pub warnings: Vec<String>,
+}
+
+#[derive(Debug, Default, Clone, PartialEq, Eq)]
 pub struct ImportReport {
     pub hk: MarketReport,
     pub us: MarketReport,
@@ -66,6 +79,7 @@ pub struct ImportReport {
     pub snapshots: SnapshotReport,
     pub mpf: MpfReport,
     pub bonds: BondReport,
+    pub aia: AiaReport,
 }
 
 impl ImportReport {
@@ -84,6 +98,7 @@ pub async fn import(pool: &SqlitePool, data: &WorkbookData) -> anyhow::Result<Im
     let snapshots = import_year_snapshots(pool, &data.year_figures).await?;
     let mpf = import_mpf(pool, data).await?;
     let bonds = import_bonds(pool, &data.bonds).await?;
+    let aia = import_aia(pool, data).await?;
     seed_market_history(pool).await?;
     seed_market_figures(pool, data).await?;
     Ok(ImportReport {
@@ -93,6 +108,7 @@ pub async fn import(pool: &SqlitePool, data: &WorkbookData) -> anyhow::Result<Im
         snapshots,
         mpf,
         bonds,
+        aia,
     })
 }
 
@@ -1004,6 +1020,141 @@ async fn import_bonds(pool: &SqlitePool, bonds: &[SheetBond]) -> anyhow::Result<
             .with_context(|| format!("inserting coupon row {} of 債券", coupon.source_row))?;
             report.coupons_imported += 1;
         }
+    }
+    Ok(report)
+}
+
+/// Which rows the sheet's USD totals leave out: compare Σ premium/Σ value
+/// over parsed rows to the cached `buy usd`/`now usd` cells. The row whose
+/// removal reconciles both is the share the sheet subtracts (today: `irene
+/// 20%`). Ambiguous or missing evidence flags nothing and reports a warning —
+/// the flag stays editable in the app.
+fn reconcile_aia_excluded(
+    policies: &[SheetAiaPolicy],
+    cached: &crate::xlsx::AiaSheetCached,
+) -> (Vec<bool>, Option<String>) {
+    let (Some(buy), Some(now)) = (cached.buy_usd, cached.now_usd) else {
+        return (
+            vec![false; policies.len()],
+            Some(
+                "AIA sheet's cached buy usd/now usd cells are missing; no row flagged excluded"
+                    .to_string(),
+            ),
+        );
+    };
+    let sum_premium: f64 = policies.iter().map(|p| p.premium_usd).sum();
+    let sum_value: f64 = policies.iter().map(|p| p.value_usd).sum();
+    if approx_eq(sum_premium, buy) && approx_eq(sum_value, now) {
+        return (vec![false; policies.len()], None);
+    }
+    let matches: Vec<usize> = (0..policies.len())
+        .filter(|&i| {
+            approx_eq(sum_premium - policies[i].premium_usd, buy)
+                && approx_eq(sum_value - policies[i].value_usd, now)
+        })
+        .collect();
+    match matches.as_slice() {
+        [i] => {
+            let mut excluded = vec![false; policies.len()];
+            excluded[*i] = true;
+            (excluded, None)
+        }
+        _ => (
+            vec![false; policies.len()],
+            Some(format!(
+                "could not reconcile the AIA excluded row against cached totals \
+                 ({} candidate(s) out of {} rows); no row flagged excluded",
+                matches.len(),
+                policies.len()
+            )),
+        ),
+    }
+}
+
+/// A row already stored imports as a skip: `policy_no` is the natural key when
+/// both sides carry one, else the row's own figures identify it.
+async fn import_aia(pool: &SqlitePool, data: &WorkbookData) -> anyhow::Result<AiaReport> {
+    let mut report = AiaReport::default();
+
+    // The manual rate seeds once from Overview!N3 and is never overwritten —
+    // after first import the user owns it (PATCH /api/aia/rate).
+    if crate::mpf::meta_get(pool, crate::routes::aia::RATE_KEY)
+        .await?
+        .is_none()
+    {
+        if let Some(rate) = data.aia_cached.usd_hkd_rate {
+            crate::mpf::meta_put(pool, crate::routes::aia::RATE_KEY, Some(&rate.to_string()))
+                .await?;
+            report.rate_seeded = 1;
+        }
+    }
+
+    let (excluded, warning) = reconcile_aia_excluded(&data.aia, &data.aia_cached);
+    if let Some(warning) = warning {
+        report.warnings.push(warning);
+    }
+
+    let existing: Vec<(i64, Option<String>, String, f64, f64)> =
+        sqlx::query_as("SELECT id, policy_no, label, premium_usd, value_usd FROM aia_policies")
+            .fetch_all(pool)
+            .await?;
+    let by_policy_no: HashMap<&str, i64> = existing
+        .iter()
+        .filter_map(|(id, policy_no, _, _, _)| {
+            policy_no.as_deref().map(|policy_no| (policy_no, *id))
+        })
+        .collect();
+
+    for (index, policy) in data.aia.iter().enumerate() {
+        let already = policy
+            .policy_no
+            .as_deref()
+            .and_then(|policy_no| by_policy_no.get(policy_no))
+            .is_some()
+            || existing.iter().any(|(_, _, label, premium, value)| {
+                *label == policy.label
+                    && approx_eq(*premium, policy.premium_usd)
+                    && approx_eq(*value, policy.value_usd)
+            });
+        if already {
+            report.policies_skipped += 1;
+            continue;
+        }
+        let validated = validate_aia_policy(AiaPolicyInput {
+            label: &policy.label,
+            policy_no: policy.policy_no.as_deref(),
+            next_pay_date: policy.next_pay_date.as_deref(),
+            premium_usd: policy.premium_usd,
+            value_usd: policy.value_usd,
+            remaining_years: policy.remaining_years,
+            withdrew_usd: policy.withdrew_usd,
+            note: policy.note.as_deref(),
+            link: None,
+            excluded: excluded[index],
+            in_account: policy.in_account,
+        })
+        .map_err(|errors| {
+            anyhow!(
+                "row {} of the {} sheet is not valid: {}",
+                policy.source_row,
+                crate::xlsx::AIA_SHEET,
+                errors
+                    .iter()
+                    .map(|e| format!("{}: {}", e.field, e.message))
+                    .collect::<Vec<_>>()
+                    .join("; ")
+            )
+        })?;
+        crate::routes::aia::insert_policy(pool, &validated, policy.sort_order)
+            .await
+            .with_context(|| {
+                format!(
+                    "inserting policy row {} of {}",
+                    policy.source_row,
+                    crate::xlsx::AIA_SHEET
+                )
+            })?;
+        report.policies_imported += 1;
     }
     Ok(report)
 }

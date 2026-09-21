@@ -489,6 +489,107 @@ export interface MpfAccountPatch {
   member_no?: string | null
 }
 
+export type AiaEventKind = 'payment' | 'withdrawal'
+
+export interface AiaPolicy {
+  id: number
+  /** Plan/group name, e.g. 年金 - 2024 - 2029 */
+  label: string
+  policy_no: string | null
+  /** Next premium-due date */
+  next_pay_date: string | null
+  premium_usd: number
+  value_usd: number
+  value_updated_at: string | null
+  remaining_years: number | null
+  withdrew_usd: number
+  note: string | null
+  link: string | null
+  /** Excluded from the portfolio totals */
+  excluded: boolean
+  /** Counted in the AIA account display value */
+  in_account: boolean
+  sort_order: number
+  /** (value + withdrew − premium) ÷ premium; null at zero premium */
+  balance_pct: number | null
+}
+
+export interface NewAiaPolicy {
+  label: string
+  policy_no?: string | null
+  next_pay_date?: string | null
+  premium_usd: number
+  value_usd: number
+  remaining_years?: number | null
+  withdrew_usd: number
+  note?: string | null
+  link?: string | null
+  excluded?: boolean
+  in_account?: boolean
+}
+
+export interface AiaPolicyPatch {
+  label?: string
+  policy_no?: string | null
+  next_pay_date?: string | null
+  premium_usd?: number
+  value_usd?: number
+  remaining_years?: number | null
+  withdrew_usd?: number
+  note?: string | null
+  link?: string | null
+  excluded?: boolean
+  in_account?: boolean
+}
+
+export interface AiaEvent {
+  id: number
+  policy_id: number
+  kind: AiaEventKind
+  event_date: string
+  amount_usd: number
+  note: string | null
+  prev_next_pay_date: string | null
+  prev_remaining_years: number | null
+}
+
+export interface NewAiaEvent {
+  policy_id: number
+  kind: AiaEventKind
+  event_date: string
+  amount_usd: number
+  note?: string | null
+  /** New next premium-due date for payments; defaults to current +1 year. */
+  next_pay_date?: string | null
+}
+
+export interface AiaTotals {
+  premium: number
+  value: number
+  withdrew: number
+  balance_pct: number | null
+  display_value: number
+  premium_hkd: number | null
+  value_hkd: number | null
+  withdrew_hkd: number | null
+  /** The sheet's B5: now − buy − drew in HKD (net position change). */
+  net_change_hkd: number | null
+}
+
+export interface AiaPolicyWithEvents extends AiaPolicy {
+  events: AiaEvent[]
+}
+
+export interface AiaSummary {
+  today: string
+  /** Manual USD→HKD rate; HKD figures are null while unset. */
+  rate: number | null
+  /** Earliest premium-due date still ahead. */
+  next_premium_due: string | null
+  totals: AiaTotals
+  policies: AiaPolicyWithEvents[]
+}
+
 /** Carries the server's field-level messages so forms can show them inline. */
 export class ApiError extends Error {
   status: number
@@ -668,5 +769,29 @@ export const api = {
   },
   deleteMpfHistory(id: number): Promise<void> {
     return request(`/mpf/history/${id}`, { method: 'DELETE' })
+  },
+  aiaSummary(): Promise<AiaSummary> {
+    return request('/aia/summary')
+  },
+  createAiaPolicy(policy: NewAiaPolicy): Promise<AiaPolicy> {
+    return request('/aia/policies', { method: 'POST', body: JSON.stringify(policy) })
+  },
+  updateAiaPolicy(id: number, patch: AiaPolicyPatch): Promise<AiaPolicy> {
+    return request(`/aia/policies/${id}`, { method: 'PATCH', body: JSON.stringify(patch) })
+  },
+  deleteAiaPolicy(id: number): Promise<void> {
+    return request(`/aia/policies/${id}`, { method: 'DELETE' })
+  },
+  updateAiaRate(rate: number | null): Promise<{ rate: number | null }> {
+    return request('/aia/rate', { method: 'PATCH', body: JSON.stringify({ rate }) })
+  },
+  listAiaEvents(policyId?: number): Promise<AiaEvent[]> {
+    return request(`/aia/events${queryString({ policy_id: policyId })}`)
+  },
+  createAiaEvent(event: NewAiaEvent): Promise<AiaEvent> {
+    return request('/aia/events', { method: 'POST', body: JSON.stringify(event) })
+  },
+  deleteAiaEvent(id: number): Promise<void> {
+    return request(`/aia/events/${id}`, { method: 'DELETE' })
   },
 }
