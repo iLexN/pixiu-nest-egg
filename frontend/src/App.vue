@@ -10,8 +10,11 @@ import DividendsView from './views/DividendsView.vue'
 import MpfView from './views/MpfView.vue'
 import BondsView from './views/BondsView.vue'
 import AiaView from './views/AiaView.vue'
+import MonthStatView from './views/MonthStatView.vue'
+import OverviewView from './views/OverviewView.vue'
 
 type Tab =
+  | 'overview'
   | 'trades'
   | 'summary'
   | 'stocks'
@@ -21,9 +24,15 @@ type Tab =
   | 'mpf'
   | 'bonds'
   | 'aia'
-type Group = 'stock' | 'deposit' | 'mpf' | 'bond' | 'aia'
+  | 'months'
+type Group = 'overview' | 'stock' | 'deposit' | 'mpf' | 'bond' | 'aia' | 'months'
 
 const NAV: { id: Group; label: string; tabs: { id: Tab; label: string }[] }[] = [
+  {
+    id: 'overview',
+    label: '總覽',
+    tabs: [{ id: 'overview', label: '總覽' }],
+  },
   {
     id: 'stock',
     label: '股票',
@@ -56,6 +65,11 @@ const NAV: { id: Group; label: string; tabs: { id: Tab; label: string }[] }[] = 
     id: 'aia',
     label: 'AIA',
     tabs: [{ id: 'aia', label: '總覽' }],
+  },
+  {
+    id: 'months',
+    label: '月結',
+    tabs: [{ id: 'months', label: '總覽' }],
   },
 ]
 
@@ -101,7 +115,8 @@ function selectGroup(g: (typeof NAV)[number]) {
   </header>
 
   <main>
-    <TradesView v-if="tab === 'trades'" :market="market" />
+    <OverviewView v-if="tab === 'overview'" />
+    <TradesView v-else-if="tab === 'trades'" :market="market" />
     <SummaryView v-else-if="tab === 'summary'" :market="market" />
     <StocksView v-else-if="tab === 'stocks'" :market="market" />
     <DividendsView v-else-if="tab === 'dividends'" :market="market" />
@@ -109,6 +124,7 @@ function selectGroup(g: (typeof NAV)[number]) {
     <MpfView v-else-if="tab === 'mpf'" />
     <BondsView v-else-if="tab === 'bonds'" />
     <AiaView v-else-if="tab === 'aia'" />
+    <MonthStatView v-else-if="tab === 'months'" />
     <DepositHistoryView v-else />
   </main>
 </template>

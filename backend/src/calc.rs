@@ -4,12 +4,15 @@
 //! The formulas deliberately mirror the spreadsheet being replaced, including
 //! 加權平均買入單價 dividing by shares *bought* rather than shares held.
 
-use std::collections::HashMap;
+use std::collections::{BTreeMap, HashMap, HashSet};
 
 use chrono::Datelike;
 use serde::Serialize;
 
-use crate::models::{CouponStatus, InputMode, MpfFigures, TradeType};
+use crate::models::{
+    CouponStatus, InputMode, InterestComponent, MonthItemCategory, MonthSuggestion, MpfFigures,
+    TradeType,
+};
 
 /// Relative tolerance used when comparing money figures.
 pub const TOLERANCE: f64 = 1e-6;
@@ -465,6 +468,8 @@ pub struct DepositInput<'a> {
     pub principal: Option<f64>,
     pub rate: Option<f64>,
     pub interest: Option<f64>,
+    /// When the principal left the bank account; optional.
+    pub start_date: Option<&'a str>,
     pub end_date: &'a str,
 }
 
@@ -477,6 +482,7 @@ pub struct ValidatedDeposit {
     pub principal: Option<f64>,
     pub rate: Option<f64>,
     pub interest: Option<f64>,
+    pub start_date: Option<String>,
     pub end_date: String,
 }
 
@@ -489,6 +495,19 @@ pub fn validate_deposit(input: DepositInput<'_>) -> Result<ValidatedDeposit, Vec
             "end_date",
             "end date must be a calendar date in YYYY-MM-DD form",
         ));
+    }
+
+    let start_date = input
+        .start_date
+        .map(str::trim)
+        .filter(|start_date| !start_date.is_empty());
+    if let Some(start_date) = start_date {
+        if chrono::NaiveDate::parse_from_str(start_date, "%Y-%m-%d").is_err() {
+            errors.push(FieldError::new(
+                "start_date",
+                "start date must be a calendar date in YYYY-MM-DD form",
+            ));
+        }
     }
 
     let label = input.label.map(str::trim).filter(|label| !label.is_empty());
@@ -534,6 +553,7 @@ pub fn validate_deposit(input: DepositInput<'_>) -> Result<ValidatedDeposit, Vec
         principal: input.principal,
         rate: input.rate,
         interest: input.interest,
+        start_date: start_date.map(str::to_string),
         end_date: input.end_date.to_string(),
     })
 }
@@ -1806,6 +1826,742 @@ pub fn validate_aia_event(input: AiaEventInput<'_>) -> Result<ValidatedAiaEvent,
     })
 }
 
+// --- month stat (月結) ---
+
+/// The stored columns of one `month_stats` row that the derivations read.
+/// `total_assets`/`liquid_assets` are the *effective* values — the caller
+/// resolves stored-or-live before calling.
+#[derive(Debug, Clone, Copy)]
+pub struct MonthStatRow {
+    /// The first day of the month.
+    pub month: chrono::NaiveDate,
+    pub start_cash: Option<f64>,
+    pub salary: Option<f64>,
+    pub total_assets: Option<f64>,
+    pub liquid_assets: Option<f64>,
+    /// Hand-frozen H 月尾; wins over the `=F(n+1) − salary` chain.
+    pub end_cash_override: Option<f64>,
+    /// N 利息: the caller resolves `auto_interest + Σ interest items` before
+    /// building the row — nothing is stored.
+    pub interest: f64,
+    pub pool_input: f64,
+}
+
+/// The only item facts the monthly derivations need.
+#[derive(Debug, Clone, Copy)]
+pub struct MonthItemFacts {
+    pub category: MonthItemCategory,
+    pub amount: f64,
+    /// Entertainment items only: also subtract from `living_spend`.
+    pub exclude_from_living: bool,
+}
+
+/// Per-month sums of the five item categories.
+#[derive(Debug, Clone, Copy, Default)]
+pub struct MonthItemSums {
+    pub adjustment: f64,
+    pub extra_spend: f64,
+    pub income: f64,
+    /// O 娛樂支出: Σ entertainment items.
+    pub entertainment: f64,
+    /// Σ entertainment items flagged `exclude_from_living`.
+    pub entertainment_excluded: f64,
+    /// The manual part of N 利息: Σ interest items.
+    pub interest: f64,
+}
+
+pub fn month_item_sums(items: &[MonthItemFacts]) -> MonthItemSums {
+    let mut sums = MonthItemSums::default();
+    for item in items {
+        match item.category {
+            MonthItemCategory::Adjustment => sums.adjustment += item.amount,
+            MonthItemCategory::ExtraSpend => sums.extra_spend += item.amount,
+            MonthItemCategory::Income => sums.income += item.amount,
+            MonthItemCategory::Entertainment => {
+                sums.entertainment += item.amount;
+                if item.exclude_from_living {
+                    sums.entertainment_excluded += item.amount;
+                }
+            }
+            MonthItemCategory::Interest => sums.interest += item.amount,
+        }
+    }
+    sums
+}
+
+/// The figures derived on read for one month row; every field is absent while
+/// its inputs are missing.
+#[derive(Debug, Clone, Copy, PartialEq, Serialize)]
+pub struct MonthDerived {
+    /// H 月尾(出糧前): the stored override, else the next row's start_cash −
+    /// this row's salary.
+    pub end_cash: Option<f64>,
+    /// I 月支出: start_cash + Σadjustment − end_cash.
+    pub month_spend: Option<f64>,
+    /// J 生活支出: month_spend − Σextra_spend − Σ flagged entertainment.
+    pub living_spend: Option<f64>,
+    /// L 存: salary − month_spend + Σincome.
+    pub saved: Option<f64>,
+    /// C Changed: next row's total_assets − this row's.
+    pub total_change: Option<f64>,
+    /// E Changed: next row's liquid_assets − this row's.
+    pub liquid_change: Option<f64>,
+    /// The sheet's K column: `(J − J same month last year) / J` — the YoY
+    /// living-spend change as a share of the current month's spend; absent
+    /// while either side has no 生活支出 or J is zero.
+    pub living_yoy: Option<f64>,
+}
+
+/// Derive every row's computed columns. `rows` must be sorted by month
+/// ascending; `items` maps a month (first day) to its items.
+pub fn month_derived(
+    rows: &[MonthStatRow],
+    items: &HashMap<chrono::NaiveDate, Vec<MonthItemFacts>>,
+) -> Vec<MonthDerived> {
+    let mut derived: Vec<MonthDerived> = rows
+        .iter()
+        .enumerate()
+        .map(|(index, row)| {
+            let next = rows.get(index + 1);
+            let sums = items
+                .get(&row.month)
+                .map(|items| month_item_sums(items))
+                .unwrap_or_default();
+
+            // The sheet's `=F(n+1) − <salary>` subtracts THIS month's salary:
+            // start_cash(n+1) is the post-salary balance, so the month-end
+            // cash is it minus the salary row n itself recorded. A stored
+            // override wins — the chain cannot reproduce hand-frozen cells
+            // (e.g. the first ledger month's typed bank balance).
+            let end_cash = row
+                .end_cash_override
+                .or_else(|| next.and_then(|next| Some(next.start_cash? - row.salary?)));
+            let month_spend = match (row.start_cash, end_cash) {
+                (Some(start_cash), Some(end_cash)) => Some(start_cash + sums.adjustment - end_cash),
+                _ => None,
+            };
+            let living_spend =
+                month_spend.map(|spend| spend - sums.extra_spend - sums.entertainment_excluded);
+            let saved = match (row.salary, month_spend) {
+                (Some(salary), Some(spend)) => Some(salary - spend + sums.income),
+                _ => None,
+            };
+            let total_change = next.and_then(|next| match (next.total_assets, row.total_assets) {
+                (Some(next_total), Some(total)) => Some(next_total - total),
+                _ => None,
+            });
+            let liquid_change =
+                next.and_then(|next| match (next.liquid_assets, row.liquid_assets) {
+                    (Some(next_liquid), Some(liquid)) => Some(next_liquid - liquid),
+                    _ => None,
+                });
+            MonthDerived {
+                end_cash,
+                month_spend,
+                living_spend,
+                saved,
+                total_change,
+                liquid_change,
+                living_yoy: None,
+            }
+        })
+        .collect();
+    // Second pass: the K column needs the same month one year earlier, which
+    // is a date lookup (stored months may skip), not `index - 12`.
+    let by_month: HashMap<chrono::NaiveDate, Option<f64>> = rows
+        .iter()
+        .zip(derived.iter())
+        .map(|(row, d)| (row.month, d.living_spend))
+        .collect();
+    for (row, d) in rows.iter().zip(derived.iter_mut()) {
+        let prior = row
+            .month
+            .checked_sub_months(chrono::Months::new(12))
+            .and_then(|prev| by_month.get(&prev).copied().flatten());
+        d.living_yoy = match (d.living_spend, prior) {
+            (Some(now), Some(prev)) if now != 0.0 => Some((now - prev) / now),
+            _ => None,
+        };
+    }
+    derived
+}
+
+/// The year's pool rate: the exact year's rate, else the latest earlier
+/// year's, else none — the sheet's rate changes at year-end and applies to
+/// that whole year.
+pub fn pool_rate_for_year(rates: &BTreeMap<i32, f64>, year: i32) -> Option<f64> {
+    rates
+        .get(&year)
+        .copied()
+        .or_else(|| rates.range(..year).next_back().map(|(_, rate)| *rate))
+}
+
+/// The 開心Pool closing balance per year, chained:
+/// `balance(y) = balance(y−1) + Σinterest(y) × rate(y) − Σentertainment(y)
+/// + Σpool_input(y)`, base 0. A year with no applicable rate contributes no
+///   pool income but still rolls its entertainment and inputs forward.
+pub fn pool_balances(
+    rows: &[MonthStatRow],
+    items: &HashMap<chrono::NaiveDate, Vec<MonthItemFacts>>,
+    rates: &BTreeMap<i32, f64>,
+) -> BTreeMap<i32, f64> {
+    let mut by_year: BTreeMap<i32, (f64, f64, f64)> = BTreeMap::new();
+    for row in rows {
+        let sums = items
+            .get(&row.month)
+            .map(|items| month_item_sums(items))
+            .unwrap_or_default();
+        let entry = by_year.entry(row.month.year()).or_default();
+        entry.0 += row.interest;
+        entry.1 += sums.entertainment;
+        entry.2 += row.pool_input;
+    }
+    let mut balance = 0.0;
+    let mut balances = BTreeMap::new();
+    for (year, (interest, entertainment, pool_input)) in by_year {
+        let rate = pool_rate_for_year(rates, year).unwrap_or(0.0);
+        balance += interest * rate - entertainment + pool_input;
+        balances.insert(year, balance);
+    }
+    balances
+}
+
+/// One year's aggregate row (the sheet's rows 2–4). Sums and averages are
+/// absent while no month of the year has the underlying figure; the scalar
+/// columns (interest/entertainment/pool_input) always sum.
+#[derive(Debug, Clone, PartialEq, Serialize)]
+pub struct MonthYearSummary {
+    pub year: i32,
+    /// 總數+: Σ total_change.
+    pub total_change_sum: Option<f64>,
+    /// 平均總數.
+    pub total_change_avg: Option<f64>,
+    /// 支出: Σ month_spend.
+    pub spend_sum: Option<f64>,
+    /// 平均支出.
+    pub spend_avg: Option<f64>,
+    /// 生活平均支出.
+    pub living_avg: Option<f64>,
+    /// 娛樂支出: Σ entertainment.
+    pub entertainment_sum: f64,
+    /// 利息回報: Σ interest.
+    pub interest_sum: f64,
+    /// 平均回報: interest_sum ÷ months that carry a value — the sheet's
+    /// `AVERAGE(N…)` skips empty N cells, so a stored row only counts when it
+    /// has a 月初 (`start_cash`) or a nonzero 利息.
+    pub interest_avg: f64,
+    /// 投資純利: interest_sum + the year's HK sold P/L (`'港股'!D32`-style
+    /// figure the app does not compute yet); absent while the year has no
+    /// sold-P/L entry.
+    pub net_investment: Option<f64>,
+    /// Pool income: interest_sum × the year's rate (0 without one).
+    pub pool_income: f64,
+    /// 開心Pool結餘: the year's chained closing balance.
+    pub pool_balance: f64,
+    /// Irene + 開心 Pool: Σ pool_input.
+    pub pool_input_sum: f64,
+    /// Stored months in the year.
+    pub months: usize,
+}
+
+/// Per-year aggregates over `rows` (sorted by month ascending), with the pool
+/// figures priced by `rates` (`overview.pool_rate.<year>`). `hk_sold_pl` maps
+/// a year to its HK sold P/L for 投資純利; years without an entry report none.
+pub fn month_year_summaries(
+    rows: &[MonthStatRow],
+    items: &HashMap<chrono::NaiveDate, Vec<MonthItemFacts>>,
+    rates: &BTreeMap<i32, f64>,
+    hk_sold_pl: &BTreeMap<i32, f64>,
+) -> Vec<MonthYearSummary> {
+    let derived = month_derived(rows, items);
+    let balances = pool_balances(rows, items, rates);
+
+    struct Acc {
+        total_change: Vec<f64>,
+        spend: Vec<f64>,
+        living: Vec<f64>,
+        entertainment: f64,
+        interest: f64,
+        interest_months: usize,
+        pool_input: f64,
+        months: usize,
+    }
+
+    let mut years: BTreeMap<i32, Acc> = BTreeMap::new();
+    for (row, derived) in rows.iter().zip(derived.iter()) {
+        let acc = years.entry(row.month.year()).or_insert_with(|| Acc {
+            total_change: Vec::new(),
+            spend: Vec::new(),
+            living: Vec::new(),
+            entertainment: 0.0,
+            interest: 0.0,
+            interest_months: 0,
+            pool_input: 0.0,
+            months: 0,
+        });
+        acc.months += 1;
+        acc.entertainment += items
+            .get(&row.month)
+            .map(|items| month_item_sums(items).entertainment)
+            .unwrap_or_default();
+        acc.interest += row.interest;
+        if row.start_cash.is_some() || row.interest != 0.0 {
+            acc.interest_months += 1;
+        }
+        acc.pool_input += row.pool_input;
+        if let Some(change) = derived.total_change {
+            acc.total_change.push(change);
+        }
+        if let Some(spend) = derived.month_spend {
+            acc.spend.push(spend);
+        }
+        if let Some(living) = derived.living_spend {
+            acc.living.push(living);
+        }
+    }
+
+    years
+        .into_iter()
+        .map(|(year, acc)| {
+            let sum = |values: &[f64]| (!values.is_empty()).then(|| values.iter().sum::<f64>());
+            let avg = |values: &[f64]| {
+                (!values.is_empty()).then(|| values.iter().sum::<f64>() / values.len() as f64)
+            };
+            let interest_sum = acc.interest;
+            let rate = pool_rate_for_year(rates, year).unwrap_or(0.0);
+            MonthYearSummary {
+                year,
+                total_change_sum: sum(&acc.total_change),
+                total_change_avg: avg(&acc.total_change),
+                spend_sum: sum(&acc.spend),
+                spend_avg: avg(&acc.spend),
+                living_avg: avg(&acc.living),
+                entertainment_sum: acc.entertainment,
+                interest_sum,
+                interest_avg: if acc.interest_months == 0 {
+                    0.0
+                } else {
+                    interest_sum / acc.interest_months as f64
+                },
+                net_investment: hk_sold_pl.get(&year).map(|sold_pl| interest_sum + sold_pl),
+                pool_income: interest_sum * rate,
+                pool_balance: balances.get(&year).copied().unwrap_or(0.0),
+                pool_input_sum: acc.pool_input,
+                months: acc.months,
+            }
+        })
+        .collect()
+}
+
+/// The sheet's row-8 running averages over every stored month.
+#[derive(Debug, Clone, Copy, PartialEq, Serialize)]
+pub struct MonthRunningAverages {
+    /// AVERAGE of total_change over months that have it.
+    pub total_change_avg: Option<f64>,
+    /// AVERAGE of liquid_change (流動資產 Changed) over months that have it.
+    pub liquid_change_avg: Option<f64>,
+    /// AVERAGE of 存 over months that have it.
+    pub saved_avg: Option<f64>,
+    /// AVERAGE of 利息 over months that carry a value — same rule as the
+    /// yearly `interest_avg` (non-NULL `start_cash` or nonzero interest).
+    pub interest_avg: Option<f64>,
+}
+
+pub fn month_running_averages(
+    rows: &[MonthStatRow],
+    items: &HashMap<chrono::NaiveDate, Vec<MonthItemFacts>>,
+) -> MonthRunningAverages {
+    let derived = month_derived(rows, items);
+    let avg = |values: Vec<f64>| {
+        (!values.is_empty()).then(|| values.iter().sum::<f64>() / values.len() as f64)
+    };
+    MonthRunningAverages {
+        total_change_avg: avg(derived.iter().filter_map(|d| d.total_change).collect()),
+        liquid_change_avg: avg(derived.iter().filter_map(|d| d.liquid_change).collect()),
+        saved_avg: avg(derived.iter().filter_map(|d| d.saved).collect()),
+        interest_avg: avg(rows
+            .iter()
+            .filter(|row| row.start_cash.is_some() || row.interest != 0.0)
+            .map(|row| row.interest)
+            .collect()),
+    }
+}
+
+/// `Overview!F3:G10` (+`H6`) — trailing averages over the 12 most recent
+/// completed month rows (`month < current_month`), per column skipping months
+/// with no value, matching the sheet's hand-anchored OFFSET window.
+#[derive(Debug, Clone, Default)]
+pub struct TrailingAverages {
+    /// G4 總數增加 (C Changed).
+    pub total_change: Option<f64>,
+    /// G5 支出 (I 月支出).
+    pub month_spend: Option<f64>,
+    /// G6 生活支出 (J).
+    pub living_spend: Option<f64>,
+    /// G7 存 (L).
+    pub saved: Option<f64>,
+    /// G8 利息 (N).
+    pub interest: Option<f64>,
+    /// H6 生活預算 = ROUNDUP(living_spend × 1.05, −2) — away from zero to the
+    /// nearest 100. Absent while the window has no living-spend values.
+    pub living_budget: Option<f64>,
+    /// Window bounds: the earliest and latest month rows in the window.
+    pub window_start: Option<chrono::NaiveDate>,
+    pub window_end: Option<chrono::NaiveDate>,
+}
+
+pub fn trailing_averages(
+    rows: &[MonthStatRow],
+    items: &HashMap<chrono::NaiveDate, Vec<MonthItemFacts>>,
+    current_month: chrono::NaiveDate,
+) -> TrailingAverages {
+    // Derive over the full row set first so Changed/end_cash see the next row.
+    let derived = month_derived(rows, items);
+    let mut window: Vec<(&MonthStatRow, &MonthDerived)> = rows
+        .iter()
+        .zip(&derived)
+        .filter(|(row, _)| row.month < current_month)
+        .collect();
+    window.sort_by(|a, b| b.0.month.cmp(&a.0.month));
+    window.truncate(12);
+
+    let avg = |values: Vec<f64>| {
+        (!values.is_empty()).then(|| values.iter().sum::<f64>() / values.len() as f64)
+    };
+    let living_spend = avg(window
+        .iter()
+        .filter_map(|(_, derived)| derived.living_spend)
+        .collect());
+    TrailingAverages {
+        total_change: avg(window
+            .iter()
+            .filter_map(|(_, derived)| derived.total_change)
+            .collect()),
+        month_spend: avg(window
+            .iter()
+            .filter_map(|(_, derived)| derived.month_spend)
+            .collect()),
+        living_spend,
+        saved: avg(window
+            .iter()
+            .filter_map(|(_, derived)| derived.saved)
+            .collect()),
+        interest: avg(window
+            .iter()
+            .filter(|(row, _)| row.start_cash.is_some() || row.interest != 0.0)
+            .map(|(row, _)| row.interest)
+            .collect()),
+        living_budget: living_spend.map(|avg| (avg * 1.05 / 100.0).ceil() * 100.0),
+        window_start: window.last().map(|(row, _)| row.month),
+        window_end: window.first().map(|(row, _)| row.month),
+    }
+}
+
+/// The components of `Overview!B1`/`H1`, already resolved by the caller.
+#[derive(Debug, Clone, Copy)]
+pub struct LiveTotalsInput {
+    /// 港股 market value.
+    pub hk_market_value: f64,
+    /// 美股 market value in USD.
+    pub us_market_value: f64,
+    /// USD→HKD rate (`aia.usd_hkd_rate`); rate-dependent terms drop out when absent.
+    pub usd_hkd_rate: Option<f64>,
+    /// 定期!B1: Σ principal over active deposits.
+    pub deposits_active_principal: f64,
+    /// 債券!B1: Σ principal over active bonds.
+    pub bonds_active_principal: f64,
+    /// AIA 總 value in USD (non-excluded rows).
+    pub aia_value_usd: f64,
+    /// MPF 總結存.
+    pub mpf_balance: f64,
+    /// Σ manual_assets where kind = 'asset'.
+    pub manual_assets_sum: f64,
+    /// Σ manual_assets where kind = 'cash'.
+    pub cash_sum: f64,
+    /// 美股!B4/B5: the IBKR account's cash positions, part of Overview!B9.
+    pub ibkr_hkd_cash: f64,
+    pub ibkr_usd_cash: f64,
+    /// Current 開心Pool balance.
+    pub pool_balance: f64,
+}
+
+/// `Overview!B1` (總數) and `H1` (流動資產) computed inside the backend.
+#[derive(Debug, Clone, Copy, PartialEq, Serialize)]
+pub struct LiveTotals {
+    pub total_assets: f64,
+    pub liquid_assets: f64,
+}
+
+pub fn live_totals(input: &LiveTotalsInput) -> LiveTotals {
+    // The US side is the sheet's 美股!B7 (Overview!B9): stocks plus the IBKR
+    // account's own cash positions, with the HKD part needing no rate.
+    let us_hkd = input
+        .usd_hkd_rate
+        .map(|rate| (input.us_market_value + input.ibkr_usd_cash) * rate);
+    let aia_hkd = input.usd_hkd_rate.map(|rate| input.aia_value_usd * rate);
+    LiveTotals {
+        total_assets: input.hk_market_value
+            + us_hkd.unwrap_or(0.0)
+            + input.ibkr_hkd_cash
+            + input.deposits_active_principal
+            + input.bonds_active_principal
+            + aia_hkd.unwrap_or(0.0)
+            + input.mpf_balance
+            + input.manual_assets_sum
+            + input.cash_sum,
+        liquid_assets: input.hk_market_value
+            + input.deposits_active_principal
+            + input.cash_sum
+            + input.bonds_active_principal
+            + us_hkd.unwrap_or(0.0)
+            + input.ibkr_hkd_cash
+            - input.pool_balance,
+    }
+}
+
+/// A deposit as a suggestion source: 定期 start/end events.
+#[derive(Debug, Clone)]
+pub struct SuggestionDeposit {
+    pub id: i64,
+    pub start_date: Option<chrono::NaiveDate>,
+    pub end_date: chrono::NaiveDate,
+    pub principal: f64,
+    pub interest: f64,
+    pub label: Option<String>,
+    /// 收訖: the user confirmed the principal + interest came back. Interest
+    /// counts in the end month only once received.
+    pub received: bool,
+}
+
+/// An HK trade as a suggestion source (US trades settle inside IBKR and stay
+/// manual items).
+#[derive(Debug, Clone)]
+pub struct SuggestionTrade {
+    pub id: i64,
+    pub date: chrono::NaiveDate,
+    pub kind: TradeType,
+    pub total: f64,
+    pub code: String,
+}
+
+/// A received dividend or bond coupon as a suggestion source.
+#[derive(Debug, Clone)]
+pub struct SuggestionReceipt {
+    pub id: i64,
+    pub pay_date: chrono::NaiveDate,
+    /// `received_amount` once received, else the expected/estimated figure;
+    /// None while nothing is known (待定 coupon, estimate-less dividend).
+    pub amount: Option<f64>,
+    /// Stock code or bond label.
+    pub label: String,
+    /// Whether the payment was 收訖 — pending receipts preview in the 利息
+    /// breakdown but never count and never become suggestions.
+    pub received: bool,
+}
+
+/// A recorded AIA premium payment as a suggestion source.
+#[derive(Debug, Clone)]
+pub struct SuggestionAiaPayment {
+    pub id: i64,
+    pub date: chrono::NaiveDate,
+    pub amount_usd: f64,
+    pub policy: String,
+}
+
+/// Every dated event the suggestion builder reads, plus the month's own
+/// pool_input and the USD→HKD rate.
+#[derive(Debug, Default)]
+pub struct SuggestionEvents {
+    pub deposits: Vec<SuggestionDeposit>,
+    pub trades: Vec<SuggestionTrade>,
+    pub dividends: Vec<SuggestionReceipt>,
+    pub coupons: Vec<SuggestionReceipt>,
+    pub aia_payments: Vec<SuggestionAiaPayment>,
+    /// The month row's own pool_input.
+    pub pool_input: f64,
+    pub usd_hkd_rate: Option<f64>,
+}
+
+fn parse_month(month: &str) -> Option<chrono::NaiveDate> {
+    chrono::NaiveDate::parse_from_str(month, "%Y-%m-%d").ok()
+}
+
+fn in_month(date: chrono::NaiveDate, month: chrono::NaiveDate) -> bool {
+    date.year() == month.year() && date.month() == month.month()
+}
+
+/// Suggestions exist only for the current month and later: imported history
+/// already carries its 調整 as single items, so suggesting auto items there
+/// would double-count.
+pub fn suggestions_enabled(month: &str, today: chrono::NaiveDate) -> bool {
+    match parse_month(month) {
+        Some(month) => month >= first_of_month(today),
+        None => false,
+    }
+}
+
+/// The candidate items for one month, minus keys already stored or dismissed.
+/// `month` is 'YYYY-MM-01'.
+pub fn build_suggestions(
+    month: &str,
+    events: &SuggestionEvents,
+    stored_keys: &HashSet<String>,
+    dismissed_keys: &HashSet<String>,
+) -> Vec<MonthSuggestion> {
+    let Some(month) = parse_month(month) else {
+        return Vec::new();
+    };
+    let mut suggestions = Vec::new();
+
+    for deposit in &events.deposits {
+        if let Some(start_date) = deposit.start_date {
+            if in_month(start_date, month) {
+                suggestions.push(MonthSuggestion {
+                    auto_key: format!("dep-start:{}", deposit.id),
+                    category: MonthItemCategory::Adjustment,
+                    label: deposit.label.clone(),
+                    amount: -deposit.principal,
+                    source: "deposit".to_string(),
+                });
+            }
+        }
+        if in_month(deposit.end_date, month) {
+            suggestions.push(MonthSuggestion {
+                auto_key: format!("dep-end:{}", deposit.id),
+                category: MonthItemCategory::Adjustment,
+                label: deposit.label.clone(),
+                amount: deposit.principal + deposit.interest,
+                source: "deposit".to_string(),
+            });
+        }
+    }
+
+    for trade in &events.trades {
+        if in_month(trade.date, month) {
+            suggestions.push(MonthSuggestion {
+                auto_key: format!("trade:{}", trade.id),
+                category: MonthItemCategory::Adjustment,
+                label: Some(format!("{} {}", trade.code, trade.kind.as_str())),
+                amount: match trade.kind {
+                    TradeType::Buy => -trade.total,
+                    TradeType::Sell => trade.total,
+                },
+                source: "trade".to_string(),
+            });
+        }
+    }
+
+    for dividend in &events.dividends {
+        if in_month(dividend.pay_date, month) && dividend.received {
+            suggestions.push(MonthSuggestion {
+                auto_key: format!("div:{}", dividend.id),
+                category: MonthItemCategory::Adjustment,
+                label: Some(dividend.label.clone()),
+                amount: dividend.amount.unwrap_or(0.0),
+                source: "dividend".to_string(),
+            });
+        }
+    }
+
+    for coupon in &events.coupons {
+        if in_month(coupon.pay_date, month) && coupon.received {
+            suggestions.push(MonthSuggestion {
+                auto_key: format!("coupon:{}", coupon.id),
+                category: MonthItemCategory::Adjustment,
+                label: Some(coupon.label.clone()),
+                amount: coupon.amount.unwrap_or(0.0),
+                source: "coupon".to_string(),
+            });
+        }
+    }
+
+    for payment in &events.aia_payments {
+        if in_month(payment.date, month) {
+            if let Some(rate) = events.usd_hkd_rate {
+                suggestions.push(MonthSuggestion {
+                    auto_key: format!("aia-pay:{}", payment.id),
+                    category: MonthItemCategory::ExtraSpend,
+                    label: Some(payment.policy.clone()),
+                    amount: payment.amount_usd * rate,
+                    source: "aia".to_string(),
+                });
+            }
+        }
+    }
+
+    if events.pool_input > 0.0 {
+        suggestions.push(MonthSuggestion {
+            auto_key: "pool-input".to_string(),
+            category: MonthItemCategory::Adjustment,
+            label: Some("Irene + 開心 Pool".to_string()),
+            amount: -events.pool_input,
+            source: "pool".to_string(),
+        });
+    }
+
+    suggestions
+        .into_iter()
+        .filter(|suggestion| {
+            !stored_keys.contains(&suggestion.auto_key)
+                && !dismissed_keys.contains(&suggestion.auto_key)
+        })
+        .collect()
+}
+
+/// The auto 利息 components of a month: every deposit whose `end_date` falls
+/// in the month, every coupon paid in the month, and every HK dividend paid
+/// in the month. Unreceived entries carry `received: false` and preview with
+/// their expected/estimated amount (None when unknown); only received ones
+/// count via `auto_interest`. Bank 活期 interest has no source — it stays
+/// manual as `interest` items on top.
+pub fn interest_components(month: &str, events: &SuggestionEvents) -> Vec<InterestComponent> {
+    let Some(month) = parse_month(month) else {
+        return Vec::new();
+    };
+    let mut components = Vec::new();
+    for deposit in &events.deposits {
+        if in_month(deposit.end_date, month) && deposit.interest != 0.0 {
+            components.push(InterestComponent {
+                source: "deposit".to_string(),
+                label: deposit.label.clone(),
+                amount: Some(deposit.interest),
+                received: deposit.received,
+            });
+        }
+    }
+    for coupon in &events.coupons {
+        if in_month(coupon.pay_date, month) {
+            components.push(InterestComponent {
+                source: "coupon".to_string(),
+                label: Some(coupon.label.clone()),
+                amount: coupon.amount,
+                received: coupon.received,
+            });
+        }
+    }
+    for dividend in &events.dividends {
+        if in_month(dividend.pay_date, month) {
+            components.push(InterestComponent {
+                source: "dividend".to_string(),
+                label: Some(dividend.label.clone()),
+                amount: dividend.amount,
+                received: dividend.received,
+            });
+        }
+    }
+    components
+}
+
+/// Σ `interest_components` where `received` — the auto part of a month's 利息.
+/// Unreceived events preview in the breakdown but do not count.
+pub fn auto_interest(month: chrono::NaiveDate, events: &SuggestionEvents) -> f64 {
+    interest_components(&month.to_string(), events)
+        .iter()
+        .filter(|component| component.received)
+        .map(|component| component.amount.unwrap_or(0.0))
+        .sum()
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -2157,6 +2913,7 @@ mod tests {
             principal: Some(110000.0),
             rate: Some(0.028),
             interest: Some(993.0),
+            start_date: None,
             end_date: "2026-10-12",
         }
     }
@@ -2196,6 +2953,7 @@ mod tests {
             principal: None,
             rate: None,
             interest: Some(539.25),
+            start_date: None,
             end_date: "2026-05-14",
         };
         assert!(validate_deposit(interest_only).is_ok());
@@ -2206,6 +2964,7 @@ mod tests {
             principal: None,
             rate: None,
             interest: Some(0.0),
+            start_date: None,
             end_date: "2026-06-30",
         };
         assert!(validate_deposit(label_only).is_ok());
@@ -2229,6 +2988,7 @@ mod tests {
             principal: None,
             rate: None,
             interest: None,
+            start_date: None,
             end_date: "2026-10-12",
         })
         .expect_err("must fail");
@@ -3175,5 +3935,708 @@ mod tests {
             next_pay_date: None,
         })
         .is_err());
+    }
+
+    // --- month stat (月結) ---
+
+    fn month_row(month: &str, start_cash: Option<f64>, salary: Option<f64>) -> MonthStatRow {
+        MonthStatRow {
+            month: chrono::NaiveDate::parse_from_str(month, "%Y-%m-%d").expect("month"),
+            start_cash,
+            salary,
+            total_assets: None,
+            liquid_assets: None,
+            end_cash_override: None,
+            interest: 0.0,
+            pool_input: 0.0,
+        }
+    }
+
+    fn item(category: MonthItemCategory, amount: f64) -> MonthItemFacts {
+        MonthItemFacts {
+            category,
+            amount,
+            exclude_from_living: false,
+        }
+    }
+
+    fn ym(month: &str) -> chrono::NaiveDate {
+        chrono::NaiveDate::parse_from_str(month, "%Y-%m-%d").expect("month")
+    }
+
+    #[test]
+    fn validate_deposit_start_date() {
+        let base = DepositInput {
+            label: Some("SC-9632"),
+            bank: None,
+            principal: Some(110000.0),
+            rate: Some(0.028),
+            interest: Some(993.0),
+            start_date: None,
+            end_date: "2026-10-12",
+        };
+        assert_eq!(
+            validate_deposit(base.clone()).expect("valid").start_date,
+            None
+        );
+        // A blank string counts as absent.
+        assert_eq!(
+            validate_deposit(DepositInput {
+                start_date: Some("  "),
+                ..base.clone()
+            })
+            .expect("blank start date")
+            .start_date,
+            None
+        );
+        assert_eq!(
+            validate_deposit(DepositInput {
+                start_date: Some("2026-06-17"),
+                ..base.clone()
+            })
+            .expect("valid start date")
+            .start_date
+            .as_deref(),
+            Some("2026-06-17")
+        );
+        let errors = validate_deposit(DepositInput {
+            start_date: Some("12/10/2026"),
+            ..base
+        })
+        .expect_err("malformed start date");
+        assert!(errors.iter().any(|error| error.field == "start_date"));
+    }
+
+    #[test]
+    fn month_spend_falls_out_of_the_balance_difference() {
+        // Spec scenario: September 30000 start +8009.3 adjustment; October
+        // start 32000 salary 52700 → 月尾 −20700, 月支出 58709.3.
+        let rows = [
+            month_row("2026-09-01", Some(30000.0), Some(52700.0)),
+            month_row("2026-10-01", Some(32000.0), Some(52700.0)),
+        ];
+        let mut items = HashMap::new();
+        items.insert(
+            ym("2026-09-01"),
+            vec![item(MonthItemCategory::Adjustment, 8009.3)],
+        );
+        let derived = month_derived(&rows, &items);
+        assert!(approx_eq(derived[0].end_cash.unwrap(), -20700.0));
+        assert!(
+            approx_eq(derived[0].month_spend.unwrap(), 58709.3),
+            "month_spend = {:?}",
+            derived[0].month_spend
+        );
+        assert!(approx_eq(derived[0].living_spend.unwrap(), 58709.3));
+        assert!(approx_eq(derived[0].saved.unwrap(), -6009.3));
+    }
+
+    #[test]
+    fn latest_month_has_no_month_end() {
+        let rows = [month_row("2026-10-01", Some(32000.0), Some(52700.0))];
+        let derived = month_derived(&rows, &HashMap::new());
+        assert_eq!(derived[0].end_cash, None);
+        assert_eq!(derived[0].month_spend, None);
+        assert_eq!(derived[0].living_spend, None);
+        assert_eq!(derived[0].saved, None);
+    }
+
+    #[test]
+    fn end_cash_uses_the_rows_own_salary() {
+        // The sheet's `=F(n+1) − salary` subtracts the row's own salary: with
+        // an April raise the March H literal still uses the March figure.
+        let rows = [
+            month_row("2026-09-01", Some(30000.0), Some(45500.0)),
+            month_row("2026-10-01", Some(32000.0), Some(52700.0)),
+        ];
+        let derived = month_derived(&rows, &HashMap::new());
+        assert!(approx_eq(derived[0].end_cash.unwrap(), -13500.0));
+        // And end_cash is absent while the next row lacks start_cash or this
+        // row lacks a salary.
+        let rows = [
+            month_row("2026-09-01", Some(30000.0), Some(45500.0)),
+            month_row("2026-10-01", None, Some(52700.0)),
+        ];
+        assert_eq!(month_derived(&rows, &HashMap::new())[0].end_cash, None);
+        let rows = [
+            month_row("2026-09-01", Some(30000.0), None),
+            month_row("2026-10-01", Some(32000.0), Some(52700.0)),
+        ];
+        assert_eq!(month_derived(&rows, &HashMap::new())[0].end_cash, None);
+    }
+
+    #[test]
+    fn end_cash_override_wins_over_the_chain() {
+        // 2023-12: the sheet's first row typed the real bank balance
+        // (24610.32) because no next-row 月初 convention existed yet.
+        let rows = [
+            MonthStatRow {
+                end_cash_override: Some(24610.32),
+                ..month_row("2023-12-01", Some(64925.18), Some(45500.0))
+            },
+            month_row("2024-01-01", Some(26391.71), Some(45500.0)),
+        ];
+        let mut items = HashMap::new();
+        items.insert(
+            ym("2023-12-01"),
+            vec![item(MonthItemCategory::Adjustment, -25508.47)],
+        );
+        let derived = month_derived(&rows, &items);
+        assert!(approx_eq(derived[0].end_cash.unwrap(), 24610.32));
+        assert!(approx_eq(derived[0].month_spend.unwrap(), 14806.39));
+        assert!(approx_eq(derived[0].saved.unwrap(), 30693.61));
+    }
+
+    #[test]
+    fn in_out_adjustment_pair_leaves_month_spend_unchanged() {
+        // Spec scenario: start_cash 30000 with −50000 定期 start and +55000
+        // 定期 end, next row start 62700 salary 52700 → end_cash 10000 and
+        // 月支出 25000 — the deposit flows moved the balance, not the spend.
+        let rows = [
+            month_row("2026-09-01", Some(30000.0), Some(52700.0)),
+            month_row("2026-10-01", Some(62700.0), Some(52700.0)),
+        ];
+        let mut items = HashMap::new();
+        items.insert(
+            ym("2026-09-01"),
+            vec![
+                item(MonthItemCategory::Adjustment, -50000.0),
+                item(MonthItemCategory::Adjustment, 55000.0),
+            ],
+        );
+        let derived = month_derived(&rows, &items)[0];
+        assert!(approx_eq(derived.end_cash.unwrap(), 10000.0));
+        assert!(approx_eq(derived.month_spend.unwrap(), 25000.0));
+    }
+
+    #[test]
+    fn extra_spend_lowers_only_living_spend() {
+        let rows = [
+            month_row("2026-09-01", Some(30000.0), Some(52700.0)),
+            month_row("2026-10-01", Some(57700.0), Some(52700.0)),
+        ];
+        let mut items = HashMap::new();
+        items.insert(
+            ym("2026-09-01"),
+            vec![item(MonthItemCategory::ExtraSpend, 12000.0)],
+        );
+        let derived = month_derived(&rows, &items)[0];
+        assert!(approx_eq(derived.month_spend.unwrap(), 25000.0));
+        assert!(approx_eq(derived.living_spend.unwrap(), 13000.0));
+        assert!(approx_eq(derived.saved.unwrap(), 27700.0));
+    }
+
+    #[test]
+    fn living_yoy_compares_the_same_month_last_year() {
+        // The sheet's K cell: `=(J − J a year earlier) / J`.
+        // 2025-08 living 42700, 2026-08 living 47700 → (47700−42700)/47700.
+        let rows = [
+            month_row("2025-08-01", Some(30000.0), Some(52700.0)),
+            month_row("2025-09-01", Some(40000.0), Some(52700.0)),
+            month_row("2026-08-01", Some(35000.0), Some(52700.0)),
+            month_row("2026-09-01", Some(40000.0), Some(52700.0)),
+        ];
+        let derived = month_derived(&rows, &HashMap::new());
+        assert_eq!(derived[0].living_yoy, None);
+        assert!(approx_eq(
+            derived[2].living_yoy.unwrap(),
+            (47700.0 - 42700.0) / 47700.0
+        ));
+        // A gap (2025-08 missing entirely) leaves the figure absent — the
+        // lookup is by date, not by position.
+        let sparse = [
+            month_row("2026-08-01", Some(35000.0), Some(52700.0)),
+            month_row("2026-09-01", Some(40000.0), Some(52700.0)),
+        ];
+        assert_eq!(month_derived(&sparse, &HashMap::new())[0].living_yoy, None);
+    }
+
+    #[test]
+    fn flagged_entertainment_also_leaves_living_spend() {
+        // Spec scenario: spend 25000, extra_spend 12000, entertainment items
+        // 500 + 4700 (flagged) + 75 → 生活支出 8300, 娛樂支出 5275.
+        let rows = [
+            month_row("2026-09-01", Some(30000.0), Some(52700.0)),
+            month_row("2026-10-01", Some(57700.0), Some(52700.0)),
+        ];
+        let mut items = HashMap::new();
+        items.insert(
+            ym("2026-09-01"),
+            vec![
+                item(MonthItemCategory::ExtraSpend, 12000.0),
+                item(MonthItemCategory::Entertainment, 500.0),
+                MonthItemFacts {
+                    category: MonthItemCategory::Entertainment,
+                    amount: 4700.0,
+                    exclude_from_living: true,
+                },
+                item(MonthItemCategory::Entertainment, 75.0),
+            ],
+        );
+        let derived = month_derived(&rows, &items)[0];
+        assert!(approx_eq(derived.month_spend.unwrap(), 25000.0));
+        assert!(approx_eq(derived.living_spend.unwrap(), 8300.0));
+        let sums = month_item_sums(&items[&ym("2026-09-01")]);
+        assert!(approx_eq(sums.entertainment, 5275.0));
+        assert!(approx_eq(sums.entertainment_excluded, 4700.0));
+    }
+
+    #[test]
+    fn income_raises_saved() {
+        let rows = [
+            month_row("2026-09-01", Some(30000.0), Some(52700.0)),
+            month_row("2026-10-01", Some(57700.0), Some(52700.0)),
+        ];
+        let mut items = HashMap::new();
+        items.insert(
+            ym("2026-09-01"),
+            vec![item(MonthItemCategory::Income, 20000.0)],
+        );
+        let derived = month_derived(&rows, &items)[0];
+        assert!(approx_eq(derived.month_spend.unwrap(), 25000.0));
+        assert!(approx_eq(derived.saved.unwrap(), 47700.0));
+    }
+
+    #[test]
+    fn changes_diff_against_the_next_row() {
+        let mut rows = [
+            month_row("2026-09-01", Some(30000.0), Some(52700.0)),
+            month_row("2026-10-01", Some(32000.0), Some(52700.0)),
+        ];
+        rows[0].total_assets = Some(1_000_000.0);
+        rows[0].liquid_assets = Some(500_000.0);
+        rows[1].total_assets = Some(1_050_000.0);
+        rows[1].liquid_assets = Some(490_000.0);
+        let derived = month_derived(&rows, &HashMap::new());
+        assert!(approx_eq(derived[0].total_change.unwrap(), 50_000.0));
+        assert!(approx_eq(derived[0].liquid_change.unwrap(), -10_000.0));
+        // The latest row has nothing to diff against, and a missing total on
+        // either side leaves the change absent.
+        assert_eq!(derived[1].total_change, None);
+        rows[1].liquid_assets = None;
+        assert_eq!(month_derived(&rows, &HashMap::new())[0].liquid_change, None);
+    }
+
+    #[test]
+    fn year_summary_aggregates_and_prices_the_pool() {
+        let mut rows = vec![
+            month_row("2025-11-01", Some(1.0), Some(1.0)),
+            month_row("2025-12-01", Some(1.0), Some(1.0)),
+            month_row("2026-01-01", Some(1.0), Some(1.0)),
+            month_row("2026-02-01", Some(1.0), Some(1.0)),
+        ];
+        rows[2].interest = 1000.0;
+        rows[3].interest = 500.0;
+        rows[3].pool_input = 300.0;
+        // 2026-01: start 1 + adj 0 − (1−1) = spend 1; total_change needs totals.
+        for (index, row) in rows.iter_mut().enumerate() {
+            row.total_assets = Some(100.0 * (index + 1) as f64);
+        }
+        let mut items = HashMap::new();
+        items.insert(
+            ym("2026-01-01"),
+            vec![item(MonthItemCategory::Entertainment, 200.0)],
+        );
+        let rates = BTreeMap::from([(2025, 0.425), (2026, 0.337)]);
+        let sold_pl = BTreeMap::from([(2026, 24124.13)]);
+        let summaries = month_year_summaries(&rows, &items, &rates, &sold_pl);
+        let y2026 = summaries.iter().find(|s| s.year == 2026).unwrap();
+        assert_eq!(y2026.months, 2);
+        assert!(approx_eq(y2026.interest_sum, 1500.0));
+        assert!(approx_eq(y2026.interest_avg, 750.0));
+        assert!(approx_eq(y2026.entertainment_sum, 200.0));
+        assert!(approx_eq(y2026.pool_input_sum, 300.0));
+        assert!(approx_eq(y2026.pool_income, 1500.0 * 0.337));
+        // 投資純利 = interest_sum + the year's HK sold P/L; absent without one.
+        assert!(approx_eq(y2026.net_investment.unwrap(), 1500.0 + 24124.13));
+        assert_eq!(
+            summaries
+                .iter()
+                .find(|s| s.year == 2025)
+                .unwrap()
+                .net_investment,
+            None
+        );
+        // 2025 contributed no interest, so 2026 closes at
+        // 0 + 1500×0.337 − 200 + 300.
+        assert!(approx_eq(y2026.pool_balance, 605.5));
+        // Only January has a next row, so only it reports a spend.
+        assert!(approx_eq(y2026.spend_sum.unwrap(), 1.0));
+    }
+
+    #[test]
+    fn running_averages_cover_every_month_with_a_value() {
+        let mut rows = [
+            month_row("2026-08-01", Some(1.0), Some(1.0)),
+            month_row("2026-09-01", Some(1.0), Some(1.0)),
+            month_row("2026-10-01", Some(1.0), Some(1.0)),
+        ];
+        for (index, row) in rows.iter_mut().enumerate() {
+            row.total_assets = Some((index * 100) as f64);
+            row.interest = 10.0 * (index + 1) as f64;
+        }
+        let averages = month_running_averages(&rows, &HashMap::new());
+        // total_change exists on the first two rows: 100 and 100.
+        assert!(approx_eq(averages.total_change_avg.unwrap(), 100.0));
+        // saved exists on the first two rows: 1 − 1 = 0 each.
+        assert!(approx_eq(averages.saved_avg.unwrap(), 0.0));
+        // interest averages over all three rows: (10+20+30)/3.
+        assert!(approx_eq(averages.interest_avg.unwrap(), 20.0));
+        assert_eq!(
+            month_running_averages(&[], &HashMap::new()).interest_avg,
+            None
+        );
+    }
+
+    #[test]
+    fn trailing_averages_cover_the_twelve_completed_months() {
+        // 16 rows 2025-07..2026-10; current month 2026-09 → the window is the
+        // latest 12 rows before it: 2025-09..2026-08 (indexes 2..=13).
+        let months = [
+            "2025-07-01",
+            "2025-08-01",
+            "2025-09-01",
+            "2025-10-01",
+            "2025-11-01",
+            "2025-12-01",
+            "2026-01-01",
+            "2026-02-01",
+            "2026-03-01",
+            "2026-04-01",
+            "2026-05-01",
+            "2026-06-01",
+            "2026-07-01",
+            "2026-08-01",
+            "2026-09-01",
+            "2026-10-01",
+        ];
+        let rows: Vec<MonthStatRow> = months
+            .iter()
+            .enumerate()
+            .map(|(index, month)| {
+                let mut row = month_row(month, Some(1000.0 + index as f64), Some(100.0));
+                row.total_assets = Some((index as f64 + 1.0) * 100.0);
+                row.interest = (index + 1) as f64;
+                row
+            })
+            .collect();
+
+        let averages = trailing_averages(&rows, &HashMap::new(), ym("2026-09-01"));
+        assert_eq!(averages.window_start, Some(ym("2025-09-01")));
+        assert_eq!(averages.window_end, Some(ym("2026-08-01")));
+        // Interest (index+1) over rows 2..=13: (3 + … + 14) / 12 = 8.5 — a
+        // shifted window would give a different mean.
+        assert!(approx_eq(averages.interest.unwrap(), 8.5));
+        // spend = start + 0 − (next_start − salary) = 99 each; saved = 1.
+        assert!(approx_eq(averages.month_spend.unwrap(), 99.0));
+        assert!(approx_eq(averages.saved.unwrap(), 1.0));
+        assert!(approx_eq(averages.total_change.unwrap(), 100.0));
+        // ROUNDUP(99 × 1.05, −2) = ROUNDUP(103.95, −2) = 200.
+        assert_eq!(averages.living_budget, Some(200.0));
+    }
+
+    #[test]
+    fn trailing_averages_skip_months_with_no_values() {
+        let rows = vec![
+            month_row("2026-08-01", None, None),
+            month_row("2026-09-01", Some(1000.0), Some(100.0)),
+            // The current month is excluded even though it has data.
+            month_row("2026-10-01", Some(1100.0), Some(100.0)),
+        ];
+        let averages = trailing_averages(&rows, &HashMap::new(), ym("2026-10-01"));
+        // Only Sep carries a spend: 1000 − (1100 − 100) = 0, averaged over 1.
+        assert!(approx_eq(averages.month_spend.unwrap(), 0.0));
+        // Interest averages only over rows with data (Sep + Oct excluded by
+        // window → Sep alone).
+        assert_eq!(averages.interest, Some(0.0));
+        assert_eq!(averages.window_start, Some(ym("2026-08-01")));
+        assert_eq!(averages.window_end, Some(ym("2026-09-01")));
+
+        // No completed rows at all → every figure absent.
+        let empty = trailing_averages(&[], &HashMap::new(), ym("2026-10-01"));
+        assert_eq!(empty.month_spend, None);
+        assert_eq!(empty.living_budget, None);
+        assert_eq!(empty.window_start, None);
+    }
+
+    #[test]
+    fn pool_rate_falls_back_to_the_latest_earlier_year() {
+        let rates = BTreeMap::from([(2024, 0.53), (2026, 0.337)]);
+        assert_eq!(pool_rate_for_year(&rates, 2026), Some(0.337));
+        assert_eq!(pool_rate_for_year(&rates, 2025), Some(0.53));
+        assert_eq!(pool_rate_for_year(&rates, 2023), None);
+    }
+
+    #[test]
+    fn pool_balance_chains_and_zero_rate_gives_no_pool_income() {
+        let mut rows = vec![
+            month_row("2025-12-01", Some(1.0), Some(1.0)),
+            month_row("2026-01-01", Some(1.0), Some(1.0)),
+        ];
+        rows[0].interest = 1000.0;
+        rows[1].interest = 2000.0;
+        rows[1].pool_input = 50.0;
+        let mut items = HashMap::new();
+        items.insert(
+            ym("2025-12-01"),
+            vec![item(MonthItemCategory::Entertainment, 100.0)],
+        );
+        let rates = BTreeMap::from([(2026, 0.5)]);
+        let balances = pool_balances(&rows, &items, &rates);
+        // 2025 has no rate: 0 + 0 − 100 + 0 = −100. 2026: −100 + 1000 − 0 + 50.
+        assert!(approx_eq(balances[&2025], -100.0));
+        assert!(approx_eq(balances[&2026], 950.0));
+        // Spec scenario: 2025 closed 5717.57; 2026 interest 62033.15,
+        // entertainment 8593, pool input 4142.66 at 0.337 → ≈ 22172.4.
+        let mut rows = vec![
+            month_row("2025-06-01", Some(1.0), Some(1.0)),
+            month_row("2026-06-01", Some(1.0), Some(1.0)),
+        ];
+        rows[0].interest = 5717.57 / 0.425;
+        rows[1].interest = 62033.15;
+        rows[1].pool_input = 4142.66;
+        let mut items = HashMap::new();
+        items.insert(
+            ym("2026-06-01"),
+            vec![item(MonthItemCategory::Entertainment, 8593.0)],
+        );
+        let rates = BTreeMap::from([(2025, 0.425), (2026, 0.337)]);
+        let balances = pool_balances(&rows, &items, &rates);
+        assert!(
+            approx_eq(
+                balances[&2026],
+                5717.57 + 62033.15 * 0.337 - 8593.0 + 4142.66
+            ),
+            "balance = {}",
+            balances[&2026]
+        );
+    }
+
+    #[test]
+    fn live_totals_omit_rate_dependent_terms_without_a_rate() {
+        let input = LiveTotalsInput {
+            hk_market_value: 100.0,
+            us_market_value: 10.0,
+            usd_hkd_rate: Some(7.8),
+            deposits_active_principal: 200.0,
+            bonds_active_principal: 30.0,
+            aia_value_usd: 5.0,
+            mpf_balance: 40.0,
+            manual_assets_sum: 6.0,
+            cash_sum: 7.0,
+            ibkr_hkd_cash: 2.0,
+            ibkr_usd_cash: 1.0,
+            pool_balance: 8.0,
+        };
+        let totals = live_totals(&input);
+        // total = 100 + (10+1)×7.8 + 2 + 200 + 30 + 39 + 40 + 6 + 7
+        assert!(approx_eq(totals.total_assets, 509.8));
+        // liquid = 100 + 200 + 7 + 30 + (10+1)×7.8 + 2 − 8
+        assert!(approx_eq(totals.liquid_assets, 416.8));
+
+        let no_rate = live_totals(&LiveTotalsInput {
+            usd_hkd_rate: None,
+            ..input
+        });
+        // Without a rate the US and AIA terms drop out; HKD cash stays.
+        assert!(approx_eq(no_rate.total_assets, 385.0));
+        assert!(approx_eq(no_rate.liquid_assets, 331.0));
+    }
+
+    fn suggestion_events() -> SuggestionEvents {
+        SuggestionEvents {
+            deposits: vec![
+                SuggestionDeposit {
+                    id: 1,
+                    start_date: Some(ym("2026-10-05")),
+                    end_date: ym("2027-04-05"),
+                    principal: 100000.0,
+                    interest: 1200.0,
+                    label: Some("SC-9632".to_string()),
+                    received: false,
+                },
+                SuggestionDeposit {
+                    id: 2,
+                    start_date: None,
+                    end_date: ym("2026-10-20"),
+                    principal: 50000.0,
+                    interest: 600.0,
+                    label: None,
+                    received: true,
+                },
+                // Ended in the month but not yet 收訖: previews in the
+                // breakdown, does not count in the derived 利息.
+                SuggestionDeposit {
+                    id: 8,
+                    start_date: None,
+                    end_date: ym("2026-10-25"),
+                    principal: 0.0,
+                    interest: 999.0,
+                    label: Some("HS-99".to_string()),
+                    received: false,
+                },
+            ],
+            trades: vec![
+                SuggestionTrade {
+                    id: 3,
+                    date: ym("2026-10-08"),
+                    kind: TradeType::Buy,
+                    total: 96523.15,
+                    code: "中國銀行".to_string(),
+                },
+                SuggestionTrade {
+                    id: 4,
+                    date: ym("2026-10-09"),
+                    kind: TradeType::Sell,
+                    total: 20000.0,
+                    code: "恒生".to_string(),
+                },
+            ],
+            dividends: vec![
+                SuggestionReceipt {
+                    id: 5,
+                    pay_date: ym("2026-10-12"),
+                    amount: Some(1500.0),
+                    label: "中國銀行".to_string(),
+                    received: true,
+                },
+                // Pending dividend with an estimate: previews, doesn't count.
+                SuggestionReceipt {
+                    id: 9,
+                    pay_date: ym("2026-10-20"),
+                    amount: Some(720.0),
+                    label: "長江基建".to_string(),
+                    received: false,
+                },
+            ],
+            coupons: vec![
+                SuggestionReceipt {
+                    id: 6,
+                    pay_date: ym("2026-10-15"),
+                    amount: Some(2000.0),
+                    label: "silver bond".to_string(),
+                    received: true,
+                },
+                // 待定 coupon: previews with no amount.
+                SuggestionReceipt {
+                    id: 10,
+                    pay_date: ym("2026-10-23"),
+                    amount: None,
+                    label: "silver bond".to_string(),
+                    received: false,
+                },
+            ],
+            aia_payments: vec![SuggestionAiaPayment {
+                id: 7,
+                date: ym("2026-10-01"),
+                amount_usd: 8320.0,
+                policy: "年金".to_string(),
+            }],
+            pool_input: 4142.66,
+            usd_hkd_rate: Some(7.8),
+        }
+    }
+
+    #[test]
+    fn suggestions_cover_each_event_kind() {
+        let events = suggestion_events();
+        let suggestions =
+            build_suggestions("2026-10-01", &events, &HashSet::new(), &HashSet::new());
+        let by_key: HashMap<&str, &MonthSuggestion> = suggestions
+            .iter()
+            .map(|suggestion| (suggestion.auto_key.as_str(), suggestion))
+            .collect();
+        // dep-start only exists for the deposit carrying a start_date.
+        assert!(approx_eq(by_key["dep-start:1"].amount, -100000.0));
+        assert!(!by_key.contains_key("dep-start:2"));
+        assert!(approx_eq(by_key["dep-end:2"].amount, 50600.0));
+        assert!(!by_key.contains_key("dep-end:1")); // ends in 2027-04
+        assert!(approx_eq(by_key["trade:3"].amount, -96523.15));
+        assert!(approx_eq(by_key["trade:4"].amount, 20000.0));
+        assert!(approx_eq(by_key["div:5"].amount, 1500.0));
+        assert!(approx_eq(by_key["coupon:6"].amount, 2000.0));
+        // Pending receipts preview in the breakdown but never suggest items.
+        assert!(!by_key.contains_key("div:9"));
+        assert!(!by_key.contains_key("coupon:10"));
+        assert_eq!(by_key["aia-pay:7"].category, MonthItemCategory::ExtraSpend);
+        assert!(approx_eq(by_key["aia-pay:7"].amount, 8320.0 * 7.8));
+        assert!(approx_eq(by_key["pool-input"].amount, -4142.66));
+    }
+
+    #[test]
+    fn suggestions_exclude_stored_and_dismissed_keys() {
+        let events = suggestion_events();
+        let stored = HashSet::from(["dep-end:2".to_string(), "pool-input".to_string()]);
+        let dismissed = HashSet::from(["trade:3".to_string()]);
+        let suggestions = build_suggestions("2026-10-01", &events, &stored, &dismissed);
+        let keys: HashSet<&str> = suggestions
+            .iter()
+            .map(|suggestion| suggestion.auto_key.as_str())
+            .collect();
+        assert!(!keys.contains("dep-end:2"));
+        assert!(!keys.contains("pool-input"));
+        assert!(!keys.contains("trade:3"));
+        assert!(keys.contains("dep-start:1"));
+    }
+
+    #[test]
+    fn aia_suggestion_needs_a_rate_and_pool_input_needs_a_positive_amount() {
+        let mut events = suggestion_events();
+        events.usd_hkd_rate = None;
+        let suggestions =
+            build_suggestions("2026-10-01", &events, &HashSet::new(), &HashSet::new());
+        assert!(!suggestions
+            .iter()
+            .any(|suggestion| suggestion.auto_key == "aia-pay:7"));
+
+        events.pool_input = 0.0;
+        let suggestions =
+            build_suggestions("2026-10-01", &events, &HashSet::new(), &HashSet::new());
+        assert!(!suggestions
+            .iter()
+            .any(|suggestion| suggestion.auto_key == "pool-input"));
+    }
+
+    #[test]
+    fn suggestions_are_cut_off_before_the_current_month() {
+        let today = ym("2026-10-23");
+        assert!(suggestions_enabled("2026-10-01", today));
+        assert!(suggestions_enabled("2026-11-01", today));
+        assert!(!suggestions_enabled("2026-09-01", today));
+        assert!(!suggestions_enabled("not-a-month", today));
+    }
+
+    #[test]
+    fn interest_components_list_deposit_coupon_and_dividend_receipts() {
+        let events = suggestion_events();
+        let components = interest_components("2026-10-01", &events);
+        // Received: deposit 2 + coupon 6 + dividend 5; pending previews:
+        // deposit 8, dividend 9, 待定 coupon 10.
+        assert_eq!(components.len(), 6);
+        let received: Vec<&InterestComponent> = components
+            .iter()
+            .filter(|component| component.received)
+            .collect();
+        let by_source: HashMap<&str, f64> = received
+            .iter()
+            .map(|component| (component.source.as_str(), component.amount.unwrap_or(0.0)))
+            .collect();
+        assert!(approx_eq(by_source["deposit"], 600.0));
+        assert!(approx_eq(by_source["coupon"], 2000.0));
+        assert!(approx_eq(by_source["dividend"], 1500.0));
+        let pending: Vec<&InterestComponent> = components
+            .iter()
+            .filter(|component| !component.received)
+            .collect();
+        assert_eq!(pending.len(), 3);
+        assert_eq!(pending[0].source, "deposit");
+        assert!(approx_eq(pending[0].amount.unwrap_or(0.0), 999.0));
+        // The 待定 coupon previews with no figure; the dividend uses its estimate.
+        assert!(pending[1].amount.is_none());
+        assert_eq!(pending[2].source, "dividend");
+        assert!(approx_eq(pending[2].amount.unwrap_or(0.0), 720.0));
+        // auto_interest sums received components only.
+        assert!(approx_eq(auto_interest(ym("2026-10-01"), &events), 4100.0));
+        assert!(interest_components("2026-11-01", &events).is_empty());
     }
 }

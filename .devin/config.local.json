@@ -38,7 +38,11 @@
       "Exec(WEALTH_DB=/tmp/wealth-test-seed.db cargo run)",
       "Exec(xargs grep)",
       "Exec(WEALTH_ADDR=127.0.0.1:8792 cargo run)",
-      "Exec(WEALTH_ADDR=127.0.0.1:8790 cargo run)"
+      "Exec(WEALTH_ADDR=127.0.0.1:8790 cargo run)",
+      "Exec(awk)",
+      "Exec(WEALTH_DB=/tmp/wealth-mig-test.db cargo run)",
+      "Exec(kill)",
+      "Exec(xargs kill)"
     ]
   }
 }

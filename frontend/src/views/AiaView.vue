@@ -540,7 +540,7 @@ onMounted(load)
       <p class="muted">
         在此記錄繳費會同時更新已繳保費、餘下年期及下期繳費日 — 毋須逐項修改。
         試算表的 AIA 表不會同步更新；USD→HKD 匯率是 Overview!N3 的手動副本，
-        試算表更新匯率後請在此修改。Overview、Month Stat 等尚未遷移的章節仍以試算表為準。
+        試算表更新匯率後請在此修改。Overview 等尚未遷移的章節仍以試算表為準。
       </p>
     </div>
 

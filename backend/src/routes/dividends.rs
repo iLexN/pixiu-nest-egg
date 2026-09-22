@@ -5,13 +5,15 @@ use chrono::Datelike;
 use serde::{Deserialize, Serialize};
 use sqlx::SqlitePool;
 
-use super::{now_timestamp, row_to_dividend, today, AppState, DIVIDEND_SELECT};
+use super::{
+    now_timestamp, record_receipt_item, row_to_dividend, today, AppState, DIVIDEND_SELECT,
+};
 use crate::calc::{
     dividend_year_rollups, holdings_snapshot, validate_dividend, DividendFacts, DividendInput,
     DividendYearRollup, TradeFacts, ValidatedDividend,
 };
 use crate::error::ApiError;
-use crate::models::{Dividend, DividendPatch, NewDividend, TradeType};
+use crate::models::{Dividend, DividendPatch, Market, NewDividend, TradeType};
 
 #[derive(Debug, Deserialize)]
 pub struct ListQuery {
@@ -183,13 +185,11 @@ pub async fn update(
 ) -> Result<Json<Dividend>, ApiError> {
     let existing = load_one(&state.pool, id).await?;
 
-    let stock_id = match patch.stock_id {
+    let (stock_id, stock_market) = match patch.stock_id {
         Some(stock_id) => {
-            super::trades::resolve_stock(&state.pool, Some(stock_id), None, None)
-                .await?
-                .0
+            super::trades::resolve_stock(&state.pool, Some(stock_id), None, None).await?
         }
-        None => existing.stock_id,
+        None => (existing.stock_id, existing.market),
     };
     let pay_date = patch.pay_date.unwrap_or(existing.pay_date);
 
@@ -231,6 +231,8 @@ pub async fn update(
     })
     .map_err(ApiError::Validation)?;
 
+    let now = now_timestamp();
+    let mut tx = state.pool.begin().await?;
     sqlx::query(
         "UPDATE dividends SET stock_id = ?, pay_date = ?, per_share = ?, shares_held = ?, \
          buy_cost = ?, estimated_amount = ?, received_amount = ?, \
@@ -245,12 +247,112 @@ pub async fn update(
     .bind(validated.received_amount)
     .bind(validated.received_price)
     .bind(note)
-    .bind(now_timestamp())
+    .bind(&now)
     .bind(id)
-    .execute(&state.pool)
+    .execute(&mut *tx)
     .await?;
 
+    // 收訖: received_amount NULL → set banks the amount (HK → the HS cash
+    // row; US → the IBKR USD cash meta value, already USD) and, for HK,
+    // records the div:<id> month item. Clearing received_amount reverses.
+    let credited_before: Option<f64> =
+        sqlx::query_scalar("SELECT credited_amount FROM dividends WHERE id = ?")
+            .bind(id)
+            .fetch_one(&mut *tx)
+            .await?;
+    let auto_key = format!("div:{id}");
+    let month = format!("{}-01", &validated.pay_date[..7]);
+    match (existing.received_amount, validated.received_amount) {
+        (None, Some(amount)) => {
+            let mut credited = None;
+            if patch.bank_in.unwrap_or(true) {
+                match stock_market {
+                    Market::Hk => {
+                        if let Some(asset_id) = super::hs_cash_asset_id(&mut tx).await? {
+                            sqlx::query(
+                                "UPDATE manual_assets SET amount = amount + ?, \
+                                 updated_at = ? WHERE id = ?",
+                            )
+                            .bind(amount)
+                            .bind(&now)
+                            .bind(asset_id)
+                            .execute(&mut *tx)
+                            .await?;
+                            credited = Some(amount);
+                        }
+                    }
+                    Market::Us => {
+                        credit_ibkr_usd(&mut tx, amount, &now).await?;
+                        credited = Some(amount);
+                    }
+                }
+            }
+            sqlx::query("UPDATE dividends SET credited_amount = ? WHERE id = ?")
+                .bind(credited)
+                .bind(id)
+                .execute(&mut *tx)
+                .await?;
+            // US dividends land in IBKR, not 活期 — no adjustment item.
+            if stock_market == Market::Hk {
+                record_receipt_item(&mut tx, &month, &auto_key, &existing.code, amount).await?;
+            }
+        }
+        (Some(_), None) => {
+            if let Some(amount) = credited_before {
+                match stock_market {
+                    Market::Hk => {
+                        if let Some(asset_id) = super::hs_cash_asset_id(&mut tx).await? {
+                            sqlx::query(
+                                "UPDATE manual_assets SET amount = amount - ?, \
+                                 updated_at = ? WHERE id = ?",
+                            )
+                            .bind(amount)
+                            .bind(&now)
+                            .bind(asset_id)
+                            .execute(&mut *tx)
+                            .await?;
+                        }
+                    }
+                    Market::Us => credit_ibkr_usd(&mut tx, -amount, &now).await?,
+                }
+            }
+            sqlx::query("UPDATE dividends SET credited_amount = NULL WHERE id = ?")
+                .bind(id)
+                .execute(&mut *tx)
+                .await?;
+            sqlx::query("DELETE FROM month_items WHERE month = ? AND auto_key = ?")
+                .bind(&month)
+                .bind(&auto_key)
+                .execute(&mut *tx)
+                .await?;
+        }
+        _ => {}
+    }
+    tx.commit().await?;
+
     Ok(Json(load_one(&state.pool, id).await?))
+}
+
+/// `ibkr.usd_cash += amount` — a US dividend receipt lands there directly.
+async fn credit_ibkr_usd(
+    tx: &mut sqlx::Transaction<'_, sqlx::Sqlite>,
+    amount: f64,
+    _now: &str,
+) -> Result<(), ApiError> {
+    let current: Option<String> = sqlx::query_scalar("SELECT value FROM app_meta WHERE key = ?")
+        .bind(crate::routes::overview::IBKR_USD_CASH_KEY)
+        .fetch_optional(&mut **tx)
+        .await?;
+    let total = current.and_then(|v| v.parse::<f64>().ok()).unwrap_or(0.0) + amount;
+    sqlx::query(
+        "INSERT INTO app_meta (key, value) VALUES (?, ?) \
+         ON CONFLICT (key) DO UPDATE SET value = excluded.value",
+    )
+    .bind(crate::routes::overview::IBKR_USD_CASH_KEY)
+    .bind(total.to_string())
+    .execute(&mut **tx)
+    .await?;
+    Ok(())
 }
 
 pub async fn remove(

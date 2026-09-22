@@ -340,8 +340,8 @@ onMounted(load)
     <div class="card hints">
       <h3>手動步驟提醒</h3>
       <p class="muted">
-        Overview!B6 仍讀取試算表 MPF!B2 — 此表更新後該格已凍結，Overview、Month
-        Stat 等尚未遷移的章節仍以試算表為準。
+        Overview!B6 仍讀取試算表 MPF!B2 — 此表更新後該格已凍結，Overview
+        等尚未遷移的章節仍以試算表為準。
       </p>
     </div>
 

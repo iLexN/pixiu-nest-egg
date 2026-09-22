@@ -1,10 +1,13 @@
 //! Compares the app's computed summary against the workbook's cached values.
 
 use anyhow::anyhow;
-use sqlx::SqlitePool;
+use chrono::Datelike;
+use sqlx::{Row, SqlitePool};
 
 use crate::calc::{
-    active_month_rollup, active_totals, approx_eq, bank_rollup, year_rollups, DepositFacts,
+    active_month_rollup, active_totals, approx_eq, bank_rollup, live_totals, month_derived,
+    month_item_sums, month_running_averages, month_year_summaries, year_rollups, DepositFacts,
+    MonthItemFacts, MonthStatRow,
 };
 use crate::models::Market;
 use crate::xlsx::{SheetActiveSums, SheetYearSums, WorkbookData};
@@ -26,6 +29,12 @@ pub enum Outcome {
     SkippedNoData,
     /// The sheet lists a stock the database does not know about.
     MissingStock,
+    /// A difference expected by design — live-linked or edited cells are
+    /// reported but never counted as problems.
+    Info {
+        computed: f64,
+        sheet: f64,
+    },
 }
 
 #[derive(Debug, Clone)]
@@ -52,6 +61,9 @@ pub struct ParityReport {
     pub mpf: Vec<NamedParityRow>,
     pub bonds: Vec<NamedParityRow>,
     pub aia: Vec<NamedParityRow>,
+    pub months: Vec<NamedParityRow>,
+    /// The `Overview` A3:C18 block and the 美股 IBKR header cells.
+    pub overview: Vec<NamedParityRow>,
 }
 
 impl ParityReport {
@@ -62,8 +74,12 @@ impl ParityReport {
     }
 
     fn named_problems(rows: &[NamedParityRow]) -> impl Iterator<Item = &NamedParityRow> {
-        rows.iter()
-            .filter(|row| !matches!(row.outcome, Outcome::Match | Outcome::SkippedNoData))
+        rows.iter().filter(|row| {
+            !matches!(
+                row.outcome,
+                Outcome::Match | Outcome::SkippedNoData | Outcome::Info { .. }
+            )
+        })
     }
 
     pub fn market_figure_problems(&self) -> impl Iterator<Item = &NamedParityRow> {
@@ -90,6 +106,14 @@ impl ParityReport {
         Self::named_problems(&self.aia)
     }
 
+    pub fn months_problems(&self) -> impl Iterator<Item = &NamedParityRow> {
+        Self::named_problems(&self.months)
+    }
+
+    pub fn overview_problems(&self) -> impl Iterator<Item = &NamedParityRow> {
+        Self::named_problems(&self.overview)
+    }
+
     pub fn problem_count(&self) -> usize {
         self.problems().count()
             + self.market_figure_problems().count()
@@ -98,6 +122,8 @@ impl ParityReport {
             + self.mpf_problems().count()
             + self.bond_problems().count()
             + self.aia_problems().count()
+            + self.months_problems().count()
+            + self.overview_problems().count()
     }
 
     pub fn is_clean(&self) -> bool {
@@ -115,6 +141,8 @@ pub async fn check(pool: &SqlitePool, data: &WorkbookData) -> anyhow::Result<Par
     check_mpf(pool, data, &mut report).await?;
     check_bonds(pool, data, &mut report).await?;
     check_aia(pool, data, &mut report).await?;
+    check_months(pool, data, &mut report).await?;
+    check_overview(pool, data, &mut report).await?;
     Ok(report)
 }
 
@@ -977,6 +1005,718 @@ async fn check_aia(
                 compare_figures(computed, sheet, field),
             );
         }
+    }
+    Ok(())
+}
+
+fn months_row(report: &mut ParityReport, name: impl Into<String>, outcome: Outcome) {
+    named_row(&mut report.months, name, outcome);
+}
+
+/// Compare a stored/derived month figure against the sheet's cached cell.
+/// `sheet None` means nothing to compare; `informational` rows (live-linked
+/// cells or rows edited after import) downgrade differences to `Info`.
+fn month_compare(
+    report: &mut ParityReport,
+    name: impl Into<String>,
+    field: &'static str,
+    computed: Option<f64>,
+    sheet: Option<f64>,
+    informational: bool,
+) {
+    let Some(sheet_value) = sheet else { return };
+    let computed_value = computed.unwrap_or(f64::NAN);
+    let outcome = if approx_eq(computed_value, sheet_value) {
+        Outcome::Match
+    } else if informational {
+        Outcome::Info {
+            computed: computed_value,
+            sheet: sheet_value,
+        }
+    } else {
+        Outcome::Difference {
+            field,
+            computed: computed_value,
+            sheet: sheet_value,
+        }
+    };
+    months_row(report, name, outcome);
+}
+
+/// Month Stat rows, yearly block, running averages and the seeded Overview
+/// settings against the sheet's cached cells. Derived figures recompute from
+/// the stored rows with the same live-fill rule as the API; 投資純利 (K) is
+/// skipped because HK sold P/L is not computed.
+async fn check_months(
+    pool: &SqlitePool,
+    data: &WorkbookData,
+    report: &mut ParityReport,
+) -> anyhow::Result<()> {
+    struct Stored {
+        month: String,
+        start_cash: Option<f64>,
+        salary: Option<f64>,
+        total_assets: Option<f64>,
+        liquid_assets: Option<f64>,
+        pool_input: f64,
+        end_cash_override: Option<f64>,
+        /// `updated_at != created_at`: touched after import.
+        edited: bool,
+    }
+    let rows = sqlx::query(
+        "SELECT month, start_cash, salary, total_assets, liquid_assets, \
+         pool_input, end_cash_override, created_at, updated_at \
+         FROM month_stats ORDER BY month",
+    )
+    .fetch_all(pool)
+    .await?;
+    let mut stored = Vec::with_capacity(rows.len());
+    for row in &rows {
+        stored.push(Stored {
+            month: row.try_get("month")?,
+            start_cash: row.try_get("start_cash")?,
+            salary: row.try_get("salary")?,
+            total_assets: row.try_get("total_assets")?,
+            liquid_assets: row.try_get("liquid_assets")?,
+            pool_input: row.try_get("pool_input")?,
+            end_cash_override: row.try_get("end_cash_override")?,
+            edited: row.try_get::<String, _>("updated_at")?
+                != row.try_get::<String, _>("created_at")?,
+        });
+    }
+
+    let item_rows =
+        sqlx::query("SELECT month, category, amount, exclude_from_living FROM month_items")
+            .fetch_all(pool)
+            .await?;
+    let mut items: std::collections::HashMap<chrono::NaiveDate, Vec<MonthItemFacts>> =
+        std::collections::HashMap::new();
+    for row in &item_rows {
+        let month: String = row.try_get("month")?;
+        let category: String = row.try_get("category")?;
+        let Some(category) = crate::models::MonthItemCategory::parse(&category) else {
+            return Err(anyhow!(
+                "stored month item category {category} is not valid"
+            ));
+        };
+        items
+            .entry(
+                chrono::NaiveDate::parse_from_str(&month, "%Y-%m-%d")
+                    .map_err(|_| anyhow!("stored month {month} is not valid"))?,
+            )
+            .or_default()
+            .push(MonthItemFacts {
+                category,
+                amount: row.try_get("amount")?,
+                exclude_from_living: row.try_get::<i64, _>("exclude_from_living")? != 0,
+            });
+    }
+
+    // Live totals fill NULL B/D at/after the current month — same rule as
+    // the API — so the live-linked rows produce real numbers here too.
+    let today = crate::routes::today();
+    let live_from = chrono::NaiveDate::from_ymd_opt(today.year(), today.month(), 1)
+        .ok_or_else(|| anyhow!("today {today} has no first of month"))?;
+    let parse_month = |month: &str| -> anyhow::Result<chrono::NaiveDate> {
+        chrono::NaiveDate::parse_from_str(month, "%Y-%m-%d")
+            .map_err(|_| anyhow!("stored month {month} is not valid"))
+    };
+    let needs_live = stored.iter().any(|s| {
+        (s.total_assets.is_none() || s.liquid_assets.is_none())
+            && parse_month(&s.month).is_ok_and(|month| month >= live_from)
+    });
+    let live = if needs_live {
+        let input = crate::routes::months::live_totals_input(pool).await?;
+        Some(live_totals(&input))
+    } else {
+        None
+    };
+
+    // 利息 is derived: auto events + `interest` items — same rule as the API.
+    let interest_events = crate::routes::months::load_interest_events(pool).await?;
+    let mut stat_rows = Vec::with_capacity(stored.len());
+    for s in &stored {
+        let month = parse_month(&s.month)?;
+        let live = live.filter(|_| month >= live_from);
+        let manual_interest = items
+            .get(&month)
+            .map(|items| month_item_sums(items).interest)
+            .unwrap_or_default();
+        stat_rows.push(MonthStatRow {
+            month,
+            start_cash: s.start_cash,
+            salary: s.salary,
+            total_assets: s.total_assets.or(live.map(|live| live.total_assets)),
+            liquid_assets: s.liquid_assets.or(live.map(|live| live.liquid_assets)),
+            end_cash_override: s.end_cash_override,
+            interest: crate::calc::auto_interest(month, &interest_events) + manual_interest,
+            pool_input: s.pool_input,
+        });
+    }
+    let derived = month_derived(&stat_rows, &items);
+
+    let rate_rows =
+        sqlx::query("SELECT key, value FROM app_meta WHERE key LIKE 'overview.pool_rate.%'")
+            .fetch_all(pool)
+            .await?;
+    let mut rates = std::collections::BTreeMap::new();
+    for row in &rate_rows {
+        let key: String = row.try_get("key")?;
+        let value: String = row.try_get("value")?;
+        if let (Some(year), Ok(rate)) = (
+            key.strip_prefix(crate::routes::months::POOL_RATE_PREFIX)
+                .and_then(|year| year.parse::<i32>().ok()),
+            value.parse::<f64>(),
+        ) {
+            rates.insert(year, rate);
+        }
+    }
+    let years = month_year_summaries(&stat_rows, &items, &rates, &Default::default());
+    let running = month_running_averages(&stat_rows, &items);
+
+    // Years containing a live-linked or edited month flag informational:
+    // their aggregates legitimately move with the live cells.
+    let mut informational_years = std::collections::HashSet::new();
+    let mut any_informational = false;
+
+    // Per-row flags first: a row's derived cells also depend on the NEXT
+    // row's totals, so a live-linked or edited successor marks it too.
+    let mut linked = vec![false; stored.len()];
+    let mut edited = vec![false; stored.len()];
+    for sheet_month in &data.month_stat.months {
+        if let Some(index) = stored.iter().position(|s| s.month == sheet_month.month) {
+            linked[index] = (sheet_month.total_assets.is_none()
+                && sheet_month.derived.total_assets.is_some())
+                || (sheet_month.liquid_assets.is_none()
+                    && sheet_month.derived.liquid_assets.is_some());
+            edited[index] = stored[index].edited;
+        }
+    }
+
+    for sheet_month in &data.month_stat.months {
+        let Some(index) = stored.iter().position(|s| s.month == sheet_month.month) else {
+            months_row(
+                report,
+                format!("Month {}", sheet_month.month),
+                Outcome::MissingStock,
+            );
+            continue;
+        };
+        let stored_row = &stored[index];
+        let own = linked[index] || edited[index];
+        let derived_informational = own
+            || linked.get(index + 1).copied().unwrap_or(false)
+            || edited.get(index + 1).copied().unwrap_or(false);
+        if derived_informational {
+            any_informational = true;
+            informational_years.insert(stat_rows[index].month.year());
+        }
+        let name = |field: &str| format!("Month {} {field}", sheet_month.month);
+        month_compare(
+            report,
+            name("start_cash"),
+            "start_cash",
+            stored_row.start_cash,
+            sheet_month.start_cash,
+            own,
+        );
+        month_compare(
+            report,
+            name("total_assets"),
+            "total_assets",
+            stat_rows[index].total_assets,
+            sheet_month.derived.total_assets,
+            own,
+        );
+        month_compare(
+            report,
+            name("liquid_assets"),
+            "liquid_assets",
+            stat_rows[index].liquid_assets,
+            sheet_month.derived.liquid_assets,
+            own,
+        );
+        month_compare(
+            report,
+            name("interest"),
+            "interest",
+            Some(stat_rows[index].interest),
+            Some(sheet_month.interest),
+            own,
+        );
+        month_compare(
+            report,
+            name("entertainment"),
+            "entertainment",
+            Some(
+                items
+                    .get(&stat_rows[index].month)
+                    .map(|items| month_item_sums(items).entertainment)
+                    .unwrap_or_default(),
+            ),
+            Some(sheet_month.entertainment),
+            own,
+        );
+        month_compare(
+            report,
+            name("pool_input"),
+            "pool_input",
+            Some(stored_row.pool_input),
+            Some(sheet_month.pool_input),
+            own,
+        );
+        month_compare(
+            report,
+            name("end_cash"),
+            "end_cash",
+            derived[index].end_cash,
+            sheet_month.derived.end_cash,
+            derived_informational || sheet_month.end_cash_frozen,
+        );
+        month_compare(
+            report,
+            name("month_spend"),
+            "month_spend",
+            derived[index].month_spend,
+            sheet_month.derived.month_spend,
+            derived_informational || sheet_month.end_cash_frozen,
+        );
+        month_compare(
+            report,
+            name("living_spend"),
+            "living_spend",
+            derived[index].living_spend,
+            sheet_month.derived.living_spend,
+            derived_informational || sheet_month.end_cash_frozen,
+        );
+        // K also depends on the same month a year earlier — a live-linked or
+        // edited prior-year row makes the comparison informational too.
+        let prior_informational = sheet_month
+            .month
+            .get(..4)
+            .and_then(|y| y.parse::<i32>().ok())
+            .map(|year| format!("{}{}", year - 1, &sheet_month.month[4..]))
+            .and_then(|prior_month| stored.iter().position(|s| s.month == prior_month))
+            .map(|prior| linked[prior] || edited[prior])
+            .unwrap_or(false);
+        month_compare(
+            report,
+            name("living_yoy"),
+            "living_yoy",
+            derived[index].living_yoy,
+            sheet_month.derived.living_yoy,
+            derived_informational || sheet_month.end_cash_frozen || prior_informational,
+        );
+        month_compare(
+            report,
+            name("saved"),
+            "saved",
+            derived[index].saved,
+            sheet_month.derived.saved,
+            derived_informational || sheet_month.end_cash_frozen,
+        );
+        month_compare(
+            report,
+            name("total_change"),
+            "total_change",
+            derived[index].total_change,
+            sheet_month.derived.total_change,
+            derived_informational,
+        );
+        month_compare(
+            report,
+            name("liquid_change"),
+            "liquid_change",
+            derived[index].liquid_change,
+            sheet_month.derived.liquid_change,
+            derived_informational,
+        );
+    }
+
+    for sheet_year in &data.month_stat.years {
+        let name = |field: &str| format!("Month Stat {} {field}", sheet_year.year);
+        let informational = informational_years.contains(&sheet_year.year);
+        let Some(computed) = years.iter().find(|year| year.year == sheet_year.year) else {
+            months_row(
+                report,
+                format!("Month Stat {} year", sheet_year.year),
+                Outcome::MissingStock,
+            );
+            continue;
+        };
+        for (field, computed, sheet) in [
+            (
+                "total_change_sum",
+                computed.total_change_sum,
+                sheet_year.total_change_sum,
+            ),
+            (
+                "total_change_avg",
+                computed.total_change_avg,
+                sheet_year.total_change_avg,
+            ),
+            ("spend_sum", computed.spend_sum, sheet_year.spend_sum),
+            ("spend_avg", computed.spend_avg, sheet_year.spend_avg),
+            ("living_avg", computed.living_avg, sheet_year.living_avg),
+            (
+                "entertainment_sum",
+                Some(computed.entertainment_sum),
+                sheet_year.entertainment_sum,
+            ),
+            (
+                "interest_sum",
+                Some(computed.interest_sum),
+                sheet_year.interest_sum,
+            ),
+            (
+                "interest_avg",
+                Some(computed.interest_avg),
+                sheet_year.interest_avg,
+            ),
+            (
+                "pool_balance",
+                Some(computed.pool_balance),
+                sheet_year.pool_balance,
+            ),
+            (
+                "pool_input_sum",
+                Some(computed.pool_input_sum),
+                sheet_year.pool_input_sum,
+            ),
+        ] {
+            month_compare(report, name(field), field, computed, sheet, informational);
+        }
+    }
+
+    for (name, field, computed, sheet) in [
+        (
+            "Month Stat running total_change",
+            "avg_total_change",
+            running.total_change_avg,
+            data.month_stat.avg_total_change,
+        ),
+        (
+            "Month Stat running saved",
+            "avg_saved",
+            running.saved_avg,
+            data.month_stat.avg_saved,
+        ),
+        (
+            "Month Stat running interest",
+            "avg_interest",
+            running.interest_avg,
+            data.month_stat.avg_interest,
+        ),
+    ] {
+        month_compare(report, name, field, computed, sheet, any_informational);
+    }
+
+    // Settings: Overview!E1 salary, N8 current-year pool rate, and the four
+    // manual asset/cash cells against the seeded rows.
+    let salary_meta = crate::mpf::meta_get(pool, crate::routes::months::SALARY_KEY).await?;
+    let rate_meta =
+        crate::mpf::meta_get(pool, &crate::routes::months::pool_rate_key(today.year())).await?;
+    month_compare(
+        report,
+        "Month Stat settings salary",
+        "salary",
+        salary_meta.and_then(|raw| raw.parse::<f64>().ok()),
+        data.overview.salary,
+        false,
+    );
+    month_compare(
+        report,
+        "Month Stat settings pool_rate",
+        "pool_rate",
+        rate_meta.and_then(|raw| raw.parse::<f64>().ok()),
+        data.overview.pool_rate,
+        false,
+    );
+    for asset in &data.overview.manual_assets {
+        let stored: Option<f64> =
+            sqlx::query_scalar("SELECT amount FROM manual_assets WHERE label = ? AND kind = ?")
+                .bind(&asset.label)
+                .bind(asset.kind.as_str())
+                .fetch_optional(pool)
+                .await?;
+        month_compare(
+            report,
+            format!("Month Stat manual {}", asset.label),
+            "amount",
+            stored,
+            Some(asset.amount),
+            false,
+        );
+    }
+    Ok(())
+}
+
+fn overview_row(report: &mut ParityReport, name: impl Into<String>, outcome: Outcome) {
+    named_row(&mut report.overview, name, outcome);
+}
+
+/// One Overview comparison: blank sheet cells are skipped, deterministic
+/// module figures (債券, 基金, MPF, 已定期) count as problems, and everything
+/// downstream of live prices or user-edited manual inputs reports `Info`.
+fn overview_compare(
+    report: &mut ParityReport,
+    name: impl Into<String>,
+    field: &'static str,
+    computed: Option<f64>,
+    sheet: Option<f64>,
+    deterministic: bool,
+) {
+    let Some(sheet_value) = sheet else { return };
+    let computed_value = computed.unwrap_or(f64::NAN);
+    let outcome = if approx_eq(computed_value, sheet_value) {
+        Outcome::Match
+    } else if deterministic {
+        Outcome::Difference {
+            field,
+            computed: computed_value,
+            sheet: sheet_value,
+        }
+    } else {
+        Outcome::Info {
+            computed: computed_value,
+            sheet: sheet_value,
+        }
+    };
+    overview_row(report, name, outcome);
+}
+
+/// `Overview!A3:C18` plus the B1/H1/J1 headline and the 美股 IBKR header
+/// cells against the derived dashboard.
+async fn check_overview(
+    pool: &SqlitePool,
+    data: &WorkbookData,
+    report: &mut ParityReport,
+) -> anyhow::Result<()> {
+    let cached = &data.overview;
+    if cached.assets.is_empty() && cached.total_assets.is_none() {
+        return Ok(());
+    }
+    let response =
+        crate::routes::overview::overview(axum::extract::State(crate::routes::AppState {
+            pool: pool.clone(),
+        }))
+        .await
+        .map_err(|err| anyhow!("computing the overview failed: {err}"))?
+        .0;
+
+    // Asset rows compare by label; module rows (債券/基金/MPF) are
+    // deterministic, price-driven and manual rows report Info.
+    let mut computed_assets: std::collections::HashMap<String, (Option<f64>, Option<f64>, bool)> =
+        std::collections::HashMap::new();
+    for row in &response.assets {
+        let deterministic = matches!(row.key.as_str(), "bonds" | "aia" | "mpf");
+        computed_assets.insert(
+            row.label.trim().to_string(),
+            (row.amount, row.share, deterministic),
+        );
+    }
+    for row in &cached.assets {
+        let label = row.label.trim();
+        let (amount, share, deterministic) = computed_assets
+            .get(label)
+            .copied()
+            .unwrap_or((None, None, false));
+        overview_compare(
+            report,
+            format!("Overview {label}"),
+            "B",
+            amount,
+            row.amount,
+            deterministic,
+        );
+        overview_compare(
+            report,
+            format!("Overview {label} share"),
+            "C",
+            share,
+            row.share,
+            false,
+        );
+    }
+
+    overview_compare(
+        report,
+        "Overview Sum",
+        "B10",
+        Some(response.assets_sum),
+        cached.assets_sum,
+        false,
+    );
+    overview_compare(
+        report,
+        "Overview 半流動 share",
+        "A13",
+        response.semi_liquid.share,
+        cached.semi_liquid_share,
+        false,
+    );
+    overview_compare(
+        report,
+        "Overview 半流動資金",
+        "B14",
+        Some(response.semi_liquid.total),
+        cached.semi_liquid_total,
+        false,
+    );
+    overview_compare(
+        report,
+        "Overview 已定期",
+        "B15",
+        Some(response.semi_liquid.deposits),
+        cached.deposits_active,
+        true,
+    );
+    overview_compare(
+        report,
+        "Overview 活期",
+        "B18",
+        Some(response.semi_liquid.cash_sum),
+        cached.cash_total,
+        false,
+    );
+    overview_compare(
+        report,
+        "Overview 半流動 vs 25%流動",
+        "C14",
+        Some(response.semi_liquid.vs_quarter_liquid),
+        cached.semi_liquid_vs_quarter,
+        false,
+    );
+    overview_compare(
+        report,
+        "Overview 總數",
+        "B1",
+        Some(response.total_assets),
+        cached.total_assets,
+        false,
+    );
+    overview_compare(
+        report,
+        "Overview 流動資產",
+        "H1",
+        Some(response.liquid_assets),
+        cached.liquid_assets,
+        false,
+    );
+    overview_compare(
+        report,
+        "Overview J1",
+        "J1",
+        response.liquid_ratio,
+        cached.liquid_ratio,
+        false,
+    );
+
+    // The cached cash rows (B16/B17) are manual cells — informational.
+    let manual = crate::routes::months::load_assets(pool).await?;
+    for asset in &cached.manual_assets {
+        if asset.kind != crate::models::ManualAssetKind::Cash {
+            continue;
+        }
+        let stored = manual
+            .iter()
+            .find(|m| m.label.trim() == asset.label.trim() && m.kind == asset.kind)
+            .map(|m| m.amount);
+        overview_compare(
+            report,
+            format!("Overview {}", asset.label),
+            "B",
+            stored,
+            Some(asset.amount),
+            false,
+        );
+    }
+
+    let account = &data.us_account;
+    overview_compare(
+        report,
+        "美股 IBKR 累計轉入",
+        "B1",
+        response.ibkr.transferred_hkd,
+        account.transferred_hkd,
+        false,
+    );
+    overview_compare(
+        report,
+        "美股 IBKR now value",
+        "B2",
+        response.ibkr.now_value,
+        account.now_value,
+        false,
+    );
+    overview_compare(
+        report,
+        "美股 IBKR HKD cash",
+        "B4",
+        response.ibkr.hkd_cash,
+        account.hkd_cash,
+        false,
+    );
+    overview_compare(
+        report,
+        "美股 IBKR USD cash",
+        "B5",
+        response.ibkr.usd_cash,
+        account.usd_cash,
+        false,
+    );
+    overview_compare(
+        report,
+        "美股 IBKR manual cal now",
+        "B7",
+        response.ibkr.computed_total_hkd,
+        account.computed_now,
+        false,
+    );
+
+    // F3:G10 + H6 — all informational: the sheet's OFFSET window is anchored
+    // by hand, month rows are user-edited, and G10 is the live pool balance.
+    let averages = &response.averages;
+    for (name, field, computed, sheet) in [
+        (
+            "Overview 平均總數增加",
+            "G4",
+            averages.total_change,
+            cached.avg_total_change,
+        ),
+        (
+            "Overview 平均支出",
+            "G5",
+            averages.month_spend,
+            cached.avg_month_spend,
+        ),
+        (
+            "Overview 平均生活支出",
+            "G6",
+            averages.living_spend,
+            cached.avg_living_spend,
+        ),
+        (
+            "Overview 生活預算",
+            "H6",
+            averages.living_budget,
+            cached.living_budget,
+        ),
+        ("Overview 平均存", "G7", averages.saved, cached.avg_saved),
+        (
+            "Overview 平均利息",
+            "G8",
+            averages.interest,
+            cached.avg_interest,
+        ),
+        (
+            "Overview 開心Pool",
+            "G10",
+            Some(averages.pool_balance),
+            cached.pool_balance,
+        ),
+    ] {
+        overview_compare(report, name, field, computed, sheet, false);
     }
     Ok(())
 }

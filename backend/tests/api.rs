@@ -714,6 +714,166 @@ async fn deposit_summary_reports_upcoming_rollups_and_year_tables() {
     assert!(history_years.iter().any(|y| *y == 2099));
 }
 
+#[tokio::test]
+async fn deposit_receive_credits_cash_and_records_the_month_item() {
+    let app = app().await;
+
+    // The cash row the returned money credits into, and the month the
+    // dep-end item lands in.
+    let (status, asset) = send(
+        &app,
+        "POST",
+        "/api/manual-assets",
+        Some(json!({ "label": "渣打", "kind": "cash", "amount": 1000.0 })),
+    )
+    .await;
+    assert_eq!(status, StatusCode::CREATED, "body = {asset}");
+    let asset_id = asset["id"].as_i64().expect("asset id");
+    let (status, _) = send(
+        &app,
+        "PATCH",
+        "/api/months/2099-10",
+        Some(json!({ "start_cash": 5000 })),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+
+    let deposit = create_deposit(
+        &app,
+        json!({ "label": "SC-9632", "bank": "SC", "principal": 110000,
+                "interest": 993, "end_date": "2099-10-12" }),
+    )
+    .await;
+    let id = deposit["id"].as_i64().expect("id");
+    assert_eq!(deposit["status"], "ACTIVE");
+    assert!(deposit["received_at"].is_null());
+
+    // Before 收訖 the deposit's interest previews but does not count.
+    let (_, detail) = send(&app, "GET", "/api/months/2099-10", None).await;
+    approx(&detail["month"]["interest"], 0.0);
+    let auto = detail["interest_auto"].as_array().expect("interest_auto");
+    assert_eq!(auto.len(), 1);
+    assert_eq!(auto[0]["received"], false);
+
+    let (status, body) = send(
+        &app,
+        "POST",
+        &format!("/api/deposits/{id}/receive"),
+        Some(json!({ "credit_asset_id": asset_id })),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "body = {body}");
+    assert_eq!(body["status"], "END");
+    assert!(body["received_at"].is_string());
+
+    let (_, assets) = send(&app, "GET", "/api/manual-assets", None).await;
+    approx(&assets[0]["amount"], 111993.0);
+
+    let (_, detail) = send(&app, "GET", "/api/months/2099-10", None).await;
+    approx(&detail["month"]["interest"], 993.0);
+    let dep_end_key = format!("dep-end:{id}");
+    let items = detail["items"].as_array().expect("items");
+    let dep_end = items
+        .iter()
+        .find(|item| item["auto_key"] == dep_end_key)
+        .expect("dep-end item");
+    approx(&dep_end["amount"], 110993.0);
+
+    // Re-receiving conflicts; unreceive reverses everything.
+    let (status, _) = send(
+        &app,
+        "POST",
+        &format!("/api/deposits/{id}/receive"),
+        Some(json!({})),
+    )
+    .await;
+    assert_eq!(status, StatusCode::CONFLICT);
+    let (status, body) = send(&app, "POST", &format!("/api/deposits/{id}/unreceive"), None).await;
+    assert_eq!(status, StatusCode::OK, "body = {body}");
+    assert_eq!(body["status"], "ACTIVE");
+
+    let (_, assets) = send(&app, "GET", "/api/manual-assets", None).await;
+    approx(&assets[0]["amount"], 1000.0);
+    let (_, detail) = send(&app, "GET", "/api/months/2099-10", None).await;
+    approx(&detail["month"]["interest"], 0.0);
+    assert!(detail["items"]
+        .as_array()
+        .expect("items")
+        .iter()
+        .all(|item| item["auto_key"] != dep_end_key));
+}
+
+#[tokio::test]
+async fn bond_receive_credits_principal_and_records_the_month_item() {
+    let app = app().await;
+
+    let (status, asset) = send(
+        &app,
+        "POST",
+        "/api/manual-assets",
+        Some(json!({ "label": "HS", "kind": "cash", "amount": 500.0 })),
+    )
+    .await;
+    assert_eq!(status, StatusCode::CREATED, "body = {asset}");
+    let asset_id = asset["id"].as_i64().expect("asset id");
+    let (status, _) = send(
+        &app,
+        "PATCH",
+        "/api/months/2099-12",
+        Some(json!({ "start_cash": 5000 })),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+
+    let (status, bond) = send(
+        &app,
+        "POST",
+        "/api/bonds",
+        Some(json!({ "label": "silver bond", "principal": 100000,
+                     "maturity_date": "2099-12-23" })),
+    )
+    .await;
+    assert_eq!(status, StatusCode::CREATED, "body = {bond}");
+    let id = bond["id"].as_i64().expect("id");
+    assert!(bond["received_at"].is_null());
+
+    // 收訖 the principal return: credit the cash row, record the bond-end item.
+    let (status, body) = send(
+        &app,
+        "POST",
+        &format!("/api/bonds/{id}/receive"),
+        Some(json!({ "credit_asset_id": asset_id })),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "body = {body}");
+    assert!(body["received_at"].is_string());
+
+    let (_, assets) = send(&app, "GET", "/api/manual-assets", None).await;
+    approx(&assets[0]["amount"], 100500.0);
+    let bond_end_key = format!("bond-end:{id}");
+    let (_, detail) = send(&app, "GET", "/api/months/2099-12", None).await;
+    let item = detail["items"]
+        .as_array()
+        .expect("items")
+        .iter()
+        .find(|item| item["auto_key"] == bond_end_key)
+        .expect("bond-end item");
+    approx(&item["amount"], 100000.0);
+
+    // 取消收訖 reverses everything.
+    let (status, body) = send(&app, "POST", &format!("/api/bonds/{id}/unreceive"), None).await;
+    assert_eq!(status, StatusCode::OK, "body = {body}");
+    assert!(body["received_at"].is_null());
+    let (_, assets) = send(&app, "GET", "/api/manual-assets", None).await;
+    approx(&assets[0]["amount"], 500.0);
+    let (_, detail) = send(&app, "GET", "/api/months/2099-12", None).await;
+    assert!(detail["items"]
+        .as_array()
+        .expect("items")
+        .iter()
+        .all(|item| item["auto_key"] != bond_end_key));
+}
+
 // --- 4.7 dividends (派息) ---
 
 async fn create_buy(app: &Router, stock_id: i64, date: &str, shares: f64, total: f64) {
@@ -823,6 +983,230 @@ async fn dividend_lifecycle_freezes_its_snapshots() {
     assert_eq!(status, StatusCode::NO_CONTENT);
     let (status, _) = send(&app, "DELETE", &format!("/api/dividends/{id}"), None).await;
     assert_eq!(status, StatusCode::NOT_FOUND);
+}
+
+#[tokio::test]
+async fn coupon_and_dividend_receive_banks_in_and_records_the_item() {
+    let app = app().await;
+
+    // HS cash row + month rows for the receipts' months.
+    let (status, hs) = send(
+        &app,
+        "POST",
+        "/api/manual-assets",
+        Some(json!({ "label": "HS", "kind": "cash", "amount": 100.0 })),
+    )
+    .await;
+    assert_eq!(status, StatusCode::CREATED, "body = {hs}");
+    for ym in ["2099-10", "2099-11"] {
+        send(
+            &app,
+            "PATCH",
+            &format!("/api/months/{ym}"),
+            Some(json!({ "start_cash": 1.0 })),
+        )
+        .await;
+    }
+
+    // --- coupon: 收訖 banks into HS and stores the coupon:<id> item ---
+    let (status, bond) = send(
+        &app,
+        "POST",
+        "/api/bonds",
+        Some(json!({ "label": "silver bond", "principal": 100000,
+                     "maturity_date": "2099-12-23" })),
+    )
+    .await;
+    assert_eq!(status, StatusCode::CREATED, "body = {bond}");
+    let bond_id = bond["id"].as_i64().expect("bond id");
+    let (status, coupon) = send(
+        &app,
+        "POST",
+        "/api/coupons",
+        Some(json!({ "bond_id": bond_id, "pay_date": "2099-10-23",
+                     "per_10k": 200.0 })),
+    )
+    .await;
+    assert_eq!(status, StatusCode::CREATED, "body = {coupon}");
+    let coupon_id = coupon["id"].as_i64().expect("coupon id");
+
+    let (status, body) = send(
+        &app,
+        "PATCH",
+        &format!("/api/coupons/{coupon_id}"),
+        Some(json!({ "received_amount": 1000.0 })),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "body = {body}");
+
+    let (_, assets) = send(&app, "GET", "/api/manual-assets", None).await;
+    approx(&assets[0]["amount"], 1100.0);
+    let coupon_key = format!("coupon:{coupon_id}");
+    let (_, detail) = send(&app, "GET", "/api/months/2099-10", None).await;
+    let item = detail["items"]
+        .as_array()
+        .expect("items")
+        .iter()
+        .find(|i| i["auto_key"] == coupon_key)
+        .expect("coupon item");
+    approx(&item["amount"], 1000.0);
+
+    // Clearing received_amount reverses the credit and drops the item.
+    let (status, _) = send(
+        &app,
+        "PATCH",
+        &format!("/api/coupons/{coupon_id}"),
+        Some(json!({ "received_amount": null })),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+    let (_, assets) = send(&app, "GET", "/api/manual-assets", None).await;
+    approx(&assets[0]["amount"], 100.0);
+    let (_, detail) = send(&app, "GET", "/api/months/2099-10", None).await;
+    assert!(detail["items"]
+        .as_array()
+        .expect("items")
+        .iter()
+        .all(|i| i["auto_key"] != coupon_key));
+
+    // --- HK dividend: 收訖 banks into HS + div:<id> item ---
+    let stock = create_stock(&app, "HK", "中國銀行", None).await;
+    create_buy(&app, stock, "2099-10-01", 1000.0, 5000.0).await;
+    let (status, div) = send(
+        &app,
+        "POST",
+        "/api/dividends",
+        Some(json!({ "market": "HK", "code": "中國銀行",
+                     "pay_date": "2099-11-05", "estimated_amount": 480.0 })),
+    )
+    .await;
+    assert_eq!(status, StatusCode::CREATED, "body = {div}");
+    let div_id = div["id"].as_i64().expect("div id");
+
+    let (status, body) = send(
+        &app,
+        "PATCH",
+        &format!("/api/dividends/{div_id}"),
+        Some(json!({ "received_amount": 500.0 })),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "body = {body}");
+    let (_, assets) = send(&app, "GET", "/api/manual-assets", None).await;
+    approx(&assets[0]["amount"], 600.0);
+    let div_key = format!("div:{div_id}");
+    let (_, detail) = send(&app, "GET", "/api/months/2099-11", None).await;
+    assert!(detail["items"]
+        .as_array()
+        .expect("items")
+        .iter()
+        .any(|i| i["auto_key"] == div_key));
+
+    // --- US dividend: 收訖 banks into IBKR USD cash, no month item ---
+    create_stock(&app, "US", "AAPL", None).await;
+    let (status, div) = send(
+        &app,
+        "POST",
+        "/api/dividends",
+        Some(json!({ "market": "US", "code": "AAPL",
+                     "pay_date": "2099-11-10", "estimated_amount": 200.0 })),
+    )
+    .await;
+    assert_eq!(status, StatusCode::CREATED, "body = {div}");
+    let us_id = div["id"].as_i64().expect("us div id");
+    let (status, body) = send(
+        &app,
+        "PATCH",
+        &format!("/api/dividends/{us_id}"),
+        Some(json!({ "received_amount": 200.0 })),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "body = {body}");
+    let (_, assets) = send(&app, "GET", "/api/manual-assets", None).await;
+    approx(&assets[0]["amount"], 600.0); // HS untouched
+    let (_, overview) = send(&app, "GET", "/api/overview", None).await;
+    approx(&overview["ibkr"]["usd_cash"], 200.0);
+    let (_, detail) = send(&app, "GET", "/api/months/2099-11", None).await;
+    assert!(detail["items"]
+        .as_array()
+        .expect("items")
+        .iter()
+        .all(|i| i["auto_key"] != format!("div:{us_id}")));
+
+    // Un-receipt returns the IBKR cash.
+    let (status, _) = send(
+        &app,
+        "PATCH",
+        &format!("/api/dividends/{us_id}"),
+        Some(json!({ "received_amount": null })),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+    let (_, overview) = send(&app, "GET", "/api/overview", None).await;
+    approx(&overview["ibkr"]["usd_cash"], 0.0);
+}
+
+#[tokio::test]
+async fn month_recapture_snapshots_start_cash_from_the_cash_sum() {
+    let app = app().await;
+
+    for (label, amount) in [("HS", 1000.0), ("渣打", 500.0)] {
+        let (status, body) = send(
+            &app,
+            "POST",
+            "/api/manual-assets",
+            Some(json!({ "label": label, "kind": "cash", "amount": amount })),
+        )
+        .await;
+        assert_eq!(status, StatusCode::CREATED, "body = {body}");
+    }
+
+    // Creating a month stores no 月初.
+    let (status, month) = send(&app, "PATCH", "/api/months/2099-03", Some(json!({}))).await;
+    assert_eq!(status, StatusCode::OK, "body = {month}");
+    assert!(month["start_cash"].is_null());
+
+    // 重新擷取 fills 月初 with the live 活期 sum.
+    let (status, month) = send(
+        &app,
+        "PATCH",
+        "/api/months/2099-03",
+        Some(json!({ "recapture": true })),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "body = {month}");
+    approx(&month["start_cash"], 1500.0);
+
+    // Editing a cash row then recapturing again refreshes 月初.
+    let (_, assets) = send(&app, "GET", "/api/manual-assets", None).await;
+    let hs_id = assets[0]["id"].as_i64().expect("asset id");
+    let (status, _) = send(
+        &app,
+        "PATCH",
+        &format!("/api/manual-assets/{hs_id}"),
+        Some(json!({ "amount": 700.0 })),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+    let (status, month) = send(
+        &app,
+        "PATCH",
+        "/api/months/2099-03",
+        Some(json!({ "recapture": true })),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "body = {month}");
+    approx(&month["start_cash"], 1200.0);
+
+    // An explicit 月初 wins over recapture.
+    let (status, month) = send(
+        &app,
+        "PATCH",
+        "/api/months/2099-03",
+        Some(json!({ "start_cash": 42.0, "recapture": true })),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "body = {month}");
+    approx(&month["start_cash"], 42.0);
 }
 
 #[tokio::test]

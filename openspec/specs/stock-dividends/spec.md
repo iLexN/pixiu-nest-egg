@@ -75,11 +75,23 @@ The system SHALL compute on read, never store: `status` (`RECEIVED` once `receiv
 - **THEN** per_share is implied as amount ÷ 4000 and stored on the record
 
 ### Requirement: Receiving a dividend
-The system SHALL let the user mark a pending dividend received by supplying `received_amount`, with optional `received_price`. Recording receipt SHALL NOT modify the stored `shares_held`/`buy_cost` snapshots.
+The system SHALL let the user mark a pending dividend received by supplying `received_amount`, with optional `received_price`. Recording receipt SHALL NOT modify the stored `shares_held`/`buy_cost` snapshots. Setting `received_amount` where it was previously NULL SHALL — atomically with the update — bank the amount (HK dividends credit the `HS` cash manual-asset row; US dividends credit the `ibkr.usd_cash` meta value, already USD — unless the request sets `bank_in` false; the credited amount is stored for exact reversal) and, for HK dividends, record the `div:<id>` `adjustment` item for the pay_date month (skipped when already stored or the month has no row; US dividends never touch 活期 so they record none). Clearing `received_amount` SHALL reverse the stored credit and delete the item.
 
 #### Scenario: Money arrives
 - **WHEN** the user records received_amount 16432.10 and received_price 5.41 on a pending dividend
 - **THEN** the record's status becomes RECEIVED, both yields are computed, and the earlier estimate remains stored for comparison
+
+#### Scenario: HK receipt banks into HS and records the item
+- **WHEN** a pending HK dividend paying `2026-09-25` is 收訖 with `received_amount` `909.83`
+- **THEN** the `HS` cash row gains `909.83`, the `2026-09` month gains a `div:<id>` adjustment item of `909.83`, and September's derived 利息 includes `909.83` on the next read
+
+#### Scenario: US receipt banks into IBKR USD cash
+- **WHEN** a pending US dividend is 收訖 with `received_amount` `200`
+- **THEN** `ibkr.usd_cash` gains `200` (USD) and no month item is created
+
+#### Scenario: Clearing the receipt reverses
+- **WHEN** the user clears `received_amount` on a dividend that had credited `HS` `909.83`
+- **THEN** `HS` loses `909.83` and the `div:<id>` item is deleted
 
 ### Requirement: Dividend list and filters
 The system SHALL list dividends ordered by pay_date (ascending by default, descending on request), with optional filters by market, status (`pending` or `received`), and pay_date year.

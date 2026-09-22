@@ -309,6 +309,9 @@ async fn duplicate_source_rows_are_kept_once_and_only_once() {
         bond_cached: Default::default(),
         aia: Vec::new(),
         aia_cached: Default::default(),
+        month_stat: Default::default(),
+        overview: Default::default(),
+        us_account: Default::default(),
     };
 
     let first = import::import(&pool, &data).await.expect("first import");

@@ -5,18 +5,18 @@ use chrono::Datelike;
 use serde::{Deserialize, Serialize};
 use sqlx::SqlitePool;
 
-use super::{now_timestamp, row_to_deposit, today, AppState, DEPOSIT_COLUMNS};
+use super::{now_timestamp, record_receipt_item, row_to_deposit, today, AppState, DEPOSIT_COLUMNS};
 use crate::calc::{
-    active_month_rollup, active_totals, bank_rollup, deposit_active, validate_deposit,
-    year_rollups, ActiveMonthBucket, ActiveTotals, BankRollup, DepositFacts, DepositInput,
-    ValidatedDeposit, YearRollup,
+    active_month_rollup, active_totals, bank_rollup, validate_deposit, year_rollups,
+    ActiveMonthBucket, ActiveTotals, BankRollup, DepositFacts, DepositInput, ValidatedDeposit,
+    YearRollup,
 };
 use crate::error::ApiError;
 use crate::models::{Deposit, DepositPatch, NewDeposit};
 
 #[derive(Debug, Deserialize)]
 pub struct ListQuery {
-    /// `active` (end date in the future) or `ended`.
+    /// `active` (not yet 收訖, even past end date) or `ended` (received).
     pub status: Option<String>,
     /// Restrict to deposits ending in this year.
     pub year: Option<i32>,
@@ -32,8 +32,8 @@ pub async fn list(
     let mut conditions: Vec<&str> = Vec::new();
     if let Some(status) = query.status.as_deref() {
         match status.to_ascii_lowercase().as_str() {
-            "active" => conditions.push("end_date > ?"),
-            "ended" => conditions.push("end_date <= ?"),
+            "active" => conditions.push("received_at IS NULL"),
+            "ended" => conditions.push("received_at IS NOT NULL"),
             _ => return Err(ApiError::field("status", "status must be active or ended")),
         }
     }
@@ -53,9 +53,6 @@ pub async fn list(
     });
 
     let mut statement = sqlx::query(&sql);
-    if query.status.is_some() {
-        statement = statement.bind(today().to_string());
-    }
     if let Some(year) = query.year {
         statement = statement
             .bind(format!("{year:04}-01-01"))
@@ -82,6 +79,7 @@ pub async fn create(
         principal: body.principal,
         rate: body.rate,
         interest: body.interest,
+        start_date: body.start_date.as_deref(),
         end_date: &body.end_date,
     })
     .map_err(ApiError::Validation)?;
@@ -119,6 +117,7 @@ pub async fn update(
     let principal = merge_num(patch.principal, existing.principal);
     let rate = merge_num(patch.rate, existing.rate);
     let interest = merge_num(patch.interest, existing.interest);
+    let start_date = merge_text(patch.start_date, existing.start_date);
     let end_date = patch.end_date.unwrap_or(existing.end_date);
 
     let validated = validate_deposit(DepositInput {
@@ -127,19 +126,21 @@ pub async fn update(
         principal,
         rate,
         interest,
+        start_date: start_date.as_deref(),
         end_date: &end_date,
     })
     .map_err(ApiError::Validation)?;
 
     sqlx::query(
         "UPDATE deposits SET label = ?, bank = ?, principal = ?, rate = ?, interest = ?, \
-         end_date = ?, note1 = ?, note2 = ?, updated_at = ? WHERE id = ?",
+         start_date = ?, end_date = ?, note1 = ?, note2 = ?, updated_at = ? WHERE id = ?",
     )
     .bind(&validated.label)
     .bind(&validated.bank)
     .bind(validated.principal)
     .bind(validated.rate)
     .bind(validated.interest)
+    .bind(&validated.start_date)
     .bind(&validated.end_date)
     .bind(&note1)
     .bind(&note2)
@@ -163,6 +164,154 @@ pub async fn remove(
         return Err(ApiError::NotFound(format!("deposit {id} not found")));
     }
     Ok(StatusCode::NO_CONTENT)
+}
+
+#[derive(Debug, Deserialize)]
+pub struct ReceiveDeposit {
+    /// 收訖日 (`YYYY-MM-DD`); defaults to today.
+    pub received_at: Option<String>,
+    /// Corrects the stored interest to the amount actually received.
+    pub interest: Option<f64>,
+    /// Cash `manual_assets` row to credit the returned money into.
+    pub credit_asset_id: Option<i64>,
+    /// Amount credited; defaults to principal + interest.
+    pub credit_amount: Option<f64>,
+}
+
+/// 收訖: mark the deposit received, optionally credit its principal + interest
+/// to a cash manual asset, and record the month's `dep-end` adjustment item —
+/// the whole sheet "定期 end step" in one action.
+pub async fn receive(
+    State(state): State<AppState>,
+    Path(id): Path<i64>,
+    Json(body): Json<ReceiveDeposit>,
+) -> Result<Json<Deposit>, ApiError> {
+    let existing = load_one(&state.pool, id).await?;
+    if existing.received_at.is_some() {
+        return Err(ApiError::Conflict(format!(
+            "deposit {id} is already received"
+        )));
+    }
+    let received_at = match body.received_at.as_deref() {
+        Some(date) => chrono::NaiveDate::parse_from_str(date, "%Y-%m-%d")
+            .map_err(|_| ApiError::field("received_at", "received_at must be YYYY-MM-DD"))?
+            .to_string(),
+        None => today().to_string(),
+    };
+    let interest = match body.interest {
+        Some(value) if !value.is_finite() => {
+            return Err(ApiError::field("interest", "interest must be a number"));
+        }
+        Some(value) => Some(value),
+        None => existing.interest,
+    };
+    let credit_amount = body
+        .credit_amount
+        .unwrap_or_else(|| existing.principal.unwrap_or(0.0) + interest.unwrap_or(0.0));
+    if !credit_amount.is_finite() {
+        return Err(ApiError::field(
+            "credit_amount",
+            "credit_amount must be a number",
+        ));
+    }
+    if let Some(asset_id) = body.credit_asset_id {
+        let kind: Option<String> =
+            sqlx::query_scalar("SELECT kind FROM manual_assets WHERE id = ?")
+                .bind(asset_id)
+                .fetch_optional(&state.pool)
+                .await?;
+        match kind.as_deref() {
+            Some("cash") => {}
+            Some(_) => {
+                return Err(ApiError::field(
+                    "credit_asset_id",
+                    "credit target must be a 活期 cash row",
+                ));
+            }
+            None => {
+                return Err(ApiError::NotFound(format!(
+                    "manual asset {asset_id} not found"
+                )));
+            }
+        }
+    }
+
+    let month = format!("{}-01", &existing.end_date[..7]);
+    let auto_key = format!("dep-end:{id}");
+    let total = existing.principal.unwrap_or(0.0) + interest.unwrap_or(0.0);
+    let now = now_timestamp();
+    let mut tx = state.pool.begin().await?;
+    sqlx::query(
+        "UPDATE deposits SET received_at = ?, interest = ?, credited_asset_id = ?, \
+         credited_amount = ?, updated_at = ? WHERE id = ?",
+    )
+    .bind(&received_at)
+    .bind(interest)
+    .bind(body.credit_asset_id)
+    .bind(body.credit_asset_id.map(|_| credit_amount))
+    .bind(&now)
+    .bind(id)
+    .execute(&mut *tx)
+    .await?;
+    if let Some(asset_id) = body.credit_asset_id {
+        sqlx::query("UPDATE manual_assets SET amount = amount + ?, updated_at = ? WHERE id = ?")
+            .bind(credit_amount)
+            .bind(&now)
+            .bind(asset_id)
+            .execute(&mut *tx)
+            .await?;
+    }
+    // The dep-end inflow item the suggestion would have created.
+    let label = existing.label.as_deref().unwrap_or("定期");
+    record_receipt_item(&mut tx, &month, &auto_key, label, total).await?;
+    tx.commit().await?;
+
+    Ok(Json(load_one(&state.pool, id).await?))
+}
+
+/// Undo a 收訖: reverse the stored cash credit, drop the auto-created dep-end
+/// item, and clear the received flag so the deposit returns to 未到期定期.
+pub async fn unreceive(
+    State(state): State<AppState>,
+    Path(id): Path<i64>,
+) -> Result<Json<Deposit>, ApiError> {
+    let existing = load_one(&state.pool, id).await?;
+    if existing.received_at.is_none() {
+        return Err(ApiError::Conflict(format!("deposit {id} is not received")));
+    }
+    let credited: Option<(Option<i64>, Option<f64>)> =
+        sqlx::query_as("SELECT credited_asset_id, credited_amount FROM deposits WHERE id = ?")
+            .bind(id)
+            .fetch_optional(&state.pool)
+            .await?;
+
+    let month = format!("{}-01", &existing.end_date[..7]);
+    let now = now_timestamp();
+    let mut tx = state.pool.begin().await?;
+    if let Some((Some(asset_id), Some(amount))) = credited {
+        sqlx::query("UPDATE manual_assets SET amount = amount - ?, updated_at = ? WHERE id = ?")
+            .bind(amount)
+            .bind(&now)
+            .bind(asset_id)
+            .execute(&mut *tx)
+            .await?;
+    }
+    sqlx::query("DELETE FROM month_items WHERE month = ? AND auto_key = ?")
+        .bind(&month)
+        .bind(format!("dep-end:{id}"))
+        .execute(&mut *tx)
+        .await?;
+    sqlx::query(
+        "UPDATE deposits SET received_at = NULL, credited_asset_id = NULL, \
+         credited_amount = NULL, updated_at = ? WHERE id = ?",
+    )
+    .bind(&now)
+    .bind(id)
+    .execute(&mut *tx)
+    .await?;
+    tx.commit().await?;
+
+    Ok(Json(load_one(&state.pool, id).await?))
 }
 
 #[derive(Debug, Serialize)]
@@ -206,9 +355,12 @@ pub async fn summary(
         ));
     }
 
+    // The 未到期定期 list shows deposits until 收訖 — an end_date in the past
+    // without receipt means "matured, awaiting confirmation". The totals and
+    // rollups below still follow the sheet's end_date rule.
     let mut upcoming: Vec<Deposit> = facts
         .iter()
-        .filter(|(_, fact)| deposit_active(fact.end_date, today))
+        .filter(|(deposit, _)| deposit.received_at.is_none())
         .map(|(deposit, _)| (*deposit).clone())
         .collect();
     upcoming.sort_by(|a, b| {
@@ -242,16 +394,23 @@ pub async fn insert_deposit(
     body: &NewDeposit,
 ) -> Result<i64, ApiError> {
     let now = now_timestamp();
+    // A deposit entered already past its end date is recorded as received —
+    // its interest fed 利息 all along. 收訖 only applies to future deposits.
+    let received_at = (deposit.end_date.as_str() <= today().to_string().as_str())
+        .then(|| deposit.end_date.clone());
     let id: i64 = sqlx::query_scalar(
-        "INSERT INTO deposits (label, bank, principal, rate, interest, end_date, note1, note2, \
-         sort_order, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?) RETURNING id",
+        "INSERT INTO deposits (label, bank, principal, rate, interest, start_date, end_date, \
+         received_at, note1, note2, sort_order, created_at, updated_at) \
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?) RETURNING id",
     )
     .bind(deposit.label.as_deref())
     .bind(deposit.bank.as_deref())
     .bind(deposit.principal)
     .bind(deposit.rate)
     .bind(deposit.interest)
+    .bind(deposit.start_date.as_deref())
     .bind(&deposit.end_date)
+    .bind(&received_at)
     .bind(body.note1.as_deref())
     .bind(body.note2.as_deref())
     .bind(sort_order)

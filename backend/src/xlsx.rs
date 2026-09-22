@@ -10,7 +10,7 @@ use std::path::Path;
 use anyhow::{anyhow, Context};
 use calamine::{open_workbook_auto, Data, Reader};
 
-use crate::models::{InputMode, Market};
+use crate::models::{InputMode, ManualAssetKind, Market, MonthItemCategory};
 
 pub const HK_TRADE_SHEET: &str = "港股Trade";
 pub const HK_SUMMARY_SHEET: &str = "港股";
@@ -23,6 +23,7 @@ pub const YEAR_IN_REVIEW_SHEET: &str = "YearInReview";
 pub const MPF_SHEET: &str = "MPF";
 pub const AIA_SHEET: &str = "AIA";
 pub const OVERVIEW_SHEET: &str = "Overview";
+pub const MONTH_STAT_SHEET: &str = "Month Stat";
 
 #[derive(Debug, Clone)]
 pub struct SheetTrade {
@@ -353,6 +354,12 @@ pub struct WorkbookData {
     /// The AIA sheet's policy table.
     pub aia: Vec<SheetAiaPolicy>,
     pub aia_cached: AiaSheetCached,
+    /// The Month Stat sheet: monthly rows, yearly block, running averages.
+    pub month_stat: MonthStatCached,
+    /// The Overview cells the app seeds from.
+    pub overview: OverviewCached,
+    /// The 美股 sheet's IBKR account header block.
+    pub us_account: UsAccountCached,
 }
 
 impl WorkbookData {
@@ -408,6 +415,14 @@ pub fn read(path: &Path) -> anyhow::Result<WorkbookData> {
     // fine — the note just stays empty then.
     let hk_formulas = workbook.worksheet_formula(HK_TRADE_SHEET).ok();
     let us_formulas = workbook.worksheet_formula(US_TRADE_SHEET).ok();
+    // Month Stat needs formula text to tell live Overview-linked cells from
+    // frozen literals and to recover each row's salary.
+    let month_stat_rows: Option<Rows> = workbook
+        .worksheet_range(MONTH_STAT_SHEET)
+        .ok()
+        .map(|range| range.rows().map(<[Data]>::to_vec).collect());
+    let month_stat_formulas = workbook.worksheet_formula(MONTH_STAT_SHEET).ok();
+    let overview_cached = parse_overview(overview.as_ref());
 
     Ok(WorkbookData {
         hk: MarketSheets {
@@ -447,6 +462,13 @@ pub fn read(path: &Path) -> anyhow::Result<WorkbookData> {
         bond_cached: bond.as_ref().map(parse_bond_cached).unwrap_or_default(),
         aia: aia.as_ref().map(parse_aia).unwrap_or_default(),
         aia_cached: parse_aia_cached(aia.as_ref(), overview.as_ref()),
+        month_stat: parse_month_stat(
+            month_stat_rows.as_ref(),
+            month_stat_formulas.as_ref(),
+            overview_cached.salary,
+        ),
+        overview: overview_cached,
+        us_account: parse_us_account(&us_summary),
     })
 }
 
@@ -1129,6 +1151,490 @@ fn parse_aia_cached(rows: Option<&Rows>, overview: Option<&Rows>) -> AiaSheetCac
     }
 }
 
+/// One materialized item of a Month Stat row (adjustment / extra spend /
+/// income — the sheet folds them into G, J and L).
+#[derive(Debug, Clone)]
+pub struct SheetMonthItem {
+    pub category: MonthItemCategory,
+    pub amount: f64,
+    /// The source cell's formula text, when the cell held a formula.
+    pub note: Option<String>,
+}
+
+/// A monthly row's cached derived cells, kept for parity comparison only.
+#[derive(Debug, Clone, Default)]
+pub struct SheetMonthDerived {
+    /// B 總數 as cached — present even when the cell is `Overview!`-linked.
+    pub total_assets: Option<f64>,
+    /// D 流動資產 as cached.
+    pub liquid_assets: Option<f64>,
+    /// C: month-over-month 總數 change.
+    pub total_change: Option<f64>,
+    /// E: month-over-month 流動資產 change.
+    pub liquid_change: Option<f64>,
+    /// H: 月尾 cash.
+    pub end_cash: Option<f64>,
+    /// I: 月支出.
+    pub month_spend: Option<f64>,
+    /// J: 生活支出.
+    pub living_spend: Option<f64>,
+    /// K: `(J − J a year earlier) / J` — YoY living-spend change.
+    pub living_yoy: Option<f64>,
+    /// L: 存.
+    pub saved: Option<f64>,
+}
+
+/// One monthly row of the `Month Stat` sheet (rows 10 onward).
+#[derive(Debug, Clone)]
+pub struct SheetMonthStat {
+    /// `YYYY-MM-01`.
+    pub month: String,
+    /// F 月初(出糧後).
+    pub start_cash: Option<f64>,
+    /// Recovered from the row's L formula, the previous row's H formula,
+    /// carried forward, or `Overview!E1`.
+    pub salary: Option<f64>,
+    /// B 總數 — `None` when the cell is a live `Overview!` link or blank.
+    pub total_assets: Option<f64>,
+    /// D 流動資產 — same rule.
+    pub liquid_assets: Option<f64>,
+    /// N 利息 (blank = 0).
+    pub interest: f64,
+    /// O 娛樂支出 cached total (blank = 0) — kept for parity; the imported
+    /// form is an `entertainment` item in `items`.
+    pub entertainment: f64,
+    /// P Irene+開心Pool (blank = 0).
+    pub pool_input: f64,
+    pub items: Vec<SheetMonthItem>,
+    pub derived: SheetMonthDerived,
+    /// H is a hand-frozen snapshot, not the `=F<next> − <salary>` chain the
+    /// app derives — its downstream cells (end/spend/living/saved) can only
+    /// be compared informationally.
+    pub end_cash_frozen: bool,
+    /// 1-based row number, for diagnostics.
+    pub source_row: usize,
+}
+
+/// One row of the yearly block (rows 2 onward, before the monthly header).
+#[derive(Debug, Clone)]
+pub struct SheetMonthYear {
+    pub year: i32,
+    /// B 總數+.
+    pub total_change_sum: Option<f64>,
+    /// C 平均總數.
+    pub total_change_avg: Option<f64>,
+    /// D 支出.
+    pub spend_sum: Option<f64>,
+    /// E 平均支出.
+    pub spend_avg: Option<f64>,
+    /// F 生活平均支出.
+    pub living_avg: Option<f64>,
+    /// G 娛樂支出.
+    pub entertainment_sum: Option<f64>,
+    /// H 利息回報.
+    pub interest_sum: Option<f64>,
+    /// I 平均回報.
+    pub interest_avg: Option<f64>,
+    /// M 開心 Pool結餘.
+    pub pool_balance: Option<f64>,
+    /// N Irene + 開心 Pool.
+    pub pool_input_sum: Option<f64>,
+    /// 1-based row number, for diagnostics.
+    pub source_row: usize,
+}
+
+/// Everything read from the `Month Stat` sheet.
+#[derive(Debug, Clone, Default)]
+pub struct MonthStatCached {
+    pub months: Vec<SheetMonthStat>,
+    pub years: Vec<SheetMonthYear>,
+    /// Row 8's running averages: C8, L8, N8.
+    pub avg_total_change: Option<f64>,
+    pub avg_saved: Option<f64>,
+    pub avg_interest: Option<f64>,
+}
+
+/// A manual asset/cash cell from `Overview` (B7/B8 assets, B16/B17 cash),
+/// labelled from the row's A cell.
+#[derive(Debug, Clone)]
+pub struct SheetManualAsset {
+    pub label: String,
+    pub kind: ManualAssetKind,
+    pub amount: f64,
+}
+
+/// One row of `Overview`'s asset table (A3:C9): the A label, the B amount,
+/// and the C share of `B10`.
+#[derive(Debug, Clone)]
+pub struct SheetOverviewRow {
+    pub label: String,
+    pub amount: Option<f64>,
+    pub share: Option<f64>,
+}
+
+/// The `Overview` cells the app seeds from or parity-checks against.
+#[derive(Debug, Clone, Default)]
+pub struct OverviewCached {
+    /// E1: the current salary.
+    pub salary: Option<f64>,
+    /// N8: the current year's 開心Pool rate.
+    pub pool_rate: Option<f64>,
+    pub manual_assets: Vec<SheetManualAsset>,
+    /// B1 總數, H1 流動資產, J1 = H1 ÷ (salary×100).
+    pub total_assets: Option<f64>,
+    pub liquid_assets: Option<f64>,
+    pub liquid_ratio: Option<f64>,
+    /// The A3:C9 asset rows in sheet order (港股, 債券, 基金, MPF, Irene,
+    /// HS人壽, IBKR).
+    pub assets: Vec<SheetOverviewRow>,
+    /// B10 Sum.
+    pub assets_sum: Option<f64>,
+    /// A13: 半流動資金 ÷ (港股 + 債券 + 半流動資金 + IBKR).
+    pub semi_liquid_share: Option<f64>,
+    /// B14 半流動資金, B15 已定期, B18 活期, C14 = B14 − 25%×流動資產.
+    pub semi_liquid_total: Option<f64>,
+    pub deposits_active: Option<f64>,
+    pub cash_total: Option<f64>,
+    pub semi_liquid_vs_quarter: Option<f64>,
+    /// The F3:G10 averages block: G4 總數增加, G5 支出, G6 生活支出,
+    /// H6 生活預算 = ROUNDUP(G6×1.05, −2), G7 存, G8 利息, G10 開心Pool.
+    pub avg_total_change: Option<f64>,
+    pub avg_month_spend: Option<f64>,
+    pub avg_living_spend: Option<f64>,
+    pub living_budget: Option<f64>,
+    pub avg_saved: Option<f64>,
+    pub avg_interest: Option<f64>,
+    pub pool_balance: Option<f64>,
+}
+
+/// The 美股 sheet's IBKR account header block (A1:B5 + B7): all manual inputs
+/// except `computed_now`, the sheet's own `manual cal now` cross-check that
+/// `Overview!B9` links to.
+#[derive(Debug, Clone, Default)]
+pub struct UsAccountCached {
+    /// B1 `in HKD`: cumulative bank→IBKR transfers.
+    pub transferred_hkd: Option<f64>,
+    /// B2 `now value`: the account total shown in the IBKR app.
+    pub now_value: Option<f64>,
+    /// B4 `ac HKD cash`.
+    pub hkd_cash: Option<f64>,
+    /// B5 `ac USD cash`.
+    pub usd_cash: Option<f64>,
+    /// B7 `manual cal now` = (stock value + USD cash) × rate + HKD cash.
+    pub computed_now: Option<f64>,
+}
+
+/// Formula text at the absolute `(row, col)` of a sheet, normalized to start
+/// with `=`. `worksheet_formula`'s range starts where formulas begin, not A1.
+fn formula_at(
+    formulas: Option<&calamine::Range<String>>,
+    row: usize,
+    col: usize,
+) -> Option<String> {
+    let range = formulas?;
+    let (start_row, start_col) = range.start().unwrap_or((0, 0));
+    let (start_row, start_col) = (start_row as usize, start_col as usize);
+    if row < start_row || col < start_col {
+        return None;
+    }
+    range
+        .get((row - start_row, col - start_col))
+        .map(|formula| formula.trim().to_string())
+        .filter(|formula| !formula.is_empty())
+        .map(|formula| {
+            if formula.starts_with('=') {
+                formula
+            } else {
+                format!("={formula}")
+            }
+        })
+}
+
+/// The leading numeric literal of a formula like `=52700 - I42` — the salary
+/// the row's L formula subtracts spending from.
+fn leading_literal(formula: &str) -> Option<f64> {
+    let body = formula
+        .trim()
+        .strip_prefix('=')?
+        .trim_start_matches([' ', '\u{3000}']);
+    let token: String = body
+        .chars()
+        .take_while(|c| c.is_ascii_digit() || *c == '.')
+        .collect();
+    if token.is_empty() {
+        return None;
+    }
+    token.parse::<f64>().ok().filter(|v| v.is_finite())
+}
+
+/// The trailing `- <salary>` literal of an H formula like `=F13 -45500` or
+/// `=78110.32-8000-45500` — that row's own salary, i.e. the previous row's
+/// figure when used as a fallback.
+fn trailing_literal(formula: &str) -> Option<f64> {
+    let body = formula.trim().strip_prefix('=')?;
+    let token = body
+        .rsplit('-')
+        .next()?
+        .trim_matches(|c: char| c == ' ' || c == '\u{3000}');
+    token.parse::<f64>().ok().filter(|v| v.is_finite())
+}
+
+// Monthly row columns (0-based): A month, B 總數, C Changed, D 流動資產,
+// E 流動資產 Changed, F 月初(出糧後), G 調整, H 月尾, I 月支出, J 生活支出,
+// K yoy, L 存, N 利息, O 娛樂支出, P Irene+開心Pool.
+const M_TOTAL: usize = 1;
+const M_TOTAL_CHANGE: usize = 2;
+const M_LIQUID: usize = 3;
+const M_LIQUID_CHANGE: usize = 4;
+const M_START_CASH: usize = 5;
+const M_ADJUSTMENT: usize = 6;
+const M_END_CASH: usize = 7;
+const M_SPEND: usize = 8;
+const M_LIVING: usize = 9;
+const M_LIVING_YOY: usize = 10;
+const M_SAVED: usize = 11;
+const M_INTEREST: usize = 13;
+const M_ENTERTAINMENT: usize = 14;
+const M_POOL_INPUT: usize = 15;
+
+/// Zero tolerance for materializing items out of cached differences.
+const ITEM_TOLERANCE: f64 = 1e-6;
+
+fn parse_month_stat(
+    rows: Option<&Rows>,
+    formulas: Option<&calamine::Range<String>>,
+    overview_salary: Option<f64>,
+) -> MonthStatCached {
+    let mut cached = MonthStatCached::default();
+    let Some(rows) = rows else { return cached };
+
+    // The first date in column A opens the monthly table (row 10): two rows
+    // above it sits the averages row (C8/L8/N8), and the numeric-A rows in
+    // between form the yearly block.
+    let Some(month_start) = rows
+        .iter()
+        .position(|row| matches!(cell(row, 0), Some(Data::DateTime(_))))
+    else {
+        return cached;
+    };
+    let averages_row = month_start.saturating_sub(2);
+    if let Some(row) = rows.get(averages_row) {
+        cached.avg_total_change = number(row, 2);
+        cached.avg_saved = number(row, 11);
+        cached.avg_interest = number(row, 13);
+    }
+    for row in rows.iter().take(month_start.saturating_sub(1)).skip(1) {
+        let Some(year) = number(row, 0)
+            .map(|year| year as i32)
+            .filter(|year| (2000..2100).contains(year))
+        else {
+            continue;
+        };
+        // A year row with no B (e.g. 2027) carries no figures — skip it.
+        if number(row, 1).is_none() {
+            continue;
+        }
+        cached.years.push(SheetMonthYear {
+            year,
+            total_change_sum: number(row, 1),
+            total_change_avg: number(row, 2),
+            spend_sum: number(row, 3),
+            spend_avg: number(row, 4),
+            living_avg: number(row, 5),
+            entertainment_sum: number(row, 6),
+            interest_sum: number(row, 7),
+            interest_avg: number(row, 8),
+            pool_balance: number(row, 12),
+            pool_input_sum: number(row, 13),
+            source_row: 0,
+        });
+    }
+    for (index, year) in cached.years.iter_mut().enumerate() {
+        year.source_row = index + 2;
+    }
+
+    let mut last_salary = overview_salary;
+    let mut prev_h_formula: Option<String> = None;
+    for (index, row) in rows.iter().enumerate().skip(month_start) {
+        let Some(month) = date(row, 0) else { continue };
+        // A date with every data cell blank is a reserved future row.
+        if (1..=M_POOL_INPUT).all(|col| cell(row, col).is_none()) {
+            continue;
+        }
+        let formula_of = |col: usize| formula_at(formulas, index, col);
+        // A formula reaching into `Overview!` is live; a plain formula is a
+        // frozen literal and its cached value imports normally.
+        let linked = |col: usize| formula_of(col).is_some_and(|f| f.contains("Overview!"));
+        let total_assets = if linked(M_TOTAL) {
+            None
+        } else {
+            number(row, M_TOTAL)
+        };
+        let liquid_assets = if linked(M_LIQUID) {
+            None
+        } else {
+            number(row, M_LIQUID)
+        };
+
+        let salary = formula_of(M_SAVED)
+            .and_then(|f| leading_literal(&f))
+            .or_else(|| prev_h_formula.as_deref().and_then(trailing_literal))
+            .or(last_salary);
+        last_salary = salary;
+
+        // `=F<next> − <salary>` chains to the next row; any other H content
+        // (frozen literals, blanks) is a snapshot the derivation cannot
+        // reproduce.
+        let h_formula = formula_of(M_END_CASH);
+        let end_cash_frozen = match &h_formula {
+            Some(formula) => !formula.contains(&format!("F{}", index + 2)),
+            None => true,
+        };
+
+        let mut items = Vec::new();
+        if let Some(adjustment) = number(row, M_ADJUSTMENT).filter(|v| v.abs() > ITEM_TOLERANCE) {
+            items.push(SheetMonthItem {
+                category: MonthItemCategory::Adjustment,
+                amount: adjustment,
+                note: formula_of(M_ADJUSTMENT),
+            });
+        }
+        if let (Some(spend), Some(living)) = (number(row, M_SPEND), number(row, M_LIVING)) {
+            let extra = spend - living;
+            if extra.abs() > ITEM_TOLERANCE {
+                items.push(SheetMonthItem {
+                    category: MonthItemCategory::ExtraSpend,
+                    amount: extra,
+                    note: formula_of(M_LIVING),
+                });
+            }
+        }
+        if let (Some(saved), Some(spend), Some(salary)) =
+            (number(row, M_SAVED), number(row, M_SPEND), salary)
+        {
+            let income = saved - (salary - spend);
+            if income.abs() > ITEM_TOLERANCE {
+                items.push(SheetMonthItem {
+                    category: MonthItemCategory::Income,
+                    amount: income,
+                    note: formula_of(M_SAVED),
+                });
+            }
+        }
+        // O 娛樂支出 imports as one entertainment item (formula text kept as
+        // the note); the `=I − …` J exclusions stay separate extra_spend
+        // items — the sheet's O↔J overlap is not re-linked on import.
+        if let Some(entertainment) =
+            number(row, M_ENTERTAINMENT).filter(|v| v.abs() > ITEM_TOLERANCE)
+        {
+            items.push(SheetMonthItem {
+                category: MonthItemCategory::Entertainment,
+                amount: entertainment,
+                note: formula_of(M_ENTERTAINMENT),
+            });
+        }
+
+        cached.months.push(SheetMonthStat {
+            month,
+            start_cash: number(row, M_START_CASH),
+            salary,
+            total_assets,
+            liquid_assets,
+            interest: number(row, M_INTEREST).unwrap_or(0.0),
+            entertainment: number(row, M_ENTERTAINMENT).unwrap_or(0.0),
+            pool_input: number(row, M_POOL_INPUT).unwrap_or(0.0),
+            items,
+            end_cash_frozen,
+            derived: SheetMonthDerived {
+                total_assets: number(row, M_TOTAL),
+                liquid_assets: number(row, M_LIQUID),
+                total_change: number(row, M_TOTAL_CHANGE),
+                liquid_change: number(row, M_LIQUID_CHANGE),
+                end_cash: number(row, M_END_CASH),
+                month_spend: number(row, M_SPEND),
+                living_spend: number(row, M_LIVING),
+                living_yoy: number(row, M_LIVING_YOY),
+                saved: number(row, M_SAVED),
+            },
+            source_row: index + 1,
+        });
+        prev_h_formula = h_formula;
+    }
+    cached
+}
+
+/// The Overview cells: E1 salary, N8 current-year pool rate, the manual
+/// asset/cash figures at B7/B8 and B16/B17 with their A-column labels, and the
+/// A3:C18 block cells the parity check compares against.
+fn parse_overview(rows: Option<&Rows>) -> OverviewCached {
+    let cell_num = |r: usize, c: usize| {
+        rows.and_then(|rows| rows.get(r))
+            .and_then(|row| number(row, c))
+    };
+    let cell_text = |r: usize, c: usize| {
+        rows.and_then(|rows| rows.get(r))
+            .and_then(|row| text(row, c))
+    };
+    let mut manual_assets = Vec::new();
+    for (r, kind, fallback) in [
+        (6usize, ManualAssetKind::Asset, "Irene"),
+        (7, ManualAssetKind::Asset, "HS人壽"),
+        (15, ManualAssetKind::Cash, "HS"),
+        (16, ManualAssetKind::Cash, "渣打"),
+    ] {
+        if let Some(amount) = cell_num(r, 1) {
+            manual_assets.push(SheetManualAsset {
+                label: cell_text(r, 0).unwrap_or_else(|| fallback.to_string()),
+                kind,
+                amount,
+            });
+        }
+    }
+    // Rows 3–9 (0-based 2–8): 港股, 債券, 基金, MPF, Irene, HS人壽, IBKR.
+    let assets = (2..=8)
+        .map(|r| SheetOverviewRow {
+            label: cell_text(r, 0).unwrap_or_default(),
+            amount: cell_num(r, 1),
+            share: cell_num(r, 2),
+        })
+        .collect();
+    OverviewCached {
+        salary: cell_num(0, 4),
+        pool_rate: cell_num(7, 13),
+        manual_assets,
+        total_assets: cell_num(0, 1),
+        liquid_assets: cell_num(0, 7),
+        liquid_ratio: cell_num(0, 9),
+        assets,
+        assets_sum: cell_num(9, 1),
+        semi_liquid_share: cell_num(12, 0),
+        semi_liquid_total: cell_num(13, 1),
+        deposits_active: cell_num(14, 1),
+        cash_total: cell_num(17, 1),
+        semi_liquid_vs_quarter: cell_num(13, 2),
+        avg_total_change: cell_num(3, 6),
+        avg_month_spend: cell_num(4, 6),
+        avg_living_spend: cell_num(5, 6),
+        living_budget: cell_num(5, 7),
+        avg_saved: cell_num(6, 6),
+        avg_interest: cell_num(7, 6),
+        pool_balance: cell_num(9, 6),
+    }
+}
+
+/// The 美股 sheet's IBKR account header: B1 transferred, B2 now value,
+/// B4 HKD cash, B5 USD cash, B7 `manual cal now`.
+fn parse_us_account(rows: &Rows) -> UsAccountCached {
+    let cell_num = |r: usize| rows.get(r).and_then(|row| number(row, 1));
+    UsAccountCached {
+        transferred_hkd: cell_num(0),
+        now_value: cell_num(1),
+        hkd_cash: cell_num(3),
+        usd_cash: cell_num(4),
+        computed_now: cell_num(6),
+    }
+}
+
 /// A market sheet's cached last-month/max cells: `label → number` pairs like
 /// the MPF top block, except each cell holds a single figure — `last month`
 /// carries a rate only, `max Balance %` a rate, `max net` an amount. On 美股
@@ -1510,7 +2016,7 @@ mod tests {
         let first = &data.aia[0];
         assert_eq!(first.label, "年金 - 2024 - 2029");
         assert_eq!(first.policy_no.as_deref(), Some("B632611401"));
-        assert_eq!(first.next_pay_date.as_deref(), Some("2026-07-01"));
+        assert_eq!(first.next_pay_date.as_deref(), Some("2027-07-01"));
         assert!(near(first.premium_usd, 24960.0));
         assert!(near(first.value_usd, 14284.35));
         assert_eq!(first.remaining_years, Some(2.0));
@@ -1534,20 +2040,77 @@ mod tests {
         let irene_annuity = &data.aia[7];
         assert_eq!(irene_annuity.label, "irene 年金");
         assert!(!irene_annuity.in_account);
-        assert!(near(irene_annuity.premium_usd, 3823.979998));
+        assert!(near(irene_annuity.premium_usd, 3824.025973));
 
         let cached = &data.aia_cached;
-        assert!(near(cached.buy_usd.expect("buy usd"), 124781.98));
+        assert!(near(cached.buy_usd.expect("buy usd"), 124782.026));
         assert!(near(cached.now_usd.expect("now usd"), 89260.78));
         assert!(near(cached.display_value.expect("display"), 87274.32));
-        // B5 = B2 − B1 − B3 in the sheet.
+        // B5 = B2 − B1 − B3 in the sheet. The cached cells round at ~4
+        // decimals, so this check is looser than `near`.
         let expected_net =
             cached.now_hkd.unwrap() - cached.buy_hkd.unwrap() - cached.drew_hkd.unwrap();
-        assert!(near(
-            cached.net_change_hkd.expect("net change"),
-            expected_net
-        ));
-        assert!(near(cached.usd_hkd_rate.expect("rate"), 7.84522932));
+        assert!(
+            (cached.net_change_hkd.expect("net change") - expected_net).abs() < 1e-3,
+            "net_change_hkd = {:?}, expected {expected_net}",
+            cached.net_change_hkd
+        );
+        assert!(near(cached.usd_hkd_rate.expect("rate"), 7.845135));
+    }
+
+    #[test]
+    fn reads_month_stat_rows_yearly_block_and_overview() {
+        let data = read(&workbook_path()).expect("workbook is readable");
+
+        let months = &data.month_stat.months;
+        let first = &months[0];
+        assert_eq!(first.month, "2023-12-01");
+        // Salary recovered from the row's own L formula `=45500-I10`.
+        assert_eq!(first.salary, Some(45500.0));
+        // Its H is a frozen literal (`=78110.32-8000-45500`), not the chain.
+        assert!(first.end_cash_frozen);
+
+        // The April raise lands on the April row: 2026-04 reads 52700 while
+        // March's H still subtracts 50810.
+        let apr = months
+            .iter()
+            .find(|m| m.month == "2026-04-01")
+            .expect("2026-04");
+        assert_eq!(apr.salary, Some(52700.0));
+
+        // The Overview-linked row imports with NULL totals (live).
+        let live = months
+            .iter()
+            .find(|m| m.month == "2026-10-01")
+            .expect("2026-10");
+        assert_eq!(live.total_assets, None);
+        assert_eq!(live.liquid_assets, None);
+        // ...and carries forward the latest salary.
+        assert_eq!(live.salary, Some(52700.0));
+
+        // 2024-03's `=…+67680` L tail materializes as an income item.
+        let mar24 = months
+            .iter()
+            .find(|m| m.month == "2024-03-01")
+            .expect("2024-03");
+        assert!(mar24
+            .items
+            .iter()
+            .any(|i| i.category == MonthItemCategory::Income && i.amount == 67680.0));
+
+        assert!(data.month_stat.years.iter().any(|y| y.year == 2024));
+        assert_eq!(data.overview.salary, Some(52700.0));
+        assert_eq!(data.overview.pool_rate, Some(0.337));
+
+        // The F3:G10 averages block (cached OFFSET window + H6 + pool).
+        let near = |a: Option<f64>, b: f64| a.map(|a| (a - b).abs() < 0.01).unwrap_or(false);
+        assert!(near(data.overview.avg_total_change, 75299.99));
+        assert!(near(data.overview.avg_month_spend, 30775.06));
+        assert!(near(data.overview.avg_living_spend, 14119.67));
+        assert_eq!(data.overview.living_budget, Some(14900.0));
+        assert!(near(data.overview.avg_saved, 30013.27));
+        assert!(near(data.overview.avg_interest, 5731.46));
+        assert!(near(data.overview.pool_balance, 22172.40));
     }
 
     #[test]

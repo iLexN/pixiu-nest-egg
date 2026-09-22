@@ -13,12 +13,14 @@ interface FormState {
   received_amount: string
   received_price: string
   also_update_price: boolean
+  bank_in: boolean
 }
 
 const form = reactive<FormState>({
   received_amount: '',
   received_price: '',
   also_update_price: false,
+  bank_in: true,
 })
 const error = ref<ApiError | null>(null)
 const saving = ref(false)
@@ -30,6 +32,7 @@ watch(
       dividend.estimated_amount === null ? '' : String(dividend.estimated_amount)
     form.received_price = ''
     form.also_update_price = false
+    form.bank_in = true
   },
   { immediate: true },
 )
@@ -50,6 +53,7 @@ async function submit() {
     const saved = await api.updateDividend(props.dividend.id, {
       received_amount: num(form.received_amount),
       received_price: receivedPrice,
+      bank_in: form.bank_in,
     })
     // Opt-in: the receipt price is a snapshot on this record; updating the
     // stock's 現價 is a separate, possibly different-day decision.
@@ -87,6 +91,11 @@ async function submit() {
         }}</small>
       </label>
     </div>
+
+    <label class="checkbox">
+      <input v-model="form.bank_in" type="checkbox" />
+      {{ props.dividend.market === 'US' ? '存入 IBKR USD cash' : '存入活期 HS' }}
+    </label>
 
     <label class="checkbox">
       <input v-model="form.also_update_price" type="checkbox" />

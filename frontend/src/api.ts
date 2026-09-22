@@ -203,7 +203,10 @@ export interface Deposit {
   principal: number | null
   rate: number | null
   interest: number | null
+  start_date: string | null
   end_date: string
+  /** 收訖日; null while the deposit is still on the books (in 未到期定期). */
+  received_at: string | null
   note1: string | null
   note2: string | null
   sort_order: number
@@ -219,9 +222,21 @@ export interface NewDeposit {
   principal?: number | null
   rate?: number | null
   interest?: number | null
+  start_date?: string | null
   end_date: string
   note1?: string | null
   note2?: string | null
+}
+
+export interface ReceiveDepositBody {
+  /** 收訖日; defaults to today server-side. */
+  received_at?: string
+  /** Corrects the stored interest to the amount actually received. */
+  interest?: number
+  /** Cash `manual_assets` id to credit the returned money into. */
+  credit_asset_id?: number
+  /** Amount credited; defaults to principal + interest. */
+  credit_amount?: number
 }
 
 export interface ActiveMonthBucket {
@@ -312,6 +327,9 @@ export interface DividendPatch {
   received_price?: number | null
   note?: string | null
   refresh_snapshots?: boolean
+  /** On 收訖, bank the amount (HK → HS cash row, US → IBKR USD cash).
+   * Defaults to on. */
+  bank_in?: boolean
 }
 
 export interface DividendStockTotal {
@@ -350,10 +368,21 @@ export interface Bond {
   issue_no: string | null
   principal: number
   maturity_date: string
+  /** 收訖日 for the principal return; null while matured-but-unreceived. */
+  received_at: string | null
   note: string | null
   sort_order: number
   status: BondStatus
   next_pay_date: string | null
+}
+
+export interface ReceiveBondBody {
+  /** 收訖日; defaults to today server-side. */
+  received_at?: string
+  /** Cash `manual_assets` id to credit the returned principal into. */
+  credit_asset_id?: number
+  /** Amount credited; defaults to the bond's principal. */
+  credit_amount?: number
 }
 
 export interface NewBond {
@@ -401,6 +430,8 @@ export interface BondCouponPatch {
   per_10k?: number | null
   received_amount?: number | null
   note?: string | null
+  /** On 收訖, bank the amount into the HS cash row. Defaults to on. */
+  bank_in?: boolean
 }
 
 export interface BondWithCoupons extends Bond {
@@ -590,6 +621,241 @@ export interface AiaSummary {
   policies: AiaPolicyWithEvents[]
 }
 
+
+export type MonthItemCategory =
+  | 'adjustment'
+  | 'extra_spend'
+  | 'income'
+  | 'entertainment'
+  | 'interest'
+export type ManualAssetKind = 'cash' | 'asset'
+
+export interface MonthStat {
+  month: string
+  start_cash: number | null
+  salary: number | null
+  total_assets: number | null
+  liquid_assets: number | null
+  total_assets_live: boolean
+  liquid_assets_live: boolean
+  interest: number
+  pool_input: number
+  end_cash_override: number | null
+  note: string | null
+  created_at: string
+  updated_at: string
+  end_cash: number | null
+  month_spend: number | null
+  living_spend: number | null
+  saved: number | null
+  total_change: number | null
+  liquid_change: number | null
+  living_yoy: number | null
+  adjustment_sum: number
+  extra_spend_sum: number
+  income_sum: number
+  entertainment_sum: number
+}
+
+export interface MonthItem {
+  id: number
+  month: string
+  category: MonthItemCategory
+  label: string | null
+  amount: number
+  exclude_from_living: boolean
+  auto_key: string | null
+  note: string | null
+  created_at: string
+}
+
+/** A computed, not-yet-stored item candidate for the month. */
+export interface MonthSuggestion {
+  auto_key: string
+  category: MonthItemCategory
+  label: string | null
+  amount: number
+  source: string
+}
+
+/** One auto interest component: a deposit ending, a received coupon, or a
+ * received HK dividend dated in the month. */
+export interface InterestComponent {
+  source: string
+  label: string | null
+  /** Received amount, or the expected/estimated figure while pending; null
+   * when nothing is known yet (待定 coupon, estimate-less dividend). */
+  amount: number | null
+  /** Components are false until 收訖 — preview only, not counted. */
+  received: boolean
+}
+
+export interface MonthDetail {
+  month: MonthStat
+  items: MonthItem[]
+  suggestions: MonthSuggestion[]
+  interest_auto: InterestComponent[]
+}
+
+export interface MonthYearSummary {
+  year: number
+  total_change_sum: number | null
+  total_change_avg: number | null
+  spend_sum: number | null
+  spend_avg: number | null
+  living_avg: number | null
+  entertainment_sum: number
+  interest_sum: number
+  interest_avg: number
+  pool_income: number
+  pool_balance: number
+  pool_input_sum: number
+  months: number
+  /** 投資純利 — null until HK sold P/L is computed. */
+  net_investment: number | null
+}
+
+export interface MonthRunningAverages {
+  total_change_avg: number | null
+  liquid_change_avg: number | null
+  saved_avg: number | null
+  interest_avg: number | null
+}
+
+export interface MonthSummary {
+  years: MonthYearSummary[]
+  running: MonthRunningAverages
+  pool_balance: number
+  pool_rate: number | null
+  pool_rate_year: number
+}
+
+export interface MonthSettings {
+  salary: number | null
+  pool_rate: number | null
+  pool_rate_year: number
+}
+
+export interface MonthStatPatch {
+  start_cash?: number | null
+  salary?: number | null
+  total_assets?: number | null
+  liquid_assets?: number | null
+  pool_input?: number
+  end_cash_override?: number | null
+  note?: string | null
+  recapture?: boolean
+}
+
+export interface NewMonthItem {
+  category: MonthItemCategory
+  label?: string | null
+  amount: number
+  exclude_from_living?: boolean
+  auto_key?: string | null
+  note?: string | null
+}
+
+export interface MonthItemPatch {
+  category?: MonthItemCategory
+  label?: string | null
+  amount?: number
+  exclude_from_living?: boolean
+  note?: string | null
+}
+
+export interface MonthSettingsPatch {
+  salary?: number | null
+  pool_rate?: number | null
+  pool_rate_year?: number
+}
+
+export interface ManualAsset {
+  id: number
+  label: string
+  kind: ManualAssetKind
+  amount: number
+  sort_order: number
+  updated_at: string
+}
+
+export interface NewManualAsset {
+  label: string
+  kind: ManualAssetKind
+  amount: number
+}
+
+export interface ManualAssetPatch {
+  label?: string
+  kind?: ManualAssetKind
+  amount?: number
+}
+
+/** The 美股 sheet's IBKR account block: manual inputs + derived cross-checks. */
+export interface IbkrBlock {
+  transferred_hkd: number | null
+  now_value: number | null
+  hkd_cash: number | null
+  usd_cash: number | null
+  stock_value_usd: number | null
+  computed_total_hkd: number | null
+  net: number | null
+  net_pct: number | null
+  vs_now_value: number | null
+}
+
+export interface IbkrPatch {
+  transferred_hkd?: number | null
+  now_value?: number | null
+  hkd_cash?: number | null
+  usd_cash?: number | null
+}
+
+export interface OverviewAssetRow {
+  key: string
+  label: string
+  amount: number | null
+  share: number | null
+  manual_asset_id: number | null
+}
+
+export interface SemiLiquid {
+  deposits: number
+  cash_rows: ManualAsset[]
+  cash_sum: number
+  total: number
+  vs_quarter_liquid: number
+  share: number | null
+}
+
+export interface TwelveMonthAverages {
+  total_change: number | null
+  month_spend: number | null
+  living_spend: number | null
+  living_budget: number | null
+  living_budget_low: boolean
+  living_budget_floor: number
+  saved: number | null
+  interest: number | null
+  pool_balance: number
+  window_start: string | null
+  window_end: string | null
+}
+
+export interface OverviewResponse {
+  today: string
+  rate: number | null
+  salary: number | null
+  total_assets: number
+  liquid_assets: number
+  liquid_ratio: number | null
+  assets: OverviewAssetRow[]
+  assets_sum: number
+  semi_liquid: SemiLiquid
+  ibkr: IbkrBlock
+  averages: TwelveMonthAverages
+}
+
 /** Carries the server's field-level messages so forms can show them inline. */
 export class ApiError extends Error {
   status: number
@@ -707,6 +973,14 @@ export const api = {
   deleteDeposit(id: number): Promise<void> {
     return request(`/deposits/${id}`, { method: 'DELETE' })
   },
+  /** 收訖: mark received, optionally credit principal+interest to a cash
+   * manual asset, and record the month's dep-end adjustment item. */
+  receiveDeposit(id: number, body: ReceiveDepositBody = {}): Promise<Deposit> {
+    return request(`/deposits/${id}/receive`, { method: 'POST', body: JSON.stringify(body) })
+  },
+  unreceiveDeposit(id: number): Promise<Deposit> {
+    return request(`/deposits/${id}/unreceive`, { method: 'POST' })
+  },
   depositSummary(): Promise<DepositSummary> {
     return request('/deposits/summary')
   },
@@ -736,6 +1010,14 @@ export const api = {
   },
   deleteBond(id: number): Promise<void> {
     return request(`/bonds/${id}`, { method: 'DELETE' })
+  },
+  /** 收訖 the principal return: mark received, optionally credit the principal
+   * to a cash manual asset, and record the maturity month's bond-end item. */
+  receiveBond(id: number, body: ReceiveBondBody = {}): Promise<Bond> {
+    return request(`/bonds/${id}/receive`, { method: 'POST', body: JSON.stringify(body) })
+  },
+  unreceiveBond(id: number): Promise<Bond> {
+    return request(`/bonds/${id}/unreceive`, { method: 'POST' })
   },
   bondSummary(): Promise<BondSummary> {
     return request('/bonds/summary')
@@ -793,5 +1075,63 @@ export const api = {
   },
   deleteAiaEvent(id: number): Promise<void> {
     return request(`/aia/events/${id}`, { method: 'DELETE' })
+  },
+
+  listMonths(year?: number): Promise<MonthStat[]> {
+    return request(`/months${queryString({ year })}`)
+  },
+  monthSummary(): Promise<MonthSummary> {
+    return request('/months/summary')
+  },
+  monthDetail(ym: string): Promise<MonthDetail> {
+    return request(`/months/${ym}`)
+  },
+  patchMonth(ym: string, patch: MonthStatPatch): Promise<MonthStat> {
+    return request(`/months/${ym}`, { method: 'PATCH', body: JSON.stringify(patch) })
+  },
+  deleteMonth(ym: string): Promise<void> {
+    return request(`/months/${ym}`, { method: 'DELETE' })
+  },
+  createMonthItem(ym: string, item: NewMonthItem): Promise<MonthItem> {
+    return request(`/months/${ym}/items`, { method: 'POST', body: JSON.stringify(item) })
+  },
+  updateMonthItem(id: number, patch: MonthItemPatch): Promise<MonthItem> {
+    return request(`/month-items/${id}`, { method: 'PATCH', body: JSON.stringify(patch) })
+  },
+  deleteMonthItem(id: number): Promise<void> {
+    return request(`/month-items/${id}`, { method: 'DELETE' })
+  },
+  dismissMonthItem(ym: string, autoKey: string): Promise<void> {
+    return request(`/months/${ym}/items/dismiss`, {
+      method: 'POST',
+      body: JSON.stringify({ auto_key: autoKey }),
+    })
+  },
+  monthSettings(): Promise<MonthSettings> {
+    return request('/months/settings')
+  },
+  updateMonthSettings(patch: MonthSettingsPatch): Promise<MonthSettings> {
+    return request('/months/settings', { method: 'PATCH', body: JSON.stringify(patch) })
+  },
+  listManualAssets(): Promise<ManualAsset[]> {
+    return request('/manual-assets')
+  },
+  createManualAsset(asset: NewManualAsset): Promise<ManualAsset> {
+    return request('/manual-assets', { method: 'POST', body: JSON.stringify(asset) })
+  },
+  updateManualAsset(id: number, patch: ManualAssetPatch): Promise<ManualAsset> {
+    return request(`/manual-assets/${id}`, { method: 'PATCH', body: JSON.stringify(patch) })
+  },
+  deleteManualAsset(id: number): Promise<void> {
+    return request(`/manual-assets/${id}`, { method: 'DELETE' })
+  },
+  overview(): Promise<OverviewResponse> {
+    return request('/overview')
+  },
+  ibkr(): Promise<IbkrBlock> {
+    return request('/ibkr')
+  },
+  updateIbkr(patch: IbkrPatch): Promise<IbkrBlock> {
+    return request('/ibkr', { method: 'PATCH', body: JSON.stringify(patch) })
   },
 }

@@ -51,6 +51,12 @@ async fn main() -> anyhow::Result<()> {
         report.deposits.deposits_imported,
         report.deposits.deposits_skipped,
     );
+    if report.deposits.start_dates_seeded > 0 {
+        println!(
+            "  定期 start_date seeded on {} existing row(s)",
+            report.deposits.start_dates_seeded
+        );
+    }
     println!(
         "year snapshots: {} seeded, {} skipped (current year or empty)",
         report.snapshots.snapshots_seeded, report.snapshots.snapshots_skipped,
@@ -80,6 +86,16 @@ async fn main() -> anyhow::Result<()> {
     for warning in &report.aia.warnings {
         println!("  AIA warning: {warning}");
     }
+    println!(
+        "Month Stat: {} month row(s) in the sheet -> {} imported, {} skipped (already present); \
+         {} item(s) imported; {} setting(s) seeded; {} 月尾 override(s) seeded",
+        data.month_stat.months.len(),
+        report.months.months_imported,
+        report.months.months_skipped,
+        report.months.items_imported,
+        report.months.settings_seeded,
+        report.months.end_cash_seeded,
+    );
 
     pool.close().await;
     Ok(())

@@ -1,24 +1,33 @@
 <script setup lang="ts">
-import { onMounted, ref } from 'vue'
+import { computed, onMounted, ref } from 'vue'
 import {
   api,
   ApiError,
   type Bond,
   type BondCoupon,
   type BondSummary,
+  type ManualAsset,
 } from '../api'
-import { fmtMoney, fmtPercent, signClass } from '../format'
+import { fmtMoney, fmtPercent, signClass, todayIso } from '../format'
 import DateInput from '../components/DateInput.vue'
 import RowActions from '../components/RowActions.vue'
 
 const summary = ref<BondSummary | null>(null)
+const assets = ref<ManualAsset[]>([])
 const message = ref('')
 const error = ref('')
+
+const cashAssets = computed(() => assets.value.filter((asset) => asset.kind === 'cash'))
 
 async function load() {
   error.value = ''
   try {
-    summary.value = await api.bondSummary()
+    const [summaryData, assetsData] = await Promise.all([
+      api.bondSummary(),
+      api.listManualAssets(),
+    ])
+    summary.value = summaryData
+    assets.value = assetsData
   } catch (err) {
     error.value = err instanceof ApiError ? err.message : String(err)
   }
@@ -230,10 +239,14 @@ async function saveFix() {
 
 // ----- 收訖 (pending -> received) -----
 
-const receiving = ref<{ coupon: BondCoupon; amount: string | number } | null>(null)
+const receiving = ref<{
+  coupon: BondCoupon
+  amount: string | number
+  bank_in: boolean
+} | null>(null)
 
 function startReceive(coupon: BondCoupon) {
-  receiving.value = { coupon, amount: coupon.expected ?? '' }
+  receiving.value = { coupon, amount: coupon.expected ?? '', bank_in: true }
 }
 
 async function saveReceive() {
@@ -245,10 +258,65 @@ async function saveReceive() {
     return
   }
   try {
-    await api.updateCoupon(current.coupon.id, { received_amount: amount })
+    await api.updateCoupon(current.coupon.id, {
+      received_amount: amount,
+      bank_in: current.bank_in,
+    })
     receiving.value = null
     message.value = '已記錄收訖'
     error.value = ''
+    await load()
+  } catch (err) {
+    error.value = err instanceof ApiError ? err.message : String(err)
+  }
+}
+
+// ----- bond 收訖 (principal return -> received, optional bank-in) -----
+
+const receivingBond = ref<{
+  bond: Bond
+  received_at: string
+  credit_asset_id: number | null
+  credit_amount: string | number
+} | null>(null)
+
+function startBondReceive(bond: Bond) {
+  receivingBond.value = {
+    bond,
+    received_at: todayIso(),
+    credit_asset_id: null,
+    credit_amount: bond.principal,
+  }
+}
+
+async function saveBondReceive() {
+  const current = receivingBond.value
+  if (!current) return
+  const creditAmount = numOrNull(current.credit_amount)
+  if (current.credit_asset_id !== null && creditAmount === null) {
+    error.value = '存入金額必須是數字'
+    return
+  }
+  try {
+    await api.receiveBond(current.bond.id, {
+      received_at: current.received_at || undefined,
+      credit_asset_id: current.credit_asset_id ?? undefined,
+      credit_amount: creditAmount ?? undefined,
+    })
+    receivingBond.value = null
+    message.value = '已記錄本金收訖'
+    error.value = ''
+    await load()
+  } catch (err) {
+    error.value = err instanceof ApiError ? err.message : String(err)
+  }
+}
+
+async function unreceiveBond(bond: Bond) {
+  if (!window.confirm(`取消收訖 ${bond.label}？已存入的活期與月結調整項目會一併還原。`)) return
+  try {
+    await api.unreceiveBond(bond.id)
+    message.value = `已取消收訖 ${bond.label}`
     await load()
   } catch (err) {
     error.value = err instanceof ApiError ? err.message : String(err)
@@ -288,7 +356,19 @@ onMounted(load)
           </h3>
           <span class="muted">
             本金 {{ fmtMoney(bond.principal) }} · 到期 {{ bond.maturity_date }}
+            <template v-if="bond.received_at"> · 收訖 {{ bond.received_at }}</template>
           </span>
+          <button
+            v-if="!bond.received_at"
+            type="button"
+            class="link"
+            @click="startBondReceive(bond)"
+          >
+            收訖
+          </button>
+          <button v-else type="button" class="link" @click="unreceiveBond(bond)">
+            取消收訖
+          </button>
           <RowActions @edit="startBondEdit(bond)" @remove="removeBond(bond)" />
         </div>
 
@@ -459,15 +539,52 @@ onMounted(load)
           實收金額
           <input v-model="receiving.amount" type="number" step="any" inputmode="decimal" required />
         </label>
+        <label class="checkbox">
+          <input v-model="receiving.bank_in" type="checkbox" />
+          存入活期 HS
+        </label>
         <div class="form-actions">
           <button type="submit">收訖</button>
           <button type="button" class="link" @click="receiving = null">取消</button>
+        </div>
+      </form>
+
+      <form v-if="receivingBond" class="inline-form" @submit.prevent="saveBondReceive">
+        <h4>
+          本金收訖 — {{ receivingBond.bond.label }}（{{ receivingBond.bond.maturity_date }} 到期）
+        </h4>
+        <label>
+          收訖日
+          <input v-model="receivingBond.received_at" type="date" required />
+        </label>
+        <label>
+          存入活期
+          <select v-model="receivingBond.credit_asset_id">
+            <option :value="null">不存入</option>
+            <option v-for="asset in cashAssets" :key="asset.id" :value="asset.id">
+              {{ asset.label }}（{{ fmtMoney(asset.amount) }}）
+            </option>
+          </select>
+        </label>
+        <label v-if="receivingBond.credit_asset_id !== null">
+          存入金額
+          <input
+            v-model="receivingBond.credit_amount"
+            type="number"
+            step="any"
+            inputmode="decimal"
+          />
+        </label>
+        <div class="form-actions">
+          <button type="submit">收訖</button>
+          <button type="button" class="link" @click="receivingBond = null">取消</button>
         </div>
       </form>
     </div>
 
     <div v-if="summary && summary.matured.length" class="card">
       <h3>已到期</h3>
+
       <div v-for="bond in summary.matured" :key="bond.id" class="bond-block">
         <div class="bond-head">
           <h3>
@@ -476,7 +593,20 @@ onMounted(load)
           </h3>
           <span class="muted">
             本金 {{ fmtMoney(bond.principal) }} · 到期 {{ bond.maturity_date }}
+            <template v-if="bond.received_at"> · 收訖 {{ bond.received_at }}</template>
+            <template v-else> · <span class="unreceived">本金未收</span></template>
           </span>
+          <button
+            v-if="!bond.received_at"
+            type="button"
+            class="link"
+            @click="startBondReceive(bond)"
+          >
+            收訖
+          </button>
+          <button v-else type="button" class="link" @click="unreceiveBond(bond)">
+            取消收訖
+          </button>
           <RowActions @edit="startBondEdit(bond)" @remove="removeBond(bond)" />
         </div>
         <table v-if="bond.coupons.length">
@@ -527,7 +657,7 @@ onMounted(load)
       <h3>手動步驟提醒</h3>
       <p class="muted">
         試算表的 債券 表只有現有債券 — 已到期債券由此 app 自行保存記錄。
-        Overview、Month Stat 等尚未遷移的章節仍以試算表為準。
+        Overview 等尚未遷移的章節仍以試算表為準。
       </p>
     </div>
 
@@ -573,6 +703,9 @@ onMounted(load)
 .bond-head .muted {
   font-size: 0.8rem;
 }
+.unreceived {
+  color: var(--negative, #b91c1c);
+}
 .inline-form {
   display: grid;
   grid-template-columns: repeat(auto-fit, minmax(10rem, 1fr));
@@ -588,6 +721,11 @@ onMounted(load)
   flex-direction: column;
   font-size: 0.8rem;
   gap: 0.2rem;
+}
+.inline-form label.checkbox {
+  flex-direction: row;
+  align-items: center;
+  gap: 0.4rem;
 }
 .form-actions {
   grid-column: 1 / -1;

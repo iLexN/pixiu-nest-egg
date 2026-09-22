@@ -48,6 +48,18 @@ async function remove(deposit: Deposit) {
   }
 }
 
+async function unreceive(deposit: Deposit) {
+  const name = deposit.label ?? `#${deposit.id}`
+  if (!window.confirm(`取消收訖 ${name}？已存入的活期與月結調整項目會一併還原。`)) return
+  try {
+    await api.unreceiveDeposit(deposit.id)
+    message.value = `已取消收訖 ${name}`
+    await load()
+  } catch (err) {
+    error.value = err instanceof ApiError ? err.message : String(err)
+  }
+}
+
 function toggleForm() {
   // While editing, 新增定期 switches to a fresh create form instead of closing.
   showForm.value = editing.value ? true : !showForm.value
@@ -104,6 +116,7 @@ onMounted(load)
         empty-text="這年沒有到期記錄"
         @edit="startEdit"
         @remove="remove"
+        @unreceive="unreceive"
       />
     </div>
 

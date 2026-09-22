@@ -54,6 +54,65 @@ pub async fn show(
 
 /// Every figure here is derived from the stored trades on each read.
 pub async fn build(pool: &SqlitePool, market: Market) -> Result<SummaryResponse, ApiError> {
+    let (stock_rows, sectors, totals) = summarize_market(pool, market).await?;
+
+    // Record today's totals, then derive 上月/最高 from the market's history.
+    // An unpriced market records nothing: its rows would have no market value.
+    let today = super::today();
+    if let Some(market_value) = totals.market_value {
+        crate::market_history::record(pool, market, (totals.buy_cost_priced, market_value), today)
+            .await?;
+    }
+    let history = crate::market_history::load(pool, market).await?;
+    let figures = |figures: crate::models::MpfFigures| MarketFigures {
+        percent: figures.rate,
+        amount: figures.gain,
+    };
+    let last_month = mpf_last_month(&history, today).map(figures);
+    // The workbook's cached max cells seed `app_meta` marks that floor the
+    // derived 最高 — real records can still exceed them. 最高 reports
+    // whenever marks or history exist, even while the market is unpriced.
+    let seed_percent =
+        super::mpf::meta_f64(pool, &crate::market_history::seed_max_percent_key(market)).await?;
+    let seed_amount =
+        super::mpf::meta_f64(pool, &crate::market_history::seed_max_amount_key(market)).await?;
+    let current = totals.market_value.map(|market_value| MpfPoint {
+        recorded_on: today,
+        contributions: totals.buy_cost_priced,
+        balance: market_value,
+    });
+    let max = if current.is_some()
+        || !history.is_empty()
+        || seed_percent.is_some()
+        || seed_amount.is_some()
+    {
+        Some(figures(mpf_max(
+            &history,
+            current,
+            seed_percent,
+            seed_amount,
+        )))
+    } else {
+        None
+    };
+
+    Ok(SummaryResponse {
+        market,
+        average_price_definition: AVERAGE_PRICE_DEFINITION,
+        stocks: stock_rows,
+        sectors,
+        totals,
+        last_month,
+        max,
+    })
+}
+
+/// The stock rows, sector rollup and market totals, without the
+/// market-history upsert — the part of `build` that is free of side effects.
+async fn summarize_market(
+    pool: &SqlitePool,
+    market: Market,
+) -> Result<(Vec<StockRow>, Vec<SectorRollup>, MarketTotals), ApiError> {
     let stocks = super::stocks::load_stocks(pool, Some(market)).await?;
 
     let rows = sqlx::query(
@@ -127,57 +186,13 @@ pub async fn build(pool: &SqlitePool, market: Market) -> Result<SummaryResponse,
 
     let sectors = sector_rollup(&rollup_inputs);
     let totals = market_totals(&rollup_inputs);
-    drop(rollup_inputs);
+    Ok((stock_rows, sectors, totals))
+}
 
-    // Record today's totals, then derive 上月/最高 from the market's history.
-    // An unpriced market records nothing: its rows would have no market value.
-    let today = super::today();
-    if let Some(market_value) = totals.market_value {
-        crate::market_history::record(pool, market, (totals.buy_cost_priced, market_value), today)
-            .await?;
-    }
-    let history = crate::market_history::load(pool, market).await?;
-    let figures = |figures: crate::models::MpfFigures| MarketFigures {
-        percent: figures.rate,
-        amount: figures.gain,
-    };
-    let last_month = mpf_last_month(&history, today).map(figures);
-    // The workbook's cached max cells seed `app_meta` marks that floor the
-    // derived 最高 — real records can still exceed them. 最高 reports
-    // whenever marks or history exist, even while the market is unpriced.
-    let seed_percent =
-        super::mpf::meta_f64(pool, &crate::market_history::seed_max_percent_key(market)).await?;
-    let seed_amount =
-        super::mpf::meta_f64(pool, &crate::market_history::seed_max_amount_key(market)).await?;
-    let current = totals.market_value.map(|market_value| MpfPoint {
-        recorded_on: today,
-        contributions: totals.buy_cost_priced,
-        balance: market_value,
-    });
-    let max = if current.is_some()
-        || !history.is_empty()
-        || seed_percent.is_some()
-        || seed_amount.is_some()
-    {
-        Some(figures(mpf_max(
-            &history,
-            current,
-            seed_percent,
-            seed_amount,
-        )))
-    } else {
-        None
-    };
-
-    Ok(SummaryResponse {
-        market,
-        average_price_definition: AVERAGE_PRICE_DEFINITION,
-        stocks: stock_rows,
-        sectors,
-        totals,
-        last_month,
-        max,
-    })
+/// A market's live 總市值 with no market-history side effect — what the
+/// month-stat live totals need.
+pub async fn market_value_only(pool: &SqlitePool, market: Market) -> Result<Option<f64>, ApiError> {
+    Ok(summarize_market(pool, market).await?.2.market_value)
 }
 
 #[cfg(test)]

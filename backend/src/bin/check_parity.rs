@@ -55,6 +55,7 @@ async fn main() -> anyhow::Result<ExitCode> {
                 row.market.as_str(),
                 row.code
             ),
+            Outcome::Info { .. } => {}
         }
     }
 
@@ -76,6 +77,7 @@ async fn main() -> anyhow::Result<ExitCode> {
                 row.name
             ),
             Outcome::MissingStock => {}
+            Outcome::Info { .. } => {}
         }
     }
 
@@ -97,6 +99,7 @@ async fn main() -> anyhow::Result<ExitCode> {
                 row.name
             ),
             Outcome::MissingStock => {}
+            Outcome::Info { .. } => {}
         }
     }
 
@@ -118,6 +121,7 @@ async fn main() -> anyhow::Result<ExitCode> {
                 row.name
             ),
             Outcome::MissingStock => {}
+            Outcome::Info { .. } => {}
         }
     }
 
@@ -142,6 +146,7 @@ async fn main() -> anyhow::Result<ExitCode> {
                 "DIFF {}: listed on the sheet but not in the database",
                 row.name
             ),
+            Outcome::Info { .. } => {}
         }
     }
 
@@ -166,6 +171,7 @@ async fn main() -> anyhow::Result<ExitCode> {
                 "DIFF {}: listed on the sheet but not in the database",
                 row.name
             ),
+            Outcome::Info { .. } => {}
         }
     }
 
@@ -190,6 +196,64 @@ async fn main() -> anyhow::Result<ExitCode> {
                 "DIFF {}: listed on the sheet but not in the database",
                 row.name
             ),
+            Outcome::Info { .. } => {}
+        }
+    }
+
+    let mut months_compared = 0usize;
+    let mut months_info = 0usize;
+    for row in &report.months {
+        match &row.outcome {
+            Outcome::Match => months_compared += 1,
+            Outcome::SkippedNoData => {}
+            Outcome::Difference {
+                field,
+                computed,
+                sheet,
+            } => println!(
+                "DIFF Month Stat {} {field}: computed {computed}, sheet {sheet}",
+                row.name
+            ),
+            Outcome::MissingSheetValue { field } => println!(
+                "DIFF Month Stat {}: the sheet has no cached {field} to compare against",
+                row.name
+            ),
+            Outcome::MissingStock => println!(
+                "DIFF Month Stat {}: on the sheet but not in the database",
+                row.name
+            ),
+            Outcome::Info { computed, sheet } => {
+                months_info += 1;
+                println!("INFO {}: computed {computed}, sheet {sheet}", row.name)
+            }
+        }
+    }
+
+    let mut overview_compared = 0usize;
+    let mut overview_info = 0usize;
+    for row in &report.overview {
+        match &row.outcome {
+            Outcome::Match => overview_compared += 1,
+            Outcome::SkippedNoData => {}
+            Outcome::Difference {
+                field,
+                computed,
+                sheet,
+            } => println!(
+                "DIFF {} {field}: computed {computed}, sheet {sheet}",
+                row.name
+            ),
+            Outcome::MissingSheetValue { field } => println!(
+                "DIFF {}: the sheet has no cached {field} to compare against",
+                row.name
+            ),
+            Outcome::MissingStock => {
+                println!("DIFF {}: on the sheet but not in the database", row.name)
+            }
+            Outcome::Info { computed, sheet } => {
+                overview_info += 1;
+                println!("INFO {}: computed {computed}, sheet {sheet}", row.name)
+            }
         }
     }
 
@@ -199,6 +263,8 @@ async fn main() -> anyhow::Result<ExitCode> {
          {deposits_compared} deposit figure(s) match, \
          {dividends_compared} dividend figure(s) match, {mpf_compared} MPF figure(s) match, \
          {bonds_compared} bond figure(s) match, {aia_compared} AIA figure(s) match, \
+         {months_compared} month figure(s) match ({months_info} informational), \
+         {overview_compared} overview figure(s) match ({overview_info} informational), \
          {problems} difference(s)"
     );
     Ok(if problems == 0 {

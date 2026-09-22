@@ -115,8 +115,8 @@ The live formula preview in `TradeForm.vue` mirrors those rules only so the user
 ### Workbook import and parity
 
 1. `backend/src/xlsx.rs` reads `財富分析報告.xlsx` read-only, using cached formula values.
-2. `backend/src/import.rs` inserts stocks, trades, 定期 deposits, and the trade sheets' J–O 派息 rows into SQLite, preserving the workbook's initial order (`sort_order`).
-3. `backend/src/parity.rs` compares recomputed summaries, deposit rollups (定期!B1, month/bank rows, 定期Info year tables), and dividend counts/totals against the workbook's cached figures.
+2. `backend/src/import.rs` inserts stocks, trades, 定期 deposits, the trade sheets' J–O 派息 rows, Month Stat rows/items, and the Overview manual cells (salary, pool rate, cash/asset balances) into SQLite, preserving the workbook's initial order (`sort_order`).
+3. `backend/src/parity.rs` compares recomputed summaries, deposit rollups (定期!B1, month/bank rows, 定期Info year tables), dividend counts/totals, Month Stat stored/derived columns plus the yearly block, and the Overview block (asset rows/shares, 半流動資金, B1/H1/J1, 美股 account cells, the averages block) against the workbook's cached figures; live-linked, edited, and hand-frozen cells report as informational.
 4. The workbook is never modified.
 
 ### Dividends (派息)
@@ -125,6 +125,21 @@ The live formula preview in `TradeForm.vue` mirrors those rules only so the user
 2. The backend freezes `shares_held`/`buy_cost` snapshots from trades with `trade_date <= pay_date`, so later buys never rewrite a recorded rate.
 3. `DividendReceiveForm.vue` sends `PATCH /api/dividends/:id` with `received_amount` and optional `received_price`; the receipt price is stored on the dividend and only updates `stocks.manual_price` when 同時更新現價 is checked.
 4. Derived on read: status, effective amount, `yield_on_cost` = amount ÷ buy_cost, `yield_on_price` = amount ÷ (received_price × shares_held), and estimate variance.
+
+### Month Stat (月結)
+
+1. `MonthStatView.vue` loads `/api/months/summary`, `/api/months?year=`, settings, and manual assets; payday entry sends `PATCH /api/months/:ym` which upserts the row — on create it snapshots the live 總數/流動資產 and defaults `salary` from `overview.salary`; the 新增月份 form takes no 月初 input, so `start_cash` stays NULL until 重新擷取 or a manual edit.
+2. Derived on read over all stored rows: `end_cash = next row's start_cash − this row's salary`, then `month_spend`/`living_spend`/`saved`/`Changed` fall out; `interest` = auto events (**received** deposit interest ending in the month + received coupons + received HK dividends) + Σ `interest` items, so any 收訖 updates it with no write — an unreceived deposit previews muted in `interest_auto` without counting; NULL totals fill from live only for months at/after the current month (`*_live` flags tell the UI).
+3. `GET /api/months/:ym` also returns `month_items` (adjustment / extra_spend / income / entertainment / interest — `interest` covers manual extras like bank 活期 or promos), `interest_auto` (the per-event 利息 breakdown), and auto-`suggestions` keyed by `auto_key` (deposit start/end, HK trades, HK dividends, coupons, AIA payments, pool input) for months ≥ the current month; accepting stores the key (409 on repeat), dismissing writes a tombstone in `month_item_dismissals`. The deposit 收訖 action itself records the `dep-end` item and optionally credits a cash `manual_assets` row (`POST /api/deposits/:id/receive`; `/unreceive` reverses both); the bond 收訖 does the same for the principal return (`bond-end:<id>`, `/api/bonds/:id/receive`). Coupon and dividend 收訖 likewise auto-create their `coupon:`/`div:` items and bank in — HK → the HS cash row, US → `ibkr.usd_cash` (no month item); clearing `received_amount` reverses the credit and deletes the item. Import writes each month's sheet-N leftover (`N − auto`) as an `interest` item, skipping blank cells.
+4. `重新擷取` (`recapture: true`) re-snapshots both totals and `start_cash` (月初 = the live 活期 sum, Σ `cash` manual assets); `改為即時` stores NULL (live). The 開心Pool balance chains per year using `overview.pool_rate.<year>` with latest-earlier-year fallback.
+5. Settings (`overview.salary`, per-year pool rates, `manual_assets`) and `deposits.start_date` are seeded once by import and never overwritten afterward.
+
+### Overview (總覽)
+
+1. `OverviewView.vue` loads `GET /api/overview`: `routes/overview.rs` reuses the live-totals components and returns the B1/H1/J1 headline, the A3:C10 asset table with C shares, the 半流動資金 block (已定期 = deposit **principal**, 活期 = manual `cash` rows, C14 = total − 25%×流動資產, A13 ratio), and the IBKR block.
+2. Manual rows carry their `manual_assets` id and edit inline via `PATCH /api/manual-assets/:id`.
+3. The 美股 sheet's IBKR cells (`ibkr.*` in `app_meta`, seeded once by import) are read-only there; they are edited on 美股 → 總覽 via `PATCH /api/ibkr` (non-negative finite numbers, `null` clears). `ibkr.now_value` stays manual — the IBKR app's implied FX rate differs from `aia.usd_hkd_rate`.
+4. Live 總數/流動資產 count deposits at principal only and include IBKR cash, matching the workbook formulas exactly.
 
 ## Calculation conventions
 
@@ -141,10 +156,6 @@ The live formula preview in `TradeForm.vue` mirrors those rules only so the user
 
 ## Migration roadmap
 
-Completed so far: HK/US trade registry, trade history, per-stock summaries, manual prices/metadata, 定期 deposits (registry, upcoming/history views, month/bank/year rollups), stock 派息 (estimate → receipt lifecycle with frozen holdings/cost/price snapshots), MPF (accounts, monthly balance updates with history, derived last-month/max, page note), market 上月/最高 figures (daily totals history with month-end backfill, year-end seeding), 債券 (registry with retained matured history, coupon schedule with 待定 → pending → received lifecycle), AIA (policy registry with excluded/in-account flags, one-action premium-payment and withdrawal events with delete-to-undo, manual USD→HKD rate), workbook import, and parity check.
+Completed so far: HK/US trade registry, trade history, per-stock summaries, manual prices/metadata, 定期 deposits (registry, 未到期-until-收訖 list, optional bank-in to a cash manual asset, month/bank/year rollups), stock 派息 (estimate → receipt lifecycle with frozen holdings/cost/price snapshots), MPF (accounts, monthly balance updates with history, derived last-month/max, page note), market 上月/最高 figures (daily totals history with month-end backfill, year-end seeding), 債券 (registry with retained matured history, coupon schedule with 待定 → pending → received lifecycle, matured-bond principal 收訖 with optional bank-in), AIA (policy registry with excluded/in-account flags, one-action premium-payment and withdrawal events with delete-to-undo, manual USD→HKD rate), Month Stat 月結 (monthly ledger with derived spend/save columns, event-driven item suggestions with accept/dismiss, live-or-frozen asset totals, per-year pool chain, settings + manual Overview cells), Overview 總覽 (asset table with shares, 半流動資金 block, B1/H1/J1 headline, IBKR account block with manual inputs and derived cross-checks, inline manual-asset editing, 過去 12 個月平均 block with the 生活預算 預測 threshold), workbook import, and parity check.
 
-Remaining spreadsheet sections, in intended order:
-
-1. Month Stat / Overview
-
-Until those are migrated, continue maintaining the workbook's non-trade sheets by hand. The app should become the source of truth only after all sections are covered and verified.
+Remaining workbook content not covered by the app: the 開心Pool independent ledger, Mum, Dad, 香港年金, FIRE, ref1, and other unmigrated sections — keep maintaining those sheets by hand. The app should become the source of truth only after all sections are covered and verified.

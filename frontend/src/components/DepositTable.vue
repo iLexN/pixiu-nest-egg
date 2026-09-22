@@ -7,15 +7,23 @@ const props = defineProps<{
   deposits: Deposit[]
   /** Show the 狀態 column (history section). */
   showStatus?: boolean
+  /** YYYY-MM-DD; an unreceived deposit at/past it is 已到期未收. */
+  today?: string
   emptyText?: string
 }>()
 
 const emit = defineEmits<{
   edit: [Deposit]
   remove: [Deposit]
+  receive: [Deposit]
+  unreceive: [Deposit]
 }>()
 
 const columns = 10 + (props.showStatus ? 1 : 0)
+
+function overdue(deposit: Deposit): boolean {
+  return deposit.received_at === null && !!props.today && deposit.end_date <= props.today
+}
 </script>
 
 <template>
@@ -37,17 +45,38 @@ const columns = 10 + (props.showStatus ? 1 : 0)
     </thead>
     <tbody>
       <tr v-for="deposit in props.deposits" :key="deposit.id">
-        <td>{{ deposit.end_date }}</td>
+        <td>
+          {{ deposit.end_date }}
+          <small v-if="overdue(deposit)" class="overdue">已到期未收</small>
+        </td>
         <td>{{ deposit.label ?? '' }}</td>
         <td>{{ fmtBank(deposit.bank) }}</td>
         <td class="num">{{ fmtMoney(deposit.principal) }}</td>
         <td class="num">{{ fmtPercent(deposit.rate) }}</td>
         <td class="num">{{ fmtMoney(deposit.interest) }}</td>
         <td class="num">{{ fmtMoney(deposit.total) }}</td>
-        <td v-if="props.showStatus">{{ deposit.status === 'END' ? 'End' : '' }}</td>
+        <td v-if="props.showStatus">
+          {{ deposit.received_at ? `收訖 ${deposit.received_at}` : '未收' }}
+        </td>
         <td class="note">{{ deposit.note1 ?? '' }}</td>
         <td class="note">{{ deposit.note2 ?? '' }}</td>
         <td class="row-actions">
+          <button
+            v-if="!deposit.received_at"
+            type="button"
+            class="link"
+            @click="emit('receive', deposit)"
+          >
+            收訖
+          </button>
+          <button
+            v-else
+            type="button"
+            class="link"
+            @click="emit('unreceive', deposit)"
+          >
+            取消收訖
+          </button>
           <RowActions @edit="emit('edit', deposit)" @remove="emit('remove', deposit)" />
         </td>
       </tr>
@@ -66,5 +95,8 @@ const columns = 10 + (props.showStatus ? 1 : 0)
 }
 .row-actions {
   white-space: nowrap;
+}
+.overdue {
+  color: var(--negative, #b91c1c);
 }
 </style>

@@ -37,6 +37,20 @@ pub struct MarketReport {
 pub struct DepositReport {
     pub deposits_imported: usize,
     pub deposits_skipped: usize,
+    /// Rows whose `start_date` was recovered from the first `DD Mon YYYY`
+    /// date in `note2` (only where `start_date` was still NULL).
+    pub start_dates_seeded: usize,
+}
+
+#[derive(Debug, Default, Clone, PartialEq, Eq)]
+pub struct MonthStatReport {
+    pub months_imported: usize,
+    pub months_skipped: usize,
+    pub items_imported: usize,
+    /// `app_meta`/`manual_assets` seeds written this run.
+    pub settings_seeded: usize,
+    /// Existing rows whose hand-frozen H 月尾 was recovered (override was NULL).
+    pub end_cash_seeded: usize,
 }
 
 #[derive(Debug, Default, Clone, PartialEq, Eq)]
@@ -80,6 +94,7 @@ pub struct ImportReport {
     pub mpf: MpfReport,
     pub bonds: BondReport,
     pub aia: AiaReport,
+    pub months: MonthStatReport,
 }
 
 impl ImportReport {
@@ -99,6 +114,7 @@ pub async fn import(pool: &SqlitePool, data: &WorkbookData) -> anyhow::Result<Im
     let mpf = import_mpf(pool, data).await?;
     let bonds = import_bonds(pool, &data.bonds).await?;
     let aia = import_aia(pool, data).await?;
+    let months = import_months(pool, data).await?;
     seed_market_history(pool).await?;
     seed_market_figures(pool, data).await?;
     Ok(ImportReport {
@@ -109,6 +125,7 @@ pub async fn import(pool: &SqlitePool, data: &WorkbookData) -> anyhow::Result<Im
         mpf,
         bonds,
         aia,
+        months,
     })
 }
 
@@ -808,6 +825,7 @@ async fn import_deposits(
             principal: deposit.principal,
             rate: deposit.rate,
             interest: deposit.interest,
+            start_date: note2_start_date(deposit.note2.as_deref()).as_deref(),
             end_date: &deposit.end_date,
         })
         .map_err(|errors| {
@@ -833,21 +851,43 @@ async fn import_deposits(
             if *remaining > 0 {
                 *remaining -= 1;
                 report.deposits_skipped += 1;
+                // Backfill start_date on rows already stored without one —
+                // a non-NULL start_date is never overwritten.
+                if let Some(start_date) = note2_start_date(deposit.note2.as_deref()) {
+                    report.start_dates_seeded += sqlx::query(
+                        "UPDATE deposits SET start_date = ? \
+                         WHERE start_date IS NULL AND note2 = ? AND end_date = ?",
+                    )
+                    .bind(&start_date)
+                    .bind(deposit.note2.as_deref())
+                    .bind(&deposit.end_date)
+                    .execute(pool)
+                    .await?
+                    .rows_affected() as usize;
+                }
                 continue;
             }
         }
 
         let now = crate::routes::now_timestamp();
+        // A deposit already past its end date counts as received (its interest
+        // fed 利息 all along); future deposits stay unreceived until 收訖.
+        let received_at = (validated.end_date.as_str()
+            <= crate::routes::today().to_string().as_str())
+        .then(|| validated.end_date.clone());
         sqlx::query(
-            "INSERT INTO deposits (label, bank, principal, rate, interest, end_date, note1, \
-             note2, sort_order, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+            "INSERT INTO deposits (label, bank, principal, rate, interest, start_date, end_date, \
+             received_at, note1, note2, sort_order, created_at, updated_at) \
+             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
         )
         .bind(validated.label.as_deref())
         .bind(validated.bank.as_deref())
         .bind(validated.principal)
         .bind(validated.rate)
         .bind(validated.interest)
+        .bind(validated.start_date.as_deref())
         .bind(&validated.end_date)
+        .bind(&received_at)
         .bind(deposit.note1.as_deref())
         .bind(deposit.note2.as_deref())
         .bind(deposit.sort_order)
@@ -857,6 +897,251 @@ async fn import_deposits(
         .await
         .with_context(|| format!("inserting row {} of 定期Info", deposit.source_row))?;
         report.deposits_imported += 1;
+    }
+
+    Ok(report)
+}
+
+/// The first `DD Mon YYYY` date inside a `note2` string like
+/// `17 Jun 2026 to 02 Aug 2026: 2.60%` — the deposit's start date.
+fn note2_start_date(note2: Option<&str>) -> Option<String> {
+    let month_of = |name: &str| -> Option<u32> {
+        match name.get(..3)? {
+            "Jan" => Some(1),
+            "Feb" => Some(2),
+            "Mar" => Some(3),
+            "Apr" => Some(4),
+            "May" => Some(5),
+            "Jun" => Some(6),
+            "Jul" => Some(7),
+            "Aug" => Some(8),
+            "Sep" => Some(9),
+            "Oct" => Some(10),
+            "Nov" => Some(11),
+            "Dec" => Some(12),
+            _ => None,
+        }
+    };
+    let tokens: Vec<String> = note2?
+        .split_whitespace()
+        .map(|token| {
+            token
+                .trim_matches(|c: char| ",:;().".contains(c))
+                .to_string()
+        })
+        .collect();
+    for window in tokens.windows(3) {
+        let Ok(day) = window[0].parse::<u32>() else {
+            continue;
+        };
+        let Some(month) = month_of(&window[1]) else {
+            continue;
+        };
+        let Ok(year) = window[2].parse::<i32>() else {
+            continue;
+        };
+        if let Some(date) = chrono::NaiveDate::from_ymd_opt(year, month, day) {
+            return Some(date.to_string());
+        }
+    }
+    None
+}
+
+/// Month Stat rows are keyed by month: an existing row skips whole, and its
+/// items belong to it (no separate dedupe). Settings and the manual Overview
+/// cells seed only while unset — after first import the user owns them.
+async fn import_months(pool: &SqlitePool, data: &WorkbookData) -> anyhow::Result<MonthStatReport> {
+    let mut report = MonthStatReport::default();
+    let now = crate::routes::now_timestamp();
+    let existing: std::collections::HashSet<String> =
+        sqlx::query_scalar::<_, String>("SELECT month FROM month_stats")
+            .fetch_all(pool)
+            .await?
+            .into_iter()
+            .collect();
+
+    // 利息 is derived (auto events + `interest` items), so the sheet's N cell
+    // imports as a residual item: the part deposits/coupons/dividends do not
+    // explain. Events are loaded once — months import after all sources.
+    let interest_events = crate::routes::months::load_interest_events(pool).await?;
+
+    for month in &data.month_stat.months {
+        // A hand-frozen H cell keeps its cached value as an override; the
+        // `=F(n+1) − salary` chain rows derive, and a blank H stores NULL.
+        let end_cash_override = month
+            .end_cash_frozen
+            .then_some(month.derived.end_cash)
+            .flatten();
+        if existing.contains(&month.month) {
+            report.months_skipped += 1;
+            if let Some(end_cash) = end_cash_override {
+                let updated = sqlx::query(
+                    "UPDATE month_stats SET end_cash_override = ? \
+                     WHERE month = ? AND end_cash_override IS NULL",
+                )
+                .bind(end_cash)
+                .bind(&month.month)
+                .execute(pool)
+                .await?;
+                if updated.rows_affected() > 0 {
+                    report.end_cash_seeded += 1;
+                }
+            }
+            continue;
+        }
+        let mut tx = pool.begin().await?;
+        sqlx::query(
+            "INSERT INTO month_stats (month, start_cash, salary, total_assets, liquid_assets, \
+             pool_input, end_cash_override, note, created_at, \
+             updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, NULL, ?, ?)",
+        )
+        .bind(&month.month)
+        .bind(month.start_cash)
+        .bind(month.salary)
+        .bind(month.total_assets)
+        .bind(month.liquid_assets)
+        .bind(month.pool_input)
+        .bind(end_cash_override)
+        .bind(&now)
+        .bind(&now)
+        .execute(&mut *tx)
+        .await
+        .with_context(|| format!("inserting Month Stat row {}", month.source_row))?;
+        for item in &month.items {
+            sqlx::query(
+                "INSERT INTO month_items (month, category, label, amount, auto_key, note, \
+                 created_at) VALUES (?, ?, NULL, ?, NULL, ?, ?)",
+            )
+            .bind(&month.month)
+            .bind(item.category.as_str())
+            .bind(item.amount)
+            .bind(item.note.as_deref())
+            .bind(&now)
+            .execute(&mut *tx)
+            .await?;
+            report.items_imported += 1;
+        }
+        // Sheet N − the auto events = the manual part (bank 活期, promos);
+        // blank cells and exact matches leave no item, and sub-cent float
+        // noise is skipped like in migration 0017. The residual subtracts ALL
+        // in-month components — including still-unreceived deposits — so a
+        // sheet cell typed ahead of 收訖 is not double-counted later.
+        let auto: f64 = crate::calc::interest_components(&month.month, &interest_events)
+            .iter()
+            .map(|component| component.amount.unwrap_or(0.0))
+            .sum();
+        let residual = month.interest - auto;
+        if month.interest != 0.0 && residual.abs() >= 0.005 {
+            sqlx::query(
+                "INSERT INTO month_items (month, category, label, amount, note, \
+                 created_at) VALUES (?, 'interest', '其他利息', ?, '匯入差額', ?)",
+            )
+            .bind(&month.month)
+            .bind(residual)
+            .bind(&now)
+            .execute(&mut *tx)
+            .await?;
+            report.items_imported += 1;
+        }
+        tx.commit().await?;
+        report.months_imported += 1;
+    }
+
+    let current_year = crate::routes::today().year();
+    if crate::mpf::meta_get(pool, crate::routes::months::SALARY_KEY)
+        .await?
+        .is_none()
+    {
+        if let Some(salary) = data.overview.salary {
+            crate::mpf::meta_put(
+                pool,
+                crate::routes::months::SALARY_KEY,
+                Some(&salary.to_string()),
+            )
+            .await?;
+            report.settings_seeded += 1;
+        }
+    }
+    let rate_key = crate::routes::months::pool_rate_key;
+    if crate::mpf::meta_get(pool, &rate_key(current_year))
+        .await?
+        .is_none()
+    {
+        if let Some(rate) = data.overview.pool_rate {
+            crate::mpf::meta_put(pool, &rate_key(current_year), Some(&rate.to_string())).await?;
+            report.settings_seeded += 1;
+        }
+    }
+    // Past years' rates solve from the sheet's pool chain:
+    // M(y) = M(y−1) + H(y)·rate − G(y) + N(y).
+    let mut prev_balance = 0.0;
+    for year in &data.month_stat.years {
+        let Some(balance) = year.pool_balance else {
+            continue;
+        };
+        let interest = year.interest_sum.unwrap_or(0.0);
+        if year.year < current_year
+            && interest != 0.0
+            && crate::mpf::meta_get(pool, &rate_key(year.year))
+                .await?
+                .is_none()
+        {
+            let rate = (balance - prev_balance + year.entertainment_sum.unwrap_or(0.0)
+                - year.pool_input_sum.unwrap_or(0.0))
+                / interest;
+            crate::mpf::meta_put(pool, &rate_key(year.year), Some(&rate.to_string())).await?;
+            report.settings_seeded += 1;
+        }
+        prev_balance = balance;
+    }
+
+    // The four manual Overview cells seed manual_assets only while the table
+    // is untouched.
+    let stored_assets: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM manual_assets")
+        .fetch_one(pool)
+        .await?;
+    if stored_assets == 0 {
+        for (index, asset) in data.overview.manual_assets.iter().enumerate() {
+            sqlx::query(
+                "INSERT INTO manual_assets (label, kind, amount, sort_order, updated_at) \
+                 VALUES (?, ?, ?, ?, ?)",
+            )
+            .bind(&asset.label)
+            .bind(asset.kind.as_str())
+            .bind(asset.amount)
+            .bind((index + 1) as i64)
+            .bind(&now)
+            .execute(pool)
+            .await?;
+            report.settings_seeded += 1;
+        }
+    }
+
+    // The 美股 sheet's IBKR account cells seed `app_meta` once, like the salary.
+    for (key, value) in [
+        (
+            crate::routes::overview::IBKR_TRANSFERRED_KEY,
+            data.us_account.transferred_hkd,
+        ),
+        (
+            crate::routes::overview::IBKR_NOW_VALUE_KEY,
+            data.us_account.now_value,
+        ),
+        (
+            crate::routes::overview::IBKR_HKD_CASH_KEY,
+            data.us_account.hkd_cash,
+        ),
+        (
+            crate::routes::overview::IBKR_USD_CASH_KEY,
+            data.us_account.usd_cash,
+        ),
+    ] {
+        if let Some(value) = value {
+            if crate::mpf::meta_get(pool, key).await?.is_none() {
+                crate::mpf::meta_put(pool, key, Some(&value.to_string())).await?;
+                report.settings_seeded += 1;
+            }
+        }
     }
 
     Ok(report)

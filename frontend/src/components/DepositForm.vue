@@ -16,6 +16,7 @@ interface FormState {
   principal: string
   rate: string
   interest: string
+  start_date: string
   end_date: string
   note1: string
   note2: string
@@ -28,6 +29,7 @@ function emptyForm(): FormState {
     principal: '',
     rate: '',
     interest: '',
+    start_date: todayIso(),
     end_date: todayIso(),
     note1: '',
     note2: '',
@@ -52,6 +54,7 @@ watch(
       // Stored as a fraction; edited as a percent.
       rate: deposit.rate === null ? '' : String(deposit.rate * 100),
       interest: deposit.interest === null ? '' : String(deposit.interest),
+      start_date: deposit.start_date ?? '',
       end_date: deposit.end_date,
       note1: deposit.note1 ?? '',
       note2: deposit.note2 ?? '',
@@ -86,6 +89,7 @@ async function submit() {
       principal: num(form.principal),
       rate: ratePct === null ? null : ratePct / 100,
       interest: num(form.interest),
+      start_date: form.start_date === '' ? null : form.start_date,
       end_date: form.end_date,
       note1: String(form.note1).trim() === '' ? null : String(form.note1).trim(),
       note2: String(form.note2).trim() === '' ? null : String(form.note2).trim(),
@@ -149,6 +153,14 @@ async function submit() {
         <input v-model="form.interest" type="number" step="any" inputmode="decimal" />
         <small v-if="error?.fieldMessage('interest')" class="error">{{
           error.fieldMessage('interest')
+        }}</small>
+      </label>
+
+      <label>
+        開始日
+        <DateInput v-model="form.start_date" />
+        <small v-if="error?.fieldMessage('start_date')" class="error">{{
+          error.fieldMessage('start_date')
         }}</small>
       </label>
 

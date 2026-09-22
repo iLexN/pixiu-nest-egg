@@ -5,7 +5,8 @@ use serde::{Deserialize, Serialize};
 use sqlx::SqlitePool;
 
 use super::{
-    now_timestamp, row_to_bond, row_to_coupon, today, AppState, BOND_SELECT, COUPON_SELECT,
+    now_timestamp, record_receipt_item, row_to_bond, row_to_coupon, today, AppState, BOND_SELECT,
+    COUPON_SELECT,
 };
 use crate::calc::{
     validate_bond, validate_coupon, BondInput, CouponInput, ValidatedBond, ValidatedCoupon,
@@ -131,6 +132,145 @@ pub async fn update(
     Ok(Json(load_bond(&state.pool, id).await?))
 }
 
+#[derive(Debug, Deserialize)]
+pub struct ReceiveBond {
+    /// 收訖日 (`YYYY-MM-DD`); defaults to today.
+    pub received_at: Option<String>,
+    /// Cash `manual_assets` row to credit the returned principal into.
+    pub credit_asset_id: Option<i64>,
+    /// Amount credited; defaults to the bond's principal.
+    pub credit_amount: Option<f64>,
+}
+
+/// 收訖 the bond's principal return: mark received, optionally credit the
+/// principal to a cash manual asset, and record the maturity month's
+/// `bond-end` adjustment item. Coupons keep their own 收訖 — this is only
+/// about the principal.
+pub async fn receive(
+    State(state): State<AppState>,
+    Path(id): Path<i64>,
+    Json(body): Json<ReceiveBond>,
+) -> Result<Json<Bond>, ApiError> {
+    let existing = load_bond(&state.pool, id).await?;
+    if existing.received_at.is_some() {
+        return Err(ApiError::Conflict(format!("bond {id} is already received")));
+    }
+    let received_at = match body.received_at.as_deref() {
+        Some(date) => chrono::NaiveDate::parse_from_str(date, "%Y-%m-%d")
+            .map_err(|_| ApiError::field("received_at", "received_at must be YYYY-MM-DD"))?
+            .to_string(),
+        None => today().to_string(),
+    };
+    let credit_amount = body.credit_amount.unwrap_or(existing.principal);
+    if !credit_amount.is_finite() {
+        return Err(ApiError::field(
+            "credit_amount",
+            "credit_amount must be a number",
+        ));
+    }
+    if let Some(asset_id) = body.credit_asset_id {
+        let kind: Option<String> =
+            sqlx::query_scalar("SELECT kind FROM manual_assets WHERE id = ?")
+                .bind(asset_id)
+                .fetch_optional(&state.pool)
+                .await?;
+        match kind.as_deref() {
+            Some("cash") => {}
+            Some(_) => {
+                return Err(ApiError::field(
+                    "credit_asset_id",
+                    "credit target must be a 活期 cash row",
+                ));
+            }
+            None => {
+                return Err(ApiError::NotFound(format!(
+                    "manual asset {asset_id} not found"
+                )));
+            }
+        }
+    }
+
+    let month = format!("{}-01", &existing.maturity_date[..7]);
+    let auto_key = format!("bond-end:{id}");
+    let now = now_timestamp();
+    let mut tx = state.pool.begin().await?;
+    sqlx::query(
+        "UPDATE bonds SET received_at = ?, credited_asset_id = ?, credited_amount = ?, \
+         updated_at = ? WHERE id = ?",
+    )
+    .bind(&received_at)
+    .bind(body.credit_asset_id)
+    .bind(body.credit_asset_id.map(|_| credit_amount))
+    .bind(&now)
+    .bind(id)
+    .execute(&mut *tx)
+    .await?;
+    if let Some(asset_id) = body.credit_asset_id {
+        sqlx::query("UPDATE manual_assets SET amount = amount + ?, updated_at = ? WHERE id = ?")
+            .bind(credit_amount)
+            .bind(&now)
+            .bind(asset_id)
+            .execute(&mut *tx)
+            .await?;
+    }
+    record_receipt_item(
+        &mut tx,
+        &month,
+        &auto_key,
+        &existing.label,
+        existing.principal,
+    )
+    .await?;
+    tx.commit().await?;
+
+    Ok(Json(load_bond(&state.pool, id).await?))
+}
+
+/// Undo a bond 收訖: reverse the stored cash credit, drop the bond-end item,
+/// and clear the received flag.
+pub async fn unreceive(
+    State(state): State<AppState>,
+    Path(id): Path<i64>,
+) -> Result<Json<Bond>, ApiError> {
+    let existing = load_bond(&state.pool, id).await?;
+    if existing.received_at.is_none() {
+        return Err(ApiError::Conflict(format!("bond {id} is not received")));
+    }
+    let credited: Option<(Option<i64>, Option<f64>)> =
+        sqlx::query_as("SELECT credited_asset_id, credited_amount FROM bonds WHERE id = ?")
+            .bind(id)
+            .fetch_optional(&state.pool)
+            .await?;
+
+    let month = format!("{}-01", &existing.maturity_date[..7]);
+    let now = now_timestamp();
+    let mut tx = state.pool.begin().await?;
+    if let Some((Some(asset_id), Some(amount))) = credited {
+        sqlx::query("UPDATE manual_assets SET amount = amount - ?, updated_at = ? WHERE id = ?")
+            .bind(amount)
+            .bind(&now)
+            .bind(asset_id)
+            .execute(&mut *tx)
+            .await?;
+    }
+    sqlx::query("DELETE FROM month_items WHERE month = ? AND auto_key = ?")
+        .bind(&month)
+        .bind(format!("bond-end:{id}"))
+        .execute(&mut *tx)
+        .await?;
+    sqlx::query(
+        "UPDATE bonds SET received_at = NULL, credited_asset_id = NULL, \
+         credited_amount = NULL, updated_at = ? WHERE id = ?",
+    )
+    .bind(&now)
+    .bind(id)
+    .execute(&mut *tx)
+    .await?;
+    tx.commit().await?;
+
+    Ok(Json(load_bond(&state.pool, id).await?))
+}
+
 /// Deleting a bond removes its coupons: nothing outside the bond references
 /// them, so delete is always permitted.
 pub async fn remove(
@@ -157,6 +297,20 @@ pub async fn remove(
 pub struct BondTotals {
     /// The sheet's `Total` cell: Σ principal over active bonds.
     pub active_principal: f64,
+}
+
+/// 債券!B1: Σ principal over active bonds, over already-loaded rows.
+pub fn active_principal_of(bonds: &[Bond]) -> f64 {
+    bonds
+        .iter()
+        .filter(|bond| bond.status == BondStatus::Active)
+        .map(|bond| bond.principal)
+        .sum()
+}
+
+/// 債券!B1 for callers that have not loaded the bonds (live month totals).
+pub async fn active_principal(pool: &SqlitePool) -> Result<f64, ApiError> {
+    Ok(active_principal_of(&load_all_bonds(pool).await?))
 }
 
 /// A bond with its coupon schedule attached.
@@ -193,15 +347,14 @@ pub async fn summary(State(state): State<AppState>) -> Result<Json<BondSummaryRe
     let today = today();
     let bonds = load_all_bonds(&state.pool).await?;
 
+    let active_principal = active_principal_of(&bonds);
     let mut active = Vec::new();
     let mut matured = Vec::new();
-    let mut active_principal = 0.0;
     let mut upcoming_coupons = Vec::new();
 
     for bond in bonds {
         let coupons = load_bond_coupons(&state.pool, bond.id).await?;
         if bond.status == BondStatus::Active {
-            active_principal += bond.principal;
             for coupon in &coupons {
                 if coupon.received_amount.is_none() {
                     upcoming_coupons.push(UpcomingCoupon {
@@ -246,14 +399,19 @@ pub async fn insert_bond(
     body: &NewBond,
 ) -> Result<i64, ApiError> {
     let now = now_timestamp();
+    // A bond entered already past maturity is recorded as received — its
+    // principal already came back. 收訖 only applies to live bonds.
+    let received_at = (bond.maturity_date.as_str() <= today().to_string().as_str())
+        .then(|| bond.maturity_date.clone());
     let id: i64 = sqlx::query_scalar(
-        "INSERT INTO bonds (label, issue_no, principal, maturity_date, note, sort_order, \
-         created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?) RETURNING id",
+        "INSERT INTO bonds (label, issue_no, principal, maturity_date, received_at, note, \
+         sort_order, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?) RETURNING id",
     )
     .bind(&bond.label)
     .bind(bond.issue_no.as_deref())
     .bind(bond.principal)
     .bind(&bond.maturity_date)
+    .bind(&received_at)
     .bind(body.note.as_deref())
     .bind(sort_order)
     .bind(&now)
@@ -406,6 +564,8 @@ pub async fn update_coupon(
     })
     .map_err(ApiError::Validation)?;
 
+    let now = now_timestamp();
+    let mut tx = state.pool.begin().await?;
     sqlx::query(
         "UPDATE bond_coupons SET bond_id = ?, pay_date = ?, fixing_date = ?, annual_rate = ?, \
          per_10k = ?, received_amount = ?, note = ?, updated_at = ? WHERE id = ?",
@@ -417,10 +577,73 @@ pub async fn update_coupon(
     .bind(validated.per_10k)
     .bind(validated.received_amount)
     .bind(&note)
-    .bind(now_timestamp())
+    .bind(&now)
     .bind(id)
-    .execute(&state.pool)
+    .execute(&mut *tx)
     .await?;
+
+    // 收訖: received_amount NULL → set banks the amount into HS and records
+    // the coupon:<id> month item; clearing it reverses both.
+    let credited_before: Option<f64> =
+        sqlx::query_scalar("SELECT credited_amount FROM bond_coupons WHERE id = ?")
+            .bind(id)
+            .fetch_one(&mut *tx)
+            .await?;
+    let auto_key = format!("coupon:{id}");
+    let month = format!("{}-01", &validated.pay_date[..7]);
+    match (existing.received_amount, validated.received_amount) {
+        (None, Some(amount)) => {
+            let mut credited = None;
+            if patch.bank_in.unwrap_or(true) {
+                if let Some(asset_id) = super::hs_cash_asset_id(&mut tx).await? {
+                    sqlx::query(
+                        "UPDATE manual_assets SET amount = amount + ?, updated_at = ? WHERE id = ?",
+                    )
+                    .bind(amount)
+                    .bind(&now)
+                    .bind(asset_id)
+                    .execute(&mut *tx)
+                    .await?;
+                    credited = Some(amount);
+                }
+            }
+            sqlx::query("UPDATE bond_coupons SET credited_amount = ? WHERE id = ?")
+                .bind(credited)
+                .bind(id)
+                .execute(&mut *tx)
+                .await?;
+            let bond_label: String = sqlx::query_scalar("SELECT label FROM bonds WHERE id = ?")
+                .bind(bond_id)
+                .fetch_one(&mut *tx)
+                .await?;
+            record_receipt_item(&mut tx, &month, &auto_key, &bond_label, amount).await?;
+        }
+        (Some(_), None) => {
+            if let Some(amount) = credited_before {
+                if let Some(asset_id) = super::hs_cash_asset_id(&mut tx).await? {
+                    sqlx::query(
+                        "UPDATE manual_assets SET amount = amount - ?, updated_at = ? WHERE id = ?",
+                    )
+                    .bind(amount)
+                    .bind(&now)
+                    .bind(asset_id)
+                    .execute(&mut *tx)
+                    .await?;
+                }
+            }
+            sqlx::query("UPDATE bond_coupons SET credited_amount = NULL WHERE id = ?")
+                .bind(id)
+                .execute(&mut *tx)
+                .await?;
+            sqlx::query("DELETE FROM month_items WHERE month = ? AND auto_key = ?")
+                .bind(&month)
+                .bind(&auto_key)
+                .execute(&mut *tx)
+                .await?;
+        }
+        _ => {}
+    }
+    tx.commit().await?;
 
     Ok(Json(load_coupon(&state.pool, id).await?))
 }

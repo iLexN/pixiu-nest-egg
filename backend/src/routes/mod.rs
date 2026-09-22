@@ -2,7 +2,9 @@ pub mod aia;
 pub mod bonds;
 pub mod deposits;
 pub mod dividends;
+pub mod months;
 pub mod mpf;
+pub mod overview;
 pub mod stocks;
 pub mod summary;
 pub mod trades;
@@ -15,8 +17,8 @@ use sqlx::sqlite::SqliteRow;
 use sqlx::{Row, SqlitePool};
 
 use crate::calc::{
-    bond_active, coupon_expected, coupon_status, coupon_variance, deposit_active, deposit_total,
-    dividend_amount, dividend_variance, unit_price_incl_fee, yield_on_cost, yield_on_price,
+    bond_active, coupon_expected, coupon_status, coupon_variance, deposit_total, dividend_amount,
+    dividend_variance, unit_price_incl_fee, yield_on_cost, yield_on_price,
 };
 use crate::error::ApiError;
 use crate::models::{
@@ -50,6 +52,8 @@ pub fn api_router(state: AppState) -> Router {
             "/deposits/{id}",
             patch(deposits::update).delete(deposits::remove),
         )
+        .route("/deposits/{id}/receive", post(deposits::receive))
+        .route("/deposits/{id}/unreceive", post(deposits::unreceive))
         .route("/dividends", get(dividends::list).post(dividends::create))
         .route("/dividends/summary", get(dividends::summary))
         .route(
@@ -59,6 +63,8 @@ pub fn api_router(state: AppState) -> Router {
         .route("/bonds", get(bonds::list).post(bonds::create))
         .route("/bonds/summary", get(bonds::summary))
         .route("/bonds/{id}", patch(bonds::update).delete(bonds::remove))
+        .route("/bonds/{id}/receive", post(bonds::receive))
+        .route("/bonds/{id}/unreceive", post(bonds::unreceive))
         .route(
             "/coupons",
             get(bonds::list_coupons).post(bonds::create_coupon),
@@ -81,6 +87,34 @@ pub fn api_router(state: AppState) -> Router {
         .route("/aia/policies/{id}", patch(aia::update).delete(aia::remove))
         .route("/aia/events", get(aia::list_events).post(aia::create_event))
         .route("/aia/events/{id}", axum::routing::delete(aia::remove_event))
+        .route("/months", get(months::list))
+        .route("/months/summary", get(months::summary))
+        .route(
+            "/months/settings",
+            get(months::settings).patch(months::update_settings),
+        )
+        .route(
+            "/months/{ym}",
+            get(months::show)
+                .patch(months::upsert)
+                .delete(months::remove),
+        )
+        .route("/months/{ym}/items", post(months::create_item))
+        .route("/months/{ym}/items/dismiss", post(months::dismiss_item))
+        .route(
+            "/month-items/{id}",
+            patch(months::update_item).delete(months::remove_item),
+        )
+        .route(
+            "/manual-assets",
+            get(months::list_assets).post(months::create_asset),
+        )
+        .route(
+            "/manual-assets/{id}",
+            patch(months::update_asset).delete(months::remove_asset),
+        )
+        .route("/overview", get(overview::overview))
+        .route("/ibkr", get(overview::ibkr).patch(overview::update_ibkr))
         .with_state(state)
 }
 
@@ -156,8 +190,64 @@ pub fn today() -> chrono::NaiveDate {
     chrono::Local::now().date_naive()
 }
 
-pub const DEPOSIT_COLUMNS: &str =
-    "id, label, bank, principal, rate, interest, end_date, note1, note2, sort_order";
+/// Record a receipt's bank-in as an `adjustment` month item (`dep-end`,
+/// `bond-end`, `coupon`, `div`), inside the caller's transaction. Skipped when
+/// an item with the same `auto_key` exists or the month has no row; any
+/// dismissal tombstone is cleared so a fresh receipt re-surfaces cleanly.
+pub async fn record_receipt_item(
+    tx: &mut sqlx::Transaction<'_, sqlx::Sqlite>,
+    month: &str,
+    auto_key: &str,
+    label: &str,
+    amount: f64,
+) -> Result<(), ApiError> {
+    let item_exists: bool = sqlx::query_scalar(
+        "SELECT EXISTS(SELECT 1 FROM month_items WHERE month = ? AND auto_key = ?)",
+    )
+    .bind(month)
+    .bind(auto_key)
+    .fetch_one(&mut **tx)
+    .await?;
+    let month_exists: bool =
+        sqlx::query_scalar("SELECT EXISTS(SELECT 1 FROM month_stats WHERE month = ?)")
+            .bind(month)
+            .fetch_one(&mut **tx)
+            .await?;
+    if !item_exists && month_exists {
+        sqlx::query(
+            "INSERT INTO month_items (month, category, label, amount, auto_key, created_at) \
+             VALUES (?, 'adjustment', ?, ?, ?, ?)",
+        )
+        .bind(month)
+        .bind(label)
+        .bind(amount)
+        .bind(auto_key)
+        .bind(now_timestamp())
+        .execute(&mut **tx)
+        .await?;
+    }
+    sqlx::query("DELETE FROM month_item_dismissals WHERE month = ? AND auto_key = ?")
+        .bind(month)
+        .bind(auto_key)
+        .execute(&mut **tx)
+        .await?;
+    Ok(())
+}
+
+/// The HS 活期 cash row receipts bank into by default (the workbook's HS
+/// account) — NULL when no such manual asset exists.
+pub async fn hs_cash_asset_id(
+    tx: &mut sqlx::Transaction<'_, sqlx::Sqlite>,
+) -> Result<Option<i64>, ApiError> {
+    Ok(sqlx::query_scalar(
+        "SELECT id FROM manual_assets WHERE kind = 'cash' AND label = 'HS' LIMIT 1",
+    )
+    .fetch_optional(&mut **tx)
+    .await?)
+}
+
+pub const DEPOSIT_COLUMNS: &str = "id, label, bank, principal, rate, interest, start_date, \
+     end_date, received_at, credited_asset_id, credited_amount, note1, note2, sort_order";
 
 pub const DIVIDEND_SELECT: &str = "SELECT d.id, d.stock_id, s.market, s.code, d.pay_date, \
      d.per_share, d.shares_held, d.buy_cost, d.estimated_amount, d.received_amount, \
@@ -198,12 +288,13 @@ pub fn row_to_dividend(row: &SqliteRow) -> Result<Dividend, ApiError> {
     })
 }
 
-pub fn row_to_deposit(row: &SqliteRow, today: chrono::NaiveDate) -> Result<Deposit, ApiError> {
+pub fn row_to_deposit(row: &SqliteRow, _today: chrono::NaiveDate) -> Result<Deposit, ApiError> {
     let end_date: String = row.try_get("end_date")?;
     let parsed = chrono::NaiveDate::parse_from_str(&end_date, "%Y-%m-%d")
         .map_err(|_| ApiError::Conflict(format!("stored end_date {end_date} is not valid")))?;
     let principal: Option<f64> = row.try_get("principal")?;
     let interest: Option<f64> = row.try_get("interest")?;
+    let received_at: Option<String> = row.try_get("received_at")?;
     Ok(Deposit {
         id: row.try_get("id")?,
         label: row.try_get("label")?,
@@ -211,15 +302,18 @@ pub fn row_to_deposit(row: &SqliteRow, today: chrono::NaiveDate) -> Result<Depos
         principal,
         rate: row.try_get("rate")?,
         interest,
+        start_date: row.try_get("start_date")?,
         end_date,
+        received_at: received_at.clone(),
         note1: row.try_get("note1")?,
         note2: row.try_get("note2")?,
         sort_order: row.try_get("sort_order")?,
         total: deposit_total(principal, interest),
-        status: if deposit_active(parsed, today) {
-            DepositStatus::Active
-        } else {
+        // A deposit stays "active" until 收訖 — even past its end date.
+        status: if received_at.is_some() {
             DepositStatus::End
+        } else {
+            DepositStatus::Active
         },
         end_year: parsed.year(),
         end_month: parsed.month(),
@@ -228,7 +322,7 @@ pub fn row_to_deposit(row: &SqliteRow, today: chrono::NaiveDate) -> Result<Depos
 
 /// `next_pay_date` comes from a scalar subquery on non-received coupons.
 pub const BOND_SELECT: &str = "SELECT b.id, b.label, b.issue_no, b.principal, b.maturity_date, \
-     b.note, b.sort_order, (SELECT MIN(c.pay_date) FROM bond_coupons c \
+     b.received_at, b.note, b.sort_order, (SELECT MIN(c.pay_date) FROM bond_coupons c \
      WHERE c.bond_id = b.id AND c.received_amount IS NULL) AS next_pay_date FROM bonds b";
 
 pub fn row_to_bond(row: &SqliteRow, today: chrono::NaiveDate) -> Result<Bond, ApiError> {
@@ -242,6 +336,7 @@ pub fn row_to_bond(row: &SqliteRow, today: chrono::NaiveDate) -> Result<Bond, Ap
         issue_no: row.try_get("issue_no")?,
         principal: row.try_get("principal")?,
         maturity_date,
+        received_at: row.try_get("received_at")?,
         note: row.try_get("note")?,
         sort_order: row.try_get("sort_order")?,
         status: if bond_active(parsed, today) {
