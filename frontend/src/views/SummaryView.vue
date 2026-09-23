@@ -165,7 +165,7 @@ function onDragEnd() {
   dragOverId.value = null
 }
 
-type YearField = 'invested' | 'cost' | 'market_value'
+type YearField = 'invested' | 'cost' | 'market_value' | 'sold_pl'
 const editingYearCell = ref<string | null>(null)
 const yearDraft = ref('')
 const freezing = ref(false)
@@ -188,8 +188,9 @@ function startYearEdit(row: YearRow, field: YearField) {
 async function saveYearEdit(row: YearRow, field: YearField) {
   const text = String(yearDraft.value).trim()
   const parsed = text === '' ? null : Number(text)
-  if (parsed !== null && (!Number.isFinite(parsed) || parsed < 0)) {
-    error.value = '數值必須是非負數字'
+  // 賣出損益 may be negative; the other figures cannot.
+  if (parsed !== null && (!Number.isFinite(parsed) || (parsed < 0 && field !== 'sold_pl'))) {
+    error.value = field === 'sold_pl' ? '數值必須是數字' : '數值必須是非負數字'
     return
   }
   try {
@@ -224,6 +225,7 @@ async function freezeYear(row: YearRow) {
 const editingIbkr = ref(false)
 const ibkrDraft = ref({
   transferred_delta: '' as number | '',
+  transfer_date: '',
   now_value: '' as number | '',
   hkd_cash: '' as number | '',
   usd_cash: '' as number | '',
@@ -239,8 +241,11 @@ const ibkrTransferredPreview = computed(() => {
 })
 
 function startIbkrEdit() {
+  const now = new Date()
+  const todayStr = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}-${String(now.getDate()).padStart(2, '0')}`
   ibkrDraft.value = {
     transferred_delta: '',
+    transfer_date: todayStr,
     now_value: ibkr.value?.now_value ?? '',
     hkd_cash: ibkr.value?.hkd_cash ?? '',
     usd_cash: ibkr.value?.usd_cash ?? '',
@@ -259,9 +264,15 @@ function ibkrField(raw: number | '', label: string): number | null {
 
 async function saveIbkr() {
   try {
+    // Undefined records nothing; a delta appends a dated transfer-log row.
+    const deltaText = String(ibkrDraft.value.transferred_delta).trim()
+    const delta = deltaText === '' ? undefined : Number(deltaText)
+    if (delta !== undefined && !Number.isFinite(delta)) {
+      throw new Error('轉入金額必須是數字')
+    }
     ibkr.value = await api.updateIbkr({
-      // Undefined leaves the stored total untouched; a delta adds to it.
-      transferred_hkd: ibkrTransferredPreview.value ?? undefined,
+      transfer_hkd: delta,
+      transfer_date: ibkrDraft.value.transfer_date || undefined,
       now_value: ibkrField(ibkrDraft.value.now_value, 'IBKR App 現值'),
       hkd_cash: ibkrField(ibkrDraft.value.hkd_cash, 'HKD 現金'),
       usd_cash: ibkrField(ibkrDraft.value.usd_cash, 'USD 現金'),
@@ -494,6 +505,7 @@ watch(() => props.market, load)
           <tr>
             <th>年份</th>
             <th class="num">net invested</th>
+            <th class="num">賣出損益</th>
             <th class="num">成本</th>
             <th class="num">總市值</th>
             <th class="num">派息 ÷ 成本</th>
@@ -527,6 +539,24 @@ watch(() => props.market, load)
               </template>
               <button v-else type="button" class="link" @click="startYearEdit(row, 'invested')">
                 {{ fmtMoney(row.invested) || '輸入' }}{{ frozen(row, 'invested') ? '*' : '' }}
+              </button>
+            </td>
+            <td
+              class="num year-cell"
+              :class="[{ frozen: frozen(row, 'sold_pl') }, signClass(row.sold_pl)]"
+            >
+              <template v-if="editingYearCell === `${row.year}:sold_pl`">
+                <input
+                  v-model="yearDraft"
+                  type="number"
+                  step="any"
+                  @keyup.enter="saveYearEdit(row, 'sold_pl')"
+                />
+                <button type="button" class="link" @click="saveYearEdit(row, 'sold_pl')">儲存</button>
+                <button type="button" class="link" @click="editingYearCell = null">取消</button>
+              </template>
+              <button v-else type="button" class="link" @click="startYearEdit(row, 'sold_pl')">
+                {{ fmtMoney(row.sold_pl) || '輸入' }}{{ frozen(row, 'sold_pl') ? '*' : '' }}
               </button>
             </td>
             <td
@@ -594,6 +624,10 @@ watch(() => props.market, load)
           inputmode="decimal"
           placeholder="+金額"
         />
+      </label>
+      <label>
+        轉入日期
+        <input v-model="ibkrDraft.transfer_date" type="date" />
       </label>
       <label>
         IBKR App 現值 (HKD)

@@ -257,6 +257,34 @@ async fn main() -> anyhow::Result<ExitCode> {
         }
     }
 
+    let mut year_review_compared = 0usize;
+    let mut year_review_info = 0usize;
+    for row in &report.year_review {
+        match &row.outcome {
+            Outcome::Match => year_review_compared += 1,
+            Outcome::SkippedNoData => {}
+            Outcome::Difference {
+                field,
+                computed,
+                sheet,
+            } => println!(
+                "DIFF {} {field}: computed {computed}, sheet {sheet}",
+                row.name
+            ),
+            Outcome::MissingSheetValue { field } => println!(
+                "DIFF {}: the sheet has no cached {field} to compare against",
+                row.name
+            ),
+            Outcome::MissingStock => {
+                println!("DIFF {}: on the sheet but not in the database", row.name)
+            }
+            Outcome::Info { computed, sheet } => {
+                year_review_info += 1;
+                println!("INFO {}: computed {computed}, sheet {sheet}", row.name)
+            }
+        }
+    }
+
     let problems = report.problem_count();
     println!(
         "{compared} stock(s) match, {market_figures_compared} market figure(s) match, \
@@ -265,6 +293,7 @@ async fn main() -> anyhow::Result<ExitCode> {
          {bonds_compared} bond figure(s) match, {aia_compared} AIA figure(s) match, \
          {months_compared} month figure(s) match ({months_info} informational), \
          {overview_compared} overview figure(s) match ({overview_info} informational), \
+         {year_review_compared} year-review figure(s) match ({year_review_info} informational), \
          {problems} difference(s)"
     );
     Ok(if problems == 0 {

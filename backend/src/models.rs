@@ -596,6 +596,9 @@ pub struct YearSnapshot {
     /// Frozen 年末總市值; NULL stays live for the current year, empty for
     /// past years.
     pub market_value: Option<f64>,
+    /// 賣出損益: the year's realized sell P/L, entered by hand — the
+    /// workbook never recorded SELL trades. NULL reports it absent.
+    pub sold_pl: Option<f64>,
     pub updated_at: String,
 }
 
@@ -609,6 +612,30 @@ pub struct YearlyPatch {
     pub cost: Option<Option<f64>>,
     #[serde(default, deserialize_with = "nullable")]
     pub market_value: Option<Option<f64>>,
+    /// Unlike the other figures, sold P/L may be negative.
+    #[serde(default, deserialize_with = "nullable")]
+    pub sold_pl: Option<Option<f64>>,
+}
+
+/// `PATCH /api/year-review/:year` body. Absent fields are left untouched;
+/// `null` clears an override so the figure derives live again. `sold_pl`
+/// writes the year's HK `year_snapshots` row instead of `year_review`.
+#[derive(Debug, Clone, Default, Deserialize)]
+pub struct YearReviewPatch {
+    #[serde(default, deserialize_with = "nullable")]
+    pub income: Option<Option<f64>>,
+    #[serde(default, deserialize_with = "nullable")]
+    pub invested_adjustment: Option<Option<f64>>,
+    #[serde(default, deserialize_with = "nullable")]
+    pub sold_pl: Option<Option<f64>>,
+    #[serde(default, deserialize_with = "nullable")]
+    pub bond_principal: Option<Option<f64>>,
+    #[serde(default, deserialize_with = "nullable")]
+    pub bond_interest: Option<Option<f64>>,
+    #[serde(default, deserialize_with = "nullable")]
+    pub deposit_principal: Option<Option<f64>>,
+    #[serde(default, deserialize_with = "nullable")]
+    pub deposit_interest: Option<Option<f64>>,
 }
 
 /// Absent fields are left untouched; present fields are written, so `null`
@@ -1032,7 +1059,7 @@ pub struct InterestComponent {
 /// displays it — its implied FX rate differs from `aia.usd_hkd_rate`.
 #[derive(Debug, Clone, Serialize)]
 pub struct IbkrBlock {
-    /// 美股!B1: cumulative bank→IBKR transfers in HKD.
+    /// 美股!B1: cumulative bank→IBKR transfers — Σ `ibkr_transfers`.
     pub transferred_hkd: Option<f64>,
     /// 美股!B2: the account total shown in the IBKR app.
     pub now_value: Option<f64>,
@@ -1051,11 +1078,16 @@ pub struct IbkrBlock {
     pub vs_now_value: Option<f64>,
 }
 
-/// Absent fields are left untouched; `null` clears a field.
+/// Absent fields are left untouched; `null` clears a field. `transfer_hkd`
+/// appends a dated row to `ibkr_transfers` instead — a positive value is a
+/// bank→IBKR transfer, a negative one a withdrawal/correction.
 #[derive(Debug, Clone, Default, Deserialize)]
 pub struct IbkrPatch {
-    #[serde(default, deserialize_with = "nullable")]
-    pub transferred_hkd: Option<Option<f64>>,
+    #[serde(default)]
+    pub transfer_hkd: Option<f64>,
+    /// Optional `YYYY-MM-DD` for the transfer; defaults to today.
+    #[serde(default)]
+    pub transfer_date: Option<String>,
     #[serde(default, deserialize_with = "nullable")]
     pub now_value: Option<Option<f64>>,
     #[serde(default, deserialize_with = "nullable")]

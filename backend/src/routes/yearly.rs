@@ -1,4 +1,4 @@
-use std::collections::HashMap;
+use std::collections::{BTreeMap, HashMap};
 
 use axum::extract::{Path, Query, State};
 use axum::Json;
@@ -125,7 +125,7 @@ async fn load_snapshots(
     market: Market,
 ) -> Result<HashMap<i32, YearSnapshot>, ApiError> {
     let rows = sqlx::query(
-        "SELECT year, invested, cost, market_value, updated_at \
+        "SELECT year, invested, cost, market_value, sold_pl, updated_at \
          FROM year_snapshots WHERE market = ?",
     )
     .bind(market.as_str())
@@ -140,6 +140,7 @@ async fn load_snapshots(
                 invested: row.try_get("invested")?,
                 cost: row.try_get("cost")?,
                 market_value: row.try_get("market_value")?,
+                sold_pl: row.try_get("sold_pl")?,
                 updated_at: row.try_get("updated_at")?,
             },
         );
@@ -153,7 +154,7 @@ async fn load_snapshot(
     year: i32,
 ) -> Result<Option<crate::models::YearSnapshot>, ApiError> {
     let row = sqlx::query(
-        "SELECT invested, cost, market_value, updated_at \
+        "SELECT invested, cost, market_value, sold_pl, updated_at \
          FROM year_snapshots WHERE market = ? AND year = ?",
     )
     .bind(market.as_str())
@@ -167,6 +168,7 @@ async fn load_snapshot(
             invested: row.try_get("invested")?,
             cost: row.try_get("cost")?,
             market_value: row.try_get("market_value")?,
+            sold_pl: row.try_get("sold_pl")?,
             updated_at: row.try_get("updated_at")?,
         })
     })
@@ -183,6 +185,32 @@ fn validate_figure(field: &str, value: Option<f64>) -> Result<Option<f64>, ApiEr
     }
 }
 
+/// sold P/L may be negative — only finiteness is enforced.
+fn validate_signed_figure(field: &str, value: Option<f64>) -> Result<Option<f64>, ApiError> {
+    match value {
+        Some(value) if !value.is_finite() => {
+            Err(ApiError::field(field, format!("{field} must be a number")))
+        }
+        other => Ok(other),
+    }
+}
+
+/// HK `sold_pl` per year — feeds 投資純利 in the Month Stat yearly block and
+/// 投資P/L in the year review.
+pub async fn hk_sold_pl(pool: &SqlitePool) -> Result<BTreeMap<i32, f64>, ApiError> {
+    let rows = sqlx::query(
+        "SELECT year, sold_pl FROM year_snapshots \
+         WHERE market = 'HK' AND sold_pl IS NOT NULL",
+    )
+    .fetch_all(pool)
+    .await?;
+    let mut map = BTreeMap::new();
+    for row in &rows {
+        map.insert(row.try_get("year")?, row.try_get("sold_pl")?);
+    }
+    Ok(map)
+}
+
 pub async fn update(
     State(state): State<AppState>,
     Path((market, year)): Path<(String, i32)>,
@@ -192,10 +220,14 @@ pub async fn update(
     if !(2000..=2100).contains(&year) {
         return Err(ApiError::field("year", "year must be a plausible year"));
     }
-    if patch.invested.is_none() && patch.cost.is_none() && patch.market_value.is_none() {
+    if patch.invested.is_none()
+        && patch.cost.is_none()
+        && patch.market_value.is_none()
+        && patch.sold_pl.is_none()
+    {
         return Err(ApiError::field(
             "patch",
-            "at least one of invested, cost, market_value is required",
+            "at least one of invested, cost, market_value, sold_pl is required",
         ));
     }
 
@@ -203,20 +235,25 @@ pub async fn update(
     let merge = |patch: Option<Option<f64>>, field: &str, existing: Option<f64>| {
         validate_figure(field, patch.unwrap_or(existing))
     };
-    let (invested, cost, market_value) = match &existing {
+    let merge_signed = |patch: Option<Option<f64>>, field: &str, existing: Option<f64>| {
+        validate_signed_figure(field, patch.unwrap_or(existing))
+    };
+    let (invested, cost, market_value, sold_pl) = match &existing {
         Some(existing) => (
             merge(patch.invested, "invested", existing.invested)?,
             merge(patch.cost, "cost", existing.cost)?,
             merge(patch.market_value, "market_value", existing.market_value)?,
+            merge_signed(patch.sold_pl, "sold_pl", existing.sold_pl)?,
         ),
         None => (
             validate_figure("invested", patch.invested.flatten())?,
             validate_figure("cost", patch.cost.flatten())?,
             validate_figure("market_value", patch.market_value.flatten())?,
+            validate_signed_figure("sold_pl", patch.sold_pl.flatten())?,
         ),
     };
 
-    if invested.is_none() && cost.is_none() && market_value.is_none() {
+    if invested.is_none() && cost.is_none() && market_value.is_none() && sold_pl.is_none() {
         // Clearing the last stored figure removes the row entirely.
         sqlx::query("DELETE FROM year_snapshots WHERE market = ? AND year = ?")
             .bind(market.as_str())
@@ -229,22 +266,25 @@ pub async fn update(
             invested: None,
             cost: None,
             market_value: None,
+            sold_pl: None,
             updated_at: now_timestamp(),
         }));
     }
 
     sqlx::query(
-        "INSERT INTO year_snapshots (market, year, invested, cost, market_value, updated_at) \
-         VALUES (?, ?, ?, ?, ?, ?) \
+        "INSERT INTO year_snapshots (market, year, invested, cost, market_value, sold_pl, updated_at) \
+         VALUES (?, ?, ?, ?, ?, ?, ?) \
          ON CONFLICT (market, year) DO UPDATE SET \
          invested = excluded.invested, cost = excluded.cost, \
-         market_value = excluded.market_value, updated_at = excluded.updated_at",
+         market_value = excluded.market_value, sold_pl = excluded.sold_pl, \
+         updated_at = excluded.updated_at",
     )
     .bind(market.as_str())
     .bind(year)
     .bind(invested)
     .bind(cost)
     .bind(market_value)
+    .bind(sold_pl)
     .bind(now_timestamp())
     .execute(&state.pool)
     .await?;

@@ -153,7 +153,7 @@ pub async fn load_all_items(
 }
 
 /// The per-year pool rates stored as `overview.pool_rate.<year>` meta keys.
-async fn pool_rates(pool: &SqlitePool) -> Result<BTreeMap<i32, f64>, ApiError> {
+pub(crate) async fn pool_rates(pool: &SqlitePool) -> Result<BTreeMap<i32, f64>, ApiError> {
     let rows = sqlx::query("SELECT key, value FROM app_meta WHERE key LIKE 'overview.pool_rate.%'")
         .fetch_all(pool)
         .await?;
@@ -444,10 +444,11 @@ pub async fn summary(
     let items = load_all_items(&state.pool).await?;
     let interest_events = load_interest_events(&state.pool).await?;
     let rates = pool_rates(&state.pool).await?;
-    // HK sold P/L is not computed yet, so 投資純利 stays absent for now;
-    // parity treats the column as informational.
+    // 投資純利 = Σ interest + the year's stored HK sold P/L (absent while a
+    // year has none stored).
+    let hk_sold_pl = super::yearly::hk_sold_pl(&state.pool).await?;
     let stat_rows = to_stat_rows(&stored, None, &interest_events, &items)?;
-    let years = month_year_summaries(&stat_rows, &items, &rates, &BTreeMap::new());
+    let years = month_year_summaries(&stat_rows, &items, &rates, &hk_sold_pl);
     let running = month_running_averages(&stat_rows, &items);
     let pool_balance = stat_rows
         .last()

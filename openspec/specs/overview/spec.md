@@ -49,7 +49,7 @@ The `assets` list SHALL contain, in the sheet's row order: 港股 (HK market val
 
 ### Requirement: IBKR account figures
 
-The system SHALL store four manual IBKR figures in `app_meta` — `ibkr.transferred_hkd` (美股 `B1`: cumulative bank→IBKR transfers in HKD), `ibkr.now_value` (`B2`: the account total as displayed in the IBKR app, which uses a different FX rate than `aia.usd_hkd_rate`), `ibkr.hkd_cash` (`B4`), and `ibkr.usd_cash` (`B5`) — exposed through `GET /api/ibkr` and `PATCH /api/ibkr`. Each field SHALL accept a finite non-negative number or `null` to clear. The response SHALL derive `computed_total_hkd` (美股 `B7` = (US market value + `usd_cash`) × rate + `hkd_cash`), `net` = `now_value` − `transferred_hkd`, `net_pct` = `net` ÷ `transferred_hkd`, and `vs_now_value` = `computed_total_hkd` − `now_value`, each absent while its inputs are missing.
+The system SHALL store three manual IBKR figures in `app_meta` — `ibkr.now_value` (`B2`: the account total as displayed in the IBKR app, which uses a different FX rate than `aia.usd_hkd_rate`), `ibkr.hkd_cash` (`B4`), and `ibkr.usd_cash` (`B5`) — and SHALL keep a dated `ibkr_transfers` log whose sum is `transferred_hkd` (美股 `B1`: cumulative bank→IBKR transfers in HKD, absent while the log is empty); each year's sum is the year's IBKR 轉入. These are exposed through `GET /api/ibkr` and `PATCH /api/ibkr`: each account field SHALL accept a finite non-negative number or `null` to clear, while `transfer_hkd` SHALL append a log row for any finite delta (a negative value records a withdrawal or undoes a mistyped entry) dated `transfer_date`, defaulting to today. The response SHALL derive `computed_total_hkd` (美股 `B7` = (US market value + `usd_cash`) × rate + `hkd_cash`), `net` = `now_value` − `transferred_hkd`, `net_pct` = `net` ÷ `transferred_hkd`, and `vs_now_value` = `computed_total_hkd` − `now_value`, each absent while its inputs are missing.
 
 #### Scenario: Computed total
 
@@ -65,6 +65,16 @@ The system SHALL store four manual IBKR figures in `app_meta` — `ibkr.transfer
 
 - **WHEN** the user patches `usd_cash` to `null`
 - **THEN** the stored value is cleared and `computed_total_hkd` drops the USD cash term
+
+#### Scenario: Recording a transfer
+
+- **WHEN** the user patches `transfer_hkd` `50000` with no `transfer_date`
+- **THEN** a row dated today is appended to `ibkr_transfers` and `transferred_hkd` grows by `50000`
+
+#### Scenario: Undoing a transfer
+
+- **WHEN** the user patches `transfer_hkd` `-10000`
+- **THEN** a negative row is appended and `transferred_hkd` drops by `10000`
 
 ### Requirement: 總覽 page
 

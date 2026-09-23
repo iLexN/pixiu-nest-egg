@@ -336,6 +336,57 @@ pub struct SheetYearFigure {
     pub market_value: Option<f64>,
 }
 
+/// One YearInReview year block's cached cells: the manual figures seed
+/// `year_review`/`year_snapshots`, the rest feed the parity check. The sheet
+/// keeps one block per year opened by the year in column A, with the ledger
+/// aggregates in B–C, the investment summary in E–F, and the asset returns
+/// in H–L.
+#[derive(Debug, Clone, Default)]
+pub struct SheetYearReview {
+    pub year: i32,
+    // B–C ledger aggregates.
+    /// 總數+.
+    pub asset_gain: Option<f64>,
+    /// 支出.
+    pub spend: Option<f64>,
+    /// 生活平均支出.
+    pub living_avg: Option<f64>,
+    /// 開心 Pool 收入.
+    pub pool_income: Option<f64>,
+    /// 開心 Pool 支出.
+    pub pool_spend: Option<f64>,
+    /// 開心 Pool結餘.
+    pub pool_balance: Option<f64>,
+    // E–F investment summary.
+    /// 利息回報.
+    pub interest: Option<f64>,
+    /// 投資P/L — hand-entered (no SELL trades exist).
+    pub sold_pl: Option<f64>,
+    /// 投資純利.
+    pub net_investment: Option<f64>,
+    pub invested: Option<f64>,
+    /// invested %.
+    pub invested_pct: Option<f64>,
+    /// Irene + 開心 Pool.
+    pub irene_pool: Option<f64>,
+    // H–L asset returns.
+    /// 債券 principal / interest.
+    pub bond_principal: Option<f64>,
+    pub bond_interest: Option<f64>,
+    /// 股票 cost / dividends / now value.
+    pub stock_cost: Option<f64>,
+    pub stock_dividends: Option<f64>,
+    pub stock_now_value: Option<f64>,
+    /// 定期 principal / interest.
+    pub deposit_principal: Option<f64>,
+    pub deposit_interest: Option<f64>,
+    /// 收入 — hand-entered.
+    pub income: Option<f64>,
+    /// 存 and 存 %.
+    pub saved: Option<f64>,
+    pub saved_pct: Option<f64>,
+}
+
 #[derive(Debug, Clone)]
 pub struct WorkbookData {
     pub hk: MarketSheets,
@@ -345,6 +396,8 @@ pub struct WorkbookData {
     /// Frozen per-(market, year) figures from the market sheets' year blocks
     /// and YearInReview's 股票 rows.
     pub year_figures: Vec<SheetYearFigure>,
+    /// YearInReview's cached year blocks, for seeding and parity.
+    pub year_review: Vec<SheetYearReview>,
     /// The MPF sheet's account table.
     pub mpf: Vec<SheetMpfAccount>,
     pub mpf_cached: MpfSheetCached,
@@ -423,6 +476,10 @@ pub fn read(path: &Path) -> anyhow::Result<WorkbookData> {
         .map(|range| range.rows().map(<[Data]>::to_vec).collect());
     let month_stat_formulas = workbook.worksheet_formula(MONTH_STAT_SHEET).ok();
     let overview_cached = parse_overview(overview.as_ref());
+    let year_review_blocks: Vec<SheetYearReview> = year_review
+        .as_ref()
+        .map(parse_year_review)
+        .unwrap_or_default();
 
     Ok(WorkbookData {
         hk: MarketSheets {
@@ -446,12 +503,19 @@ pub fn read(path: &Path) -> anyhow::Result<WorkbookData> {
         year_figures: [
             parse_year_figures(&hk_summary, Market::Hk),
             parse_year_figures(&us_summary, Market::Us),
-            year_review
-                .as_ref()
-                .map(parse_year_review)
-                .unwrap_or_default(),
+            year_review_blocks
+                .iter()
+                .map(|block| SheetYearFigure {
+                    market: Market::Hk,
+                    year: block.year,
+                    invested: None,
+                    cost: block.stock_cost,
+                    market_value: block.stock_now_value,
+                })
+                .collect(),
         ]
         .concat(),
+        year_review: year_review_blocks,
         mpf: mpf.as_ref().map(parse_mpf).unwrap_or_default(),
         mpf_cached: mpf.as_ref().map(parse_mpf_cached).unwrap_or_default(),
         bonds: bond
@@ -1768,33 +1832,86 @@ fn parse_year_figures(rows: &Rows, market: Market) -> Vec<SheetYearFigure> {
     figures
 }
 
-// YearInReview keeps one block per year, opened by the year in column A; the
-// block's 股票 row (column H) carries the stock portfolio's year-end cost in
-// I and value in L. Those figures mirror the 港股 sheet's own year block, so
-// they are attributed to HK — the sheet's US figures are HKD-converted and
-// not attributable to a single market.
-fn parse_year_review(rows: &Rows) -> Vec<SheetYearFigure> {
-    let mut figures = Vec::new();
-    let mut current_year: Option<i32> = None;
+// YearInReview keeps one block per year, opened by the year in column A.
+// Within a block, column B labels the ledger aggregates (values in C),
+// column E the investment summary (values in F), and column H the asset
+// returns (values in I–L). The 股票 row's cost/now figures mirror the 港股
+// sheet's own year block, so they are attributed to HK — the sheet's US
+// figures are HKD-converted and not attributable to a single market.
+fn parse_year_review(rows: &Rows) -> Vec<SheetYearReview> {
+    // Labels drift between blocks (' 利息回報', '開心 Pool結餘'), so compare
+    // whitespace-stripped.
+    let norm = |text: Option<String>| {
+        text.map(|text| {
+            text.chars()
+                .filter(|c| !c.is_whitespace())
+                .collect::<String>()
+        })
+    };
+
+    let mut blocks = Vec::new();
+    let mut block: Option<SheetYearReview> = None;
     for row in rows {
-        if let Some(year) = number(row, 0).map(|year| year as i32) {
-            if (2000..=2100).contains(&year) {
-                current_year = Some(year);
+        if let Some(year) = number(row, 0)
+            .map(|year| year as i32)
+            .filter(|year| (2000..=2100).contains(year))
+        {
+            if let Some(done) = block.take() {
+                blocks.push(done);
             }
+            block = Some(SheetYearReview {
+                year,
+                ..SheetYearReview::default()
+            });
         }
-        if text(row, 7).as_deref() == Some("股票") {
-            if let Some(year) = current_year {
-                figures.push(SheetYearFigure {
-                    market: Market::Hk,
-                    year,
-                    invested: None,
-                    cost: number(row, 8),
-                    market_value: number(row, 11),
-                });
+        let Some(current) = block.as_mut() else {
+            continue;
+        };
+
+        match norm(text(row, 1)).as_deref() {
+            Some("總數+") => current.asset_gain = number(row, 2),
+            Some("支出") => current.spend = number(row, 2),
+            Some("生活平均支出") => current.living_avg = number(row, 2),
+            Some("開心Pool收入") => current.pool_income = number(row, 2),
+            Some("開心Pool支出") => current.pool_spend = number(row, 2),
+            Some("開心Pool結餘") => current.pool_balance = number(row, 2),
+            _ => {}
+        }
+        match norm(text(row, 4)).as_deref() {
+            Some("利息回報") => current.interest = number(row, 5),
+            Some("投資P/L") => current.sold_pl = number(row, 5),
+            Some("投資純利") => current.net_investment = number(row, 5),
+            Some("invested") => current.invested = number(row, 5),
+            Some("invested%") => current.invested_pct = number(row, 5),
+            Some("Irene+開心Pool") => current.irene_pool = number(row, 5),
+            _ => {}
+        }
+        match norm(text(row, 7)).as_deref() {
+            Some("債券") => {
+                current.bond_principal = number(row, 8);
+                current.bond_interest = number(row, 9);
             }
+            Some("股票") => {
+                current.stock_cost = number(row, 8);
+                current.stock_dividends = number(row, 9);
+                current.stock_now_value = number(row, 11);
+            }
+            Some("定期") => {
+                current.deposit_principal = number(row, 8);
+                current.deposit_interest = number(row, 9);
+            }
+            Some("收入") => current.income = number(row, 8),
+            Some("存%") => {
+                current.saved = number(row, 8);
+                current.saved_pct = number(row, 10);
+            }
+            _ => {}
         }
     }
-    figures
+    if let Some(done) = block.take() {
+        blocks.push(done);
+    }
+    blocks
 }
 
 #[cfg(test)]
@@ -2003,6 +2120,43 @@ mod tests {
         // 美股 carries no year block, and YearInReview's US figures are
         // HKD-combined — nothing is attributed to US.
         assert!(!data.year_figures.iter().any(|f| f.market == Market::Us));
+    }
+
+    #[test]
+    fn reads_year_in_review_blocks() {
+        let data = read(&workbook_path()).expect("workbook is readable");
+        // The cells carry full float precision; compare within a cent.
+        let near =
+            |value: Option<f64>, expected: f64| (value.expect("figure") - expected).abs() < 0.01;
+        let block = |year: i32| {
+            data.year_review
+                .iter()
+                .find(|block| block.year == year)
+                .unwrap_or_else(|| panic!("YearInReview {year}"))
+        };
+
+        let y2024 = block(2024);
+        assert!(near(y2024.asset_gain, 582867.0863));
+        assert!(near(y2024.interest, 36577.86));
+        assert!(near(y2024.sold_pl, -14991.49));
+        assert!(near(y2024.invested, 345365.11));
+        assert!(near(y2024.income, 634830.0));
+        assert!(near(y2024.bond_principal, 130000.0));
+        assert!(near(y2024.bond_interest, 5728.26));
+        assert!(near(y2024.deposit_principal, 795095.92));
+        assert!(near(y2024.deposit_interest, 10208.01));
+        assert!(near(y2024.saved, 237194.4));
+
+        let y2025 = block(2025);
+        assert!(near(y2025.income, 718290.0));
+        assert!(near(y2025.bond_principal, 160000.0));
+        assert!(near(y2025.irene_pool, 20722.03));
+        assert!(near(y2025.pool_balance, 5717.57));
+
+        let y2026 = block(2026);
+        assert!(near(y2026.income, 737020.0));
+        assert!(near(y2026.invested, 182935.39));
+        assert!(near(y2026.sold_pl, 0.0));
     }
 
     #[test]

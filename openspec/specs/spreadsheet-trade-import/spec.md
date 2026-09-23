@@ -417,12 +417,12 @@ The parity command SHALL also compare the app's Month Stat figures against the w
 
 ### Requirement: Seeding IBKR account figures from the workbook
 
-The import SHALL seed, each only when unset, the `app_meta` keys `ibkr.transferred_hkd`, `ibkr.now_value`, `ibkr.hkd_cash`, and `ibkr.usd_cash` from the 美股 sheet's cached cells `B1`, `B2`, `B4`, and `B5` respectively. A second import SHALL leave all of them untouched even if the user has since edited them.
+The import SHALL seed, each only when unset, the `app_meta` keys `ibkr.now_value`, `ibkr.hkd_cash`, and `ibkr.usd_cash` from the 美股 sheet's cached cells `B2`, `B4`, and `B5` respectively, and SHALL seed the `ibkr_transfers` log with the cached `B1` cumulative transfer as a single row dated to the earliest US trade (the import date when none exists), only while the log is empty. A second import SHALL leave all of them untouched even if the user has since edited them.
 
 #### Scenario: IBKR figures seeded once
 
-- **WHEN** the import runs against a workbook caching 美股 `B1` `131000`, `B2` `134232.01`, `B4` `765.42`, `B5` `1200.25`
-- **THEN** the four keys are stored, and a second import leaves them untouched even if the user has since edited them
+- **WHEN** the import runs against a workbook caching 美股 `B1` `131000`, `B2` `134232.01`, `B4` `765.42`, `B5` `1200.25`, and the earliest US trade is dated `2026-06-02`
+- **THEN** the three keys are stored, the log holds one `2026-06-02` row of `131000`, and a second import leaves everything untouched even if the user has since edited them
 
 ### Requirement: Overview parity report
 

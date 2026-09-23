@@ -64,6 +64,8 @@ pub struct ParityReport {
     pub months: Vec<NamedParityRow>,
     /// The `Overview` A3:C18 block and the 美股 IBKR header cells.
     pub overview: Vec<NamedParityRow>,
+    /// The `YearInReview` year blocks.
+    pub year_review: Vec<NamedParityRow>,
 }
 
 impl ParityReport {
@@ -114,6 +116,10 @@ impl ParityReport {
         Self::named_problems(&self.overview)
     }
 
+    pub fn year_review_problems(&self) -> impl Iterator<Item = &NamedParityRow> {
+        Self::named_problems(&self.year_review)
+    }
+
     pub fn problem_count(&self) -> usize {
         self.problems().count()
             + self.market_figure_problems().count()
@@ -124,6 +130,7 @@ impl ParityReport {
             + self.aia_problems().count()
             + self.months_problems().count()
             + self.overview_problems().count()
+            + self.year_review_problems().count()
     }
 
     pub fn is_clean(&self) -> bool {
@@ -143,6 +150,7 @@ pub async fn check(pool: &SqlitePool, data: &WorkbookData) -> anyhow::Result<Par
     check_aia(pool, data, &mut report).await?;
     check_months(pool, data, &mut report).await?;
     check_overview(pool, data, &mut report).await?;
+    check_year_review(pool, data, &mut report).await?;
     Ok(report)
 }
 
@@ -1046,7 +1054,7 @@ fn month_compare(
 /// Month Stat rows, yearly block, running averages and the seeded Overview
 /// settings against the sheet's cached cells. Derived figures recompute from
 /// the stored rows with the same live-fill rule as the API; 投資純利 (K) is
-/// skipped because HK sold P/L is not computed.
+/// not parsed into the year block — YearInReview compares the same figure.
 async fn check_months(
     pool: &SqlitePool,
     data: &WorkbookData,
@@ -1717,6 +1725,168 @@ async fn check_overview(
         ),
     ] {
         overview_compare(report, name, field, computed, sheet, false);
+    }
+    Ok(())
+}
+
+/// YearInReview's year blocks against the derived `GET /api/year-review`
+/// rows. The seeded manual figures (收入, invested add-on, 投資P/L) and
+/// past-year bond/deposit overrides reproduce the sheet's frozen cells, so
+/// those are real comparisons. Cells that legitimately diverge report
+/// informational: the sheet's 股票 J sums pending dividends too, its
+/// current-year 債券 counts a matured bond the registry no longer has, and
+/// the whole current-year block moves with live data.
+async fn check_year_review(
+    pool: &SqlitePool,
+    data: &WorkbookData,
+    report: &mut ParityReport,
+) -> anyhow::Result<()> {
+    let response = crate::routes::year_review::build(pool)
+        .await
+        .map_err(|err| anyhow!("building the year review failed: {err}"))?;
+    let current_year = crate::routes::today().year();
+
+    // The sheet's 股票 J column sums every trade-sheet dividend row —
+    // received or still pending — so parity compares the effective total
+    // (received else estimated), not the row's received-only figure.
+    let dividend_rows = sqlx::query(
+        "SELECT CAST(strftime('%Y', d.pay_date) AS INTEGER) AS year, \
+         SUM(COALESCE(d.received_amount, d.estimated_amount)) AS effective \
+         FROM dividends d JOIN stocks s ON s.id = d.stock_id \
+         WHERE s.market = 'HK' GROUP BY year",
+    )
+    .fetch_all(pool)
+    .await?;
+    let mut effective_dividends: std::collections::HashMap<i32, f64> =
+        std::collections::HashMap::new();
+    for row in &dividend_rows {
+        effective_dividends.insert(row.try_get("year")?, row.try_get("effective")?);
+    }
+
+    let compare = |report: &mut ParityReport,
+                   name: String,
+                   field: &'static str,
+                   computed: Option<f64>,
+                   sheet: Option<f64>,
+                   informational: bool| {
+        let Some(sheet_value) = sheet else { return };
+        let computed_value = computed.unwrap_or(f64::NAN);
+        let outcome = if approx_eq(computed_value, sheet_value) {
+            Outcome::Match
+        } else if informational {
+            Outcome::Info {
+                computed: computed_value,
+                sheet: sheet_value,
+            }
+        } else {
+            Outcome::Difference {
+                field,
+                computed: computed_value,
+                sheet: sheet_value,
+            }
+        };
+        named_row(&mut report.year_review, name, outcome);
+    };
+
+    for block in &data.year_review {
+        let year = block.year;
+        let name = |field: &str| format!("YearInReview {year} {field}");
+        let Some(row) = response.years.iter().find(|row| row.year == year) else {
+            named_row(
+                &mut report.year_review,
+                format!("YearInReview {year}"),
+                Outcome::MissingStock,
+            );
+            continue;
+        };
+        // The current year's cells are live links in the sheet; its data
+        // still moves, so any diff there is informational.
+        let moving = year == current_year;
+        for (field, computed, sheet) in [
+            ("asset_gain", row.ledger.asset_gain, block.asset_gain),
+            ("spend", row.ledger.spend, block.spend),
+            ("living_avg", row.ledger.living_avg, block.living_avg),
+            (
+                "pool_income",
+                Some(row.ledger.pool_income),
+                block.pool_income,
+            ),
+            ("pool_spend", Some(row.ledger.pool_spend), block.pool_spend),
+            (
+                "pool_balance",
+                Some(row.ledger.pool_balance),
+                block.pool_balance,
+            ),
+            ("interest", Some(row.investment.interest), block.interest),
+            ("sold_pl", row.investment.sold_pl, block.sold_pl),
+            (
+                "net_investment",
+                row.investment.net_investment,
+                block.net_investment,
+            ),
+            ("invested", row.investment.invested, block.invested),
+            (
+                "invested_pct",
+                row.investment.invested_pct,
+                block.invested_pct,
+            ),
+            (
+                "irene_pool",
+                Some(row.investment.irene_pool),
+                block.irene_pool,
+            ),
+            ("income", row.assets.income, block.income),
+            ("saved", row.assets.saved, block.saved),
+            ("saved_pct", row.assets.saved_pct, block.saved_pct),
+        ] {
+            compare(report, name(field), field, computed, sheet, moving);
+        }
+        // The stock cells compare against the YearInReview block's own frozen
+        // copies, which disagree with the market sheet (2025's I is off by
+        // 74609 while 港股!F31 matches the stored snapshot) — and its J column
+        // sums pending dividends too, so parity uses the effective total.
+        for (field, computed, sheet) in [
+            ("stock_cost", row.assets.stock_cost, block.stock_cost),
+            (
+                "stock_now_value",
+                row.assets.stock_now_value,
+                block.stock_now_value,
+            ),
+            (
+                "stock_dividends",
+                effective_dividends.get(&year).copied(),
+                block.stock_dividends,
+            ),
+        ] {
+            compare(report, name(field), field, computed, sheet, true);
+        }
+        // Bond/deposit cells: seeded overrides match the sheet exactly for
+        // past years; the current year derives live from a registry missing
+        // the matured bond, so a diff there is informational.
+        for (field, computed, sheet) in [
+            (
+                "bond_principal",
+                row.assets.bond_principal,
+                block.bond_principal,
+            ),
+            (
+                "bond_interest",
+                row.assets.bond_interest,
+                block.bond_interest,
+            ),
+            (
+                "deposit_principal",
+                row.assets.deposit_principal,
+                block.deposit_principal,
+            ),
+            (
+                "deposit_interest",
+                row.assets.deposit_interest,
+                block.deposit_interest,
+            ),
+        ] {
+            compare(report, name(field), field, computed, sheet, moving);
+        }
     }
     Ok(())
 }

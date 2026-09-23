@@ -37,7 +37,7 @@ Residual SQL (pure-SQL migration; `month` is `YYYY-MM-01` text so `date(month,'+
 auto = dep(end_date in month).interest + coupons(received, pay_date in month) + hk_dividends(received, pay_date in month)
 INSERT interest item WHERE interest <> 0 AND interest - auto <> 0
 ```
-
+HK
 **Breakdown as a new response field.** `MonthDetailResponse.suggested_interest: f64` → `interest_auto: Vec<{source, label, amount, received}>` (per deposit/coupon/dividend; `amount` is the received figure, else the expected/estimated one, NULL while 待定/no estimate). Unreceived events of all three kinds preview muted — only `received` ones count. Manual `interest` items are already in `items` — the UI merges the two lists. The 建議/使用 hint is removed: there is nothing to "apply" anymore since events compose the figure directly.
 
 **Plumbing.** `to_stat_rows` gains the derived interest (auto events + item sums); `load_events` is generalized to load all-month events once for `list`/`summary`/parity (`load_all_events`), keeping the month-scoped version for `show` suggestions — or one unbounded loader reused everywhere; events are small. `MonthStatPatch.interest` is removed (serde ignores unknown keys). Import computes `residual = sheet N − auto` per month and inserts the item (months import last, so deposits/dividends/coupons are already loaded). Parity compares derived interest vs sheet N — identical totals post-migration, with blank-cell months like 2026-10 reporting the derived figure as an informational diff.

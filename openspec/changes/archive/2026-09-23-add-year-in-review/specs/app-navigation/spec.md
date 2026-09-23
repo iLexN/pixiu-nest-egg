@@ -1,10 +1,6 @@
-# app-navigation Specification
+# Spec Delta
 
-## Purpose
-
-Defines the app's top-level navigation: which pages are grouped under 股票, 定期, MPF, 債券, and AIA, the labels and order of each group's sub-tabs, when the 港股/美股 market toggle is visible, and which page the app opens on.
-
-## Requirements
+## MODIFIED Requirements
 
 ### Requirement: Grouped top navigation
 
@@ -54,70 +50,3 @@ The app SHALL present a two-level top navigation. The first level SHALL show one
 
 - **WHEN** the 股票 group is active
 - **THEN** the 總覽, 定期, MPF, 債券, AIA, 月結, and 年結 groups' sub-tabs are not shown in the nav
-
-### Requirement: Default page is 股票 → 總覽
-
-The app SHALL open on the 股票 group's 總覽 page (the stock portfolio summary) instead of 交易記錄.
-
-#### Scenario: Initial landing page
-
-- **WHEN** the app loads with no prior navigation
-- **THEN** the stock portfolio summary for the default market is displayed, with 總覽 marked as the active sub-tab
-
-### Requirement: Group selection opens the group's first sub-tab
-
-Clicking a group button SHALL switch to that group and open its first sub-tab (its 總覽). The app SHALL NOT remember a previously visited sub-tab within a group.
-
-#### Scenario: Return to a group
-
-- **WHEN** the user is on 股票 → 管理, clicks 定期, then clicks 股票 again
-- **THEN** the 股票 → 總覽 page is shown, not 管理
-
-### Requirement: Market toggle is scoped to the 股票 group
-
-The 港股/美股 market toggle SHALL be shown while the 股票 group is active and SHALL control the market for all of its sub-pages (總覽, 交易記錄, 派息, 管理). It SHALL be hidden while the 總覽, 定期, MPF, 債券, AIA, 月結, or 年結 group is active. The selected market SHALL persist when switching between stock sub-tabs.
-
-#### Scenario: Market toggle on stock pages
-
-- **WHEN** the 股票 group is active on any of its sub-tabs
-- **THEN** the 港股/美股 toggle is shown and switching it changes the market of the displayed page
-
-#### Scenario: Market toggle hidden for 總覽
-
-- **WHEN** the user switches to the 總覽 group
-- **THEN** the 港股/美股 toggle is not shown
-
-#### Scenario: Market toggle hidden for 定期
-
-- **WHEN** the user switches to the 定期 group
-- **THEN** the 港股/美股 toggle is not shown
-
-#### Scenario: Market toggle hidden for MPF
-
-- **WHEN** the user switches to the MPF group
-- **THEN** the 港股/美股 toggle is not shown
-
-#### Scenario: Market toggle hidden for 債券
-
-- **WHEN** the user switches to the 債券 group
-- **THEN** the 港股/美股 toggle is not shown
-
-#### Scenario: Market toggle hidden for AIA
-
-- **WHEN** the user switches to the AIA group
-- **THEN** the 港股/美股 toggle is not shown
-
-#### Scenario: Market toggle hidden for 月結
-
-- **WHEN** the user switches to the 月結 group
-- **THEN** the 港股/美股 toggle is not shown
-
-#### Scenario: Market toggle hidden for 年結
-
-- **WHEN** the user switches to the 年結 group
-- **THEN** the 港股/美股 toggle is not shown
-
-#### Scenario: Market persists across stock sub-tabs
-
-- **WHEN** the user selects 美股 on 總覽 and then opens 交易記錄
-- **THEN** 交易記錄 shows US trades

@@ -2,7 +2,7 @@ use axum::extract::State;
 use axum::Json;
 use sqlx::SqlitePool;
 
-use super::{aia, months, mpf, summary, today, AppState};
+use super::{aia, months, mpf, now_timestamp, summary, today, AppState};
 use crate::calc::{live_totals, trailing_averages, FieldError};
 use crate::error::ApiError;
 use crate::models::{
@@ -10,15 +10,18 @@ use crate::models::{
     SemiLiquid, TwelveMonthAverages,
 };
 
-/// `app_meta` keys holding the 美股 sheet's IBKR account block (A1:B5).
-pub const IBKR_TRANSFERRED_KEY: &str = "ibkr.transferred_hkd";
+/// `app_meta` keys holding the 美股 sheet's IBKR account block (A1:B5); the
+/// cumulative transfer (B1) lives in the `ibkr_transfers` log instead.
 pub const IBKR_NOW_VALUE_KEY: &str = "ibkr.now_value";
 pub const IBKR_HKD_CASH_KEY: &str = "ibkr.hkd_cash";
 pub const IBKR_USD_CASH_KEY: &str = "ibkr.usd_cash";
 
 /// The IBKR block: stored inputs plus the derived 美股!B7/C1/C2 figures.
 pub async fn ibkr_block(pool: &SqlitePool) -> Result<IbkrBlock, ApiError> {
-    let transferred_hkd = mpf::meta_f64(pool, IBKR_TRANSFERRED_KEY).await?;
+    let transferred_hkd: Option<f64> =
+        sqlx::query_scalar("SELECT SUM(amount_hkd) FROM ibkr_transfers")
+            .fetch_one(pool)
+            .await?;
     let now_value = mpf::meta_f64(pool, IBKR_NOW_VALUE_KEY).await?;
     let hkd_cash = mpf::meta_f64(pool, IBKR_HKD_CASH_KEY).await?;
     let usd_cash = mpf::meta_f64(pool, IBKR_USD_CASH_KEY).await?;
@@ -64,7 +67,6 @@ pub async fn update_ibkr(
 ) -> Result<Json<IbkrBlock>, ApiError> {
     let mut errors = Vec::new();
     for (field, value) in [
-        ("transferred_hkd", patch.transferred_hkd),
         ("now_value", patch.now_value),
         ("hkd_cash", patch.hkd_cash),
         ("usd_cash", patch.usd_cash),
@@ -75,11 +77,38 @@ pub async fn update_ibkr(
             }
         }
     }
+    // A transfer delta may be negative — it records a withdrawal or undoes a
+    // mistyped entry; it must only be finite.
+    if let Some(delta) = patch.transfer_hkd {
+        if !delta.is_finite() {
+            errors.push(FieldError::new("transfer_hkd", "value must be a number"));
+        }
+    }
+    let transfer_date = match &patch.transfer_date {
+        Some(date) => match chrono::NaiveDate::parse_from_str(date, "%Y-%m-%d") {
+            Ok(date) => date,
+            Err(_) => {
+                errors.push(FieldError::new("transfer_date", "date must be YYYY-MM-DD"));
+                today()
+            }
+        },
+        None => today(),
+    };
     if !errors.is_empty() {
         return Err(ApiError::Validation(errors));
     }
+    if let Some(delta) = patch.transfer_hkd.filter(|delta| *delta != 0.0) {
+        sqlx::query(
+            "INSERT INTO ibkr_transfers (transfer_date, amount_hkd, created_at) \
+             VALUES (?, ?, ?)",
+        )
+        .bind(transfer_date.to_string())
+        .bind(delta)
+        .bind(now_timestamp())
+        .execute(&state.pool)
+        .await?;
+    }
     for (key, value) in [
-        (IBKR_TRANSFERRED_KEY, patch.transferred_hkd),
         (IBKR_NOW_VALUE_KEY, patch.now_value),
         (IBKR_HKD_CASH_KEY, patch.hkd_cash),
         (IBKR_USD_CASH_KEY, patch.usd_cash),
@@ -208,9 +237,13 @@ mod tests {
     #[tokio::test]
     async fn ibkr_block_derives_the_cross_checks() {
         let pool = connect_memory().await.expect("memory db");
-        crate::mpf::meta_put(&pool, IBKR_TRANSFERRED_KEY, Some("131000"))
-            .await
-            .unwrap();
+        sqlx::query(
+            "INSERT INTO ibkr_transfers (transfer_date, amount_hkd, created_at) \
+             VALUES ('2026-01-05', 131000, '2026-01-05T00:00:00')",
+        )
+        .execute(&pool)
+        .await
+        .unwrap();
         crate::mpf::meta_put(&pool, IBKR_NOW_VALUE_KEY, Some("134232.01"))
             .await
             .unwrap();
@@ -241,6 +274,43 @@ mod tests {
         let block = ibkr_block(&pool).await.unwrap();
         assert!(block.computed_total_hkd.is_none());
         assert!(block.net.is_none());
+    }
+
+    #[tokio::test]
+    async fn update_ibkr_appends_a_dated_transfer() {
+        let pool = connect_memory().await.expect("memory db");
+        let state = AppState { pool: pool.clone() };
+        let block = update_ibkr(
+            State(state.clone()),
+            Json(IbkrPatch {
+                transfer_hkd: Some(50000.0),
+                transfer_date: Some("2026-03-01".to_string()),
+                ..Default::default()
+            }),
+        )
+        .await
+        .unwrap()
+        .0;
+        assert_eq!(block.transferred_hkd, Some(50000.0));
+
+        // A negative delta records a withdrawal/correction on top.
+        let block = update_ibkr(
+            State(state),
+            Json(IbkrPatch {
+                transfer_hkd: Some(-10000.0),
+                ..Default::default()
+            }),
+        )
+        .await
+        .unwrap()
+        .0;
+        assert_eq!(block.transferred_hkd, Some(40000.0));
+
+        let rows: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM ibkr_transfers")
+            .fetch_one(&pool)
+            .await
+            .unwrap();
+        assert_eq!(rows, 2);
     }
 
     #[tokio::test]

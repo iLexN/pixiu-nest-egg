@@ -1004,6 +1004,9 @@ pub struct YearSnapshot {
     pub invested: Option<f64>,
     pub cost: Option<f64>,
     pub market_value: Option<f64>,
+    /// 賣出損益: the year's realized P/L, entered by hand (the workbook never
+    /// recorded SELL trades). NULL reports the row's `sold_pl` absent.
+    pub sold_pl: Option<f64>,
     pub updated_at: String,
 }
 
@@ -1037,7 +1040,8 @@ pub struct YearRow {
     /// (cost − prior year's cost) ÷ prior year's cost — the sheet's
     /// (F−F′)/F′ over the cumulative cost column; empty like dividend_yoy.
     pub invested_yoy: Option<f64>,
-    /// Reserved for realized sell P/L; not computed yet.
+    /// 賣出損益: the year's realized sell P/L — the stored manual figure,
+    /// absent while none is stored (SELL trades are not recorded).
     pub sold_pl: Option<f64>,
     /// The stored snapshot, when the year has one — the UI marks frozen
     /// cells from its non-null fields.
@@ -1125,7 +1129,7 @@ pub fn yearly_rows(
             monthly_dividend: dividends / 12.0,
             dividend_yoy,
             invested_yoy,
-            sold_pl: None,
+            sold_pl: override_field(|s| s.sold_pl),
             snapshot: snapshot.cloned(),
         });
     }
@@ -2187,7 +2191,407 @@ pub fn month_running_averages(
     }
 }
 
-/// `Overview!F3:G10` (+`H6`) — trailing averages over the 12 most recent
+// ----- Year in review (YearInReview) -----
+
+/// The stored `year_review` row: the figures the sheet enters by hand, plus
+/// nullable overrides for cells whose history was deleted from the workbook
+/// (pre-app bonds and deposits). A None override derives live.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Serialize)]
+pub struct YearReviewRecord {
+    /// 收入: the year's income, entered by hand (the sheet's own cell is a
+    /// hand-built formula).
+    pub income: Option<f64>,
+    /// Added to the year's invested on top of the year's `ibkr_transfers` sum
+    /// — the sheet's `invested` cell is `港股!C<y> ± manual amounts` (e.g.
+    /// `− 110000 + 美股!B1` for 2026, where the 美股!B1 part now derives from
+    /// the transfer log).
+    pub invested_adjustment: Option<f64>,
+    /// Overrides for the 債券 row; None derives from coupons/bonds.
+    pub bond_principal: Option<f64>,
+    pub bond_interest: Option<f64>,
+    /// Overrides for the 定期 row; None derives from deposits ending in the
+    /// year.
+    pub deposit_principal: Option<f64>,
+    pub deposit_interest: Option<f64>,
+}
+
+/// The only bond facts the year review needs.
+#[derive(Debug, Clone)]
+pub struct BondYearFacts {
+    pub principal: f64,
+    /// The first coupon's pay year — the purchase proxy (bonds carry no
+    /// start date). Falls back to the maturity year.
+    pub first_coupon_year: Option<i32>,
+    pub maturity_date: chrono::NaiveDate,
+    /// (pay year, received_amount) of the received coupons.
+    pub received: Vec<(i32, f64)>,
+}
+
+/// The sheet's A–D ledger group for one year: the Month Stat yearly block
+/// re-averaged the sheet's way (`=C/12` flat, not AVERAGE over the months
+/// present) plus the 開心Pool trio and the D-column YoY deltas.
+#[derive(Debug, Clone, Default, PartialEq, Serialize)]
+pub struct YearReviewLedger {
+    /// 總數+: Σ total_change.
+    pub asset_gain: Option<f64>,
+    /// 平均總數+: asset_gain ÷ 12.
+    pub asset_gain_avg: Option<f64>,
+    /// 支出: Σ month_spend.
+    pub spend: Option<f64>,
+    /// 平均支出: spend ÷ 12.
+    pub spend_avg: Option<f64>,
+    /// 生活平均支出: mean living_spend.
+    pub living_avg: Option<f64>,
+    /// 開心 Pool 收入: Σ interest × the year's pool rate.
+    pub pool_income: f64,
+    /// 開心 Pool 支出: Σ entertainment items.
+    pub pool_spend: f64,
+    /// 開心 Pool 結餘: the chained closing balance.
+    pub pool_balance: f64,
+    /// The D-column YoY deltas; absent without a usable prior row.
+    pub asset_gain_yoy: Option<f64>,
+    pub spend_yoy: Option<f64>,
+    pub living_yoy: Option<f64>,
+    pub pool_income_yoy: Option<f64>,
+}
+
+/// The sheet's E–G investment group for one year.
+#[derive(Debug, Clone, Default, PartialEq, Serialize)]
+pub struct YearReviewInvestment {
+    /// 利息回報: Σ derived month interest.
+    pub interest: f64,
+    /// 平均回報: interest ÷ 12 flat (the sheet's `=F/12`).
+    pub interest_avg: f64,
+    /// 投資P/L: the year's stored HK sold_pl; absent while none is stored.
+    pub sold_pl: Option<f64>,
+    /// 投資純利: interest + sold_pl; absent without sold_pl.
+    pub net_investment: Option<f64>,
+    /// IBKR 轉入: Σ the year's `ibkr_transfers`; absent while none.
+    pub transferred: Option<f64>,
+    /// invested: HK net invested + the year's IBKR 轉入 + invested_adjustment;
+    /// absent while none of the three exists.
+    pub invested: Option<f64>,
+    /// invested %: invested ÷ (income + interest); absent without income.
+    pub invested_pct: Option<f64>,
+    /// Irene + 開心 Pool: Σ pool_input.
+    pub irene_pool: f64,
+    /// The G-column YoY deltas on 平均回報 and invested.
+    pub interest_avg_yoy: Option<f64>,
+    pub invested_yoy: Option<f64>,
+}
+
+/// The sheet's H–M asset-returns group for one year.
+#[derive(Debug, Clone, Default, PartialEq, Serialize)]
+pub struct YearReviewAssets {
+    /// 債券: principal held in the year and coupon interest received — the
+    /// stored overrides win where set. Absent while neither derives nor an
+    /// override exists.
+    pub bond_principal: Option<f64>,
+    pub bond_interest: Option<f64>,
+    /// 債券 interest ÷ principal.
+    pub bond_rate: Option<f64>,
+    /// 股票 (HK only, matching the sheet — US enters only through the
+    /// invested adjustment): year-end 成本 / 當年派息 / 總市值.
+    pub stock_cost: Option<f64>,
+    pub stock_dividends: Option<f64>,
+    /// dividends ÷ cost.
+    pub stock_rate: Option<f64>,
+    pub stock_now_value: Option<f64>,
+    /// dividends ÷ now_value.
+    pub stock_value_rate: Option<f64>,
+    /// 定期: principal and interest of deposits whose end_date is in the
+    /// year and not after today (the sheet's `End` filter) — the stored
+    /// overrides win where set.
+    pub deposit_principal: Option<f64>,
+    pub deposit_interest: Option<f64>,
+    /// 回報率 blends (the 2026 layout):
+    /// income ÷ (bond principal + stock cost).
+    pub income_cost_rate: Option<f64>,
+    /// all returns ÷ (bond principal + stock now value).
+    pub total_value_rate: Option<f64>,
+    /// (bond + stock returns) ÷ (bond principal + stock now value).
+    pub income_value_rate: Option<f64>,
+    /// 收入: the stored manual figure.
+    pub income: Option<f64>,
+    /// 收入 ÷ 12.
+    pub income_avg: Option<f64>,
+    /// The L-column YoY on 收入.
+    pub income_yoy: Option<f64>,
+    /// 存: income − spend.
+    pub saved: Option<f64>,
+    /// 存 ÷ 12.
+    pub saved_avg: Option<f64>,
+    /// 存 %: saved ÷ income.
+    pub saved_pct: Option<f64>,
+    /// True when a stored override replaced the derived figure.
+    pub bond_overridden: bool,
+    pub deposit_overridden: bool,
+}
+
+/// One row of the 年結 → 回顧 page: the YearInReview sheet's three groups for
+/// one year, plus the stored record behind the manual/overridden cells.
+#[derive(Debug, Clone, Default, PartialEq, Serialize)]
+pub struct YearReviewRow {
+    pub year: i32,
+    pub ledger: YearReviewLedger,
+    pub investment: YearReviewInvestment,
+    pub assets: YearReviewAssets,
+    /// The stored `year_review` record, when the year has one — the UI marks
+    /// overridden cells from its non-null fields.
+    pub record: Option<YearReviewRecord>,
+}
+
+fn yoy(current: Option<f64>, prior: Option<f64>) -> Option<f64> {
+    match (current, prior) {
+        (Some(current), Some(prior)) if prior != 0.0 => Some((current - prior) / prior),
+        _ => None,
+    }
+}
+
+/// The bond principal held in `year`: Σ principal of bonds with
+/// `min(first coupon year, maturity year) ≤ year ≤ maturity year` — the
+/// coupon schedule's start approximates the purchase a missing start date
+/// would record. Returns None when no bond qualifies.
+fn bond_year_principal(bonds: &[BondYearFacts], year: i32) -> Option<f64> {
+    let principal: f64 = bonds
+        .iter()
+        .filter(|bond| {
+            let maturity_year = bond.maturity_date.year();
+            let start_year = bond
+                .first_coupon_year
+                .unwrap_or(maturity_year)
+                .min(maturity_year);
+            start_year <= year && year <= maturity_year
+        })
+        .map(|bond| bond.principal)
+        .sum();
+    (principal != 0.0).then_some(principal)
+}
+
+/// Σ received coupon amounts whose pay_date falls in `year`.
+fn bond_year_interest(bonds: &[BondYearFacts], year: i32) -> Option<f64> {
+    let interest: f64 = bonds
+        .iter()
+        .flat_map(|bond| bond.received.iter())
+        .filter(|(pay_year, _)| *pay_year == year)
+        .map(|(_, amount)| *amount)
+        .sum();
+    (interest != 0.0).then_some(interest)
+}
+
+/// Σ principal / Σ interest of deposits whose end_date is in `year` and not
+/// after `today` — the sheet's `End` status filter. None when nothing ends.
+fn deposit_year_figures(
+    deposits: &[DepositFacts<'_>],
+    year: i32,
+    today: chrono::NaiveDate,
+) -> (Option<f64>, Option<f64>) {
+    let mut principal = 0.0;
+    let mut interest = 0.0;
+    let mut any = false;
+    for deposit in deposits
+        .iter()
+        .filter(|deposit| deposit.end_date.year() == year && deposit.end_date <= today)
+    {
+        any = true;
+        principal += deposit.principal.unwrap_or(0.0);
+        interest += deposit.interest.unwrap_or(0.0);
+    }
+    (any.then_some(principal), any.then_some(interest))
+}
+
+/// Assemble the YearInReview blocks: one row per year that has a month
+/// summary or a stored `year_review` record, ascending. `summaries` and
+/// `hk_years` are the already-derived Month Stat yearly block and HK yearly
+/// table; `bonds`/`deposits` derive the asset rows that stored overrides can
+/// replace.
+pub fn year_review_rows(
+    summaries: &[MonthYearSummary],
+    hk_years: &[YearRow],
+    records: &BTreeMap<i32, YearReviewRecord>,
+    bonds: &[BondYearFacts],
+    deposits: &[DepositFacts<'_>],
+    transfers: &BTreeMap<i32, f64>,
+    today: chrono::NaiveDate,
+) -> Vec<YearReviewRow> {
+    let years: BTreeMap<i32, ()> = summaries
+        .iter()
+        .map(|summary| summary.year)
+        .chain(records.keys().copied())
+        .map(|year| (year, ()))
+        .collect();
+
+    // The fields a row's YoY deltas read off the previous row.
+    struct Prior {
+        asset_gain: Option<f64>,
+        spend: Option<f64>,
+        living: Option<f64>,
+        pool_income: Option<f64>,
+        interest_avg: Option<f64>,
+        invested: Option<f64>,
+        income: Option<f64>,
+    }
+
+    let mut rows = Vec::with_capacity(years.len());
+    let mut prior: Option<Prior> = None;
+    for &year in years.keys() {
+        let summary = summaries.iter().find(|summary| summary.year == year);
+        let record = records.get(&year).copied().unwrap_or_default();
+        let stored_record = records.get(&year).copied();
+        let hk = hk_years.iter().find(|row| row.year == year);
+
+        let income = record.income;
+        let interest = summary.map(|s| s.interest_sum).unwrap_or(0.0);
+        let interest_avg = interest / 12.0;
+        let sold_pl = hk.and_then(|row| row.sold_pl);
+        let transferred = transfers.get(&year).copied();
+        let invested = match (
+            hk.map(|row| row.invested),
+            transferred,
+            record.invested_adjustment,
+        ) {
+            (None, None, None) => None,
+            (base, transfer, adjustment) => {
+                Some(base.unwrap_or(0.0) + transfer.unwrap_or(0.0) + adjustment.unwrap_or(0.0))
+            }
+        };
+        let spend = summary.and_then(|s| s.spend_sum);
+        let saved = match (income, spend) {
+            (Some(income), Some(spend)) => Some(income - spend),
+            _ => None,
+        };
+
+        let bond_overridden = record.bond_principal.is_some() || record.bond_interest.is_some();
+        let deposit_overridden =
+            record.deposit_principal.is_some() || record.deposit_interest.is_some();
+        let bond_principal = record
+            .bond_principal
+            .or_else(|| bond_year_principal(bonds, year));
+        let bond_interest = record
+            .bond_interest
+            .or_else(|| bond_year_interest(bonds, year));
+        let (derived_principal, derived_interest) = deposit_year_figures(deposits, year, today);
+        let deposit_principal = record.deposit_principal.or(derived_principal);
+        let deposit_interest = record.deposit_interest.or(derived_interest);
+
+        let bond_rate = match (bond_interest, bond_principal) {
+            (Some(interest), Some(principal)) if principal > 0.0 => Some(interest / principal),
+            _ => None,
+        };
+        let stock_cost = hk.map(|row| row.cost);
+        let stock_dividends = hk.map(|row| row.dividends);
+        let stock_now_value = hk.and_then(|row| row.market_value);
+        let stock_rate = match (stock_dividends, stock_cost) {
+            (Some(dividends), Some(cost)) if cost > 0.0 => Some(dividends / cost),
+            _ => None,
+        };
+        let stock_value_rate = match (stock_dividends, stock_now_value) {
+            (Some(dividends), Some(value)) if value > 0.0 => Some(dividends / value),
+            _ => None,
+        };
+
+        // SUM ranges treat blank cells as zero, so each blend counts whichever
+        // components exist and reports a rate once its denominator is known.
+        let income_returns = bond_interest.unwrap_or(0.0) + stock_dividends.unwrap_or(0.0);
+        let all_returns = income_returns + deposit_interest.unwrap_or(0.0);
+        let cost_basis = (bond_principal.unwrap_or(0.0) > 0.0 || stock_cost.is_some())
+            .then(|| bond_principal.unwrap_or(0.0) + stock_cost.unwrap_or(0.0));
+        let value_basis = match (bond_principal, stock_now_value) {
+            (bond, stock) if bond.unwrap_or(0.0) + stock.unwrap_or(0.0) > 0.0 => {
+                Some(bond.unwrap_or(0.0) + stock.unwrap_or(0.0))
+            }
+            _ => None,
+        };
+        let income_cost_rate = cost_basis.map(|basis| income_returns / basis);
+        let total_value_rate = value_basis.map(|basis| all_returns / basis);
+        let income_value_rate = value_basis.map(|basis| income_returns / basis);
+
+        let row = YearReviewRow {
+            year,
+            ledger: YearReviewLedger {
+                asset_gain: summary.and_then(|s| s.total_change_sum),
+                asset_gain_avg: summary.and_then(|s| s.total_change_sum.map(|v| v / 12.0)),
+                spend,
+                spend_avg: spend.map(|v| v / 12.0),
+                living_avg: summary.and_then(|s| s.living_avg),
+                pool_income: summary.map(|s| s.pool_income).unwrap_or(0.0),
+                pool_spend: summary.map(|s| s.entertainment_sum).unwrap_or(0.0),
+                pool_balance: summary.map(|s| s.pool_balance).unwrap_or(0.0),
+                asset_gain_yoy: yoy(
+                    summary.and_then(|s| s.total_change_sum),
+                    prior.as_ref().and_then(|p| p.asset_gain),
+                ),
+                spend_yoy: yoy(spend, prior.as_ref().and_then(|p| p.spend)),
+                living_yoy: yoy(
+                    summary.and_then(|s| s.living_avg),
+                    prior.as_ref().and_then(|p| p.living),
+                ),
+                pool_income_yoy: yoy(
+                    summary.map(|s| s.pool_income),
+                    prior.as_ref().and_then(|p| p.pool_income),
+                ),
+            },
+            investment: YearReviewInvestment {
+                interest,
+                interest_avg,
+                sold_pl,
+                net_investment: sold_pl.map(|sold_pl| interest + sold_pl),
+                transferred,
+                invested,
+                invested_pct: match (invested, income) {
+                    (Some(invested), Some(income)) if income + interest != 0.0 => {
+                        Some(invested / (income + interest))
+                    }
+                    _ => None,
+                },
+                irene_pool: summary.map(|s| s.pool_input_sum).unwrap_or(0.0),
+                interest_avg_yoy: yoy(
+                    summary.map(|_| interest_avg),
+                    prior.as_ref().and_then(|p| p.interest_avg),
+                ),
+                invested_yoy: yoy(invested, prior.as_ref().and_then(|p| p.invested)),
+            },
+            assets: YearReviewAssets {
+                bond_principal,
+                bond_interest,
+                bond_rate,
+                stock_cost,
+                stock_dividends,
+                stock_rate,
+                stock_now_value,
+                stock_value_rate,
+                deposit_principal,
+                deposit_interest,
+                income_cost_rate,
+                total_value_rate,
+                income_value_rate,
+                income,
+                income_avg: income.map(|v| v / 12.0),
+                income_yoy: yoy(income, prior.as_ref().and_then(|p| p.income)),
+                saved,
+                saved_avg: saved.map(|v| v / 12.0),
+                saved_pct: match (saved, income) {
+                    (Some(saved), Some(income)) if income != 0.0 => Some(saved / income),
+                    _ => None,
+                },
+                bond_overridden,
+                deposit_overridden,
+            },
+            record: stored_record,
+        };
+        prior = Some(Prior {
+            asset_gain: row.ledger.asset_gain,
+            spend: row.ledger.spend,
+            living: row.ledger.living_avg,
+            pool_income: summary.map(|_| row.ledger.pool_income),
+            interest_avg: summary.map(|_| row.investment.interest_avg),
+            invested: row.investment.invested,
+            income: row.assets.income,
+        });
+        rows.push(row);
+    }
+    rows
+}
 /// completed month rows (`month < current_month`), per column skipping months
 /// with no value, matching the sheet's hand-anchored OFFSET window.
 #[derive(Debug, Clone, Default)]
@@ -3385,6 +3789,7 @@ mod tests {
             invested,
             cost,
             market_value,
+            sold_pl: None,
             updated_at: "2026-01-01T00:00:00+08:00".to_string(),
         }
     }
@@ -4262,6 +4667,164 @@ mod tests {
         assert!(approx_eq(y2026.pool_balance, 605.5));
         // Only January has a next row, so only it reports a spend.
         assert!(approx_eq(y2026.spend_sum.unwrap(), 1.0));
+    }
+
+    #[test]
+    fn year_review_combines_summaries_yearly_rows_and_overrides() {
+        // 2025-12 → 2026-02: totals step by 60; January spends 400.
+        let mut rows = vec![
+            month_row("2025-12-01", Some(1000.0), Some(100.0)),
+            month_row("2026-01-01", Some(1100.0), Some(100.0)),
+            month_row("2026-02-01", Some(800.0), Some(100.0)),
+        ];
+        rows[0].total_assets = Some(500.0);
+        rows[1].total_assets = Some(560.0);
+        rows[2].total_assets = Some(620.0);
+        rows[1].interest = 120.0;
+        rows[2].interest = 240.0;
+        let mut items = HashMap::new();
+        items.insert(
+            ym("2026-01-01"),
+            vec![item(MonthItemCategory::Entertainment, 60.0)],
+        );
+        let rates = BTreeMap::from([(2026, 0.5)]);
+        let summaries = month_year_summaries(&rows, &items, &rates, &BTreeMap::new());
+
+        // HK: 1000 bought in 2025, 500 in 2026; a 2025 snapshot freezes cost
+        // 900 / value 2000 / sold_pl −40; a 2026 snapshot stores sold_pl 0.
+        let trades = [
+            dated_buy("2025-06-01", 100.0, 1000.0),
+            dated_buy("2026-03-01", 50.0, 500.0),
+        ];
+        let dividends = [dividend_fact("中國銀行", "2026-08-01", Some(30.0))];
+        let snapshots = HashMap::from([
+            (
+                2025,
+                YearSnapshot {
+                    sold_pl: Some(-40.0),
+                    ..snapshot_year(None, Some(900.0), Some(2000.0))
+                },
+            ),
+            (
+                2026,
+                YearSnapshot {
+                    sold_pl: Some(0.0),
+                    ..snapshot_year(None, None, None)
+                },
+            ),
+        ]);
+        let hk_years = yearly_rows(&trades, &dividends, &snapshots, Some(1600.0), 2026);
+
+        let records = BTreeMap::from([
+            (
+                2025,
+                YearReviewRecord {
+                    income: Some(720000.0),
+                    bond_principal: Some(160000.0),
+                    bond_interest: Some(7486.0),
+                    deposit_principal: Some(932899.0),
+                    deposit_interest: Some(6228.4),
+                    ..YearReviewRecord::default()
+                },
+            ),
+            (
+                2026,
+                YearReviewRecord {
+                    income: Some(737020.0),
+                    invested_adjustment: Some(-110000.0),
+                    ..YearReviewRecord::default()
+                },
+            ),
+        ]);
+        let bonds = vec![BondYearFacts {
+            principal: 50000.0,
+            first_coupon_year: Some(2025),
+            maturity_date: ym("2027-04-23"),
+            received: vec![(2025, 997.25), (2025, 1002.75), (2026, 1000.0)],
+        }];
+        let deposits = [
+            DepositFacts {
+                bank: None,
+                principal: Some(573266.77),
+                interest: Some(6199.51),
+                end_date: ym("2026-06-01"),
+            },
+            // Ends after `today` — the sheet's End filter skips it.
+            DepositFacts {
+                bank: None,
+                principal: Some(10000.0),
+                interest: Some(300.0),
+                end_date: ym("2027-01-01"),
+            },
+        ];
+        let today = ym("2026-09-22");
+        // 2026's IBKR 轉入: the year's transfer-log sum joins invested.
+        let transfers = BTreeMap::from([(2026, 131000.0)]);
+
+        let rows_out = year_review_rows(
+            &summaries, &hk_years, &records, &bonds, &deposits, &transfers, today,
+        );
+        assert_eq!(rows_out.len(), 2);
+
+        // 2025: the seeded overrides win over the coupon/deposit derivations.
+        let y2025 = &rows_out[0];
+        assert_eq!(y2025.year, 2025);
+        assert!(approx_eq(y2025.assets.bond_principal.unwrap(), 160000.0));
+        assert!(approx_eq(y2025.assets.bond_interest.unwrap(), 7486.0));
+        assert!(y2025.assets.bond_overridden);
+        assert!(approx_eq(y2025.assets.deposit_principal.unwrap(), 932899.0));
+        // Snapshot cost wins over the trade-derived cumulative 1000.
+        assert!(approx_eq(y2025.assets.stock_cost.unwrap(), 900.0));
+        // 投資純利 = interest 0 + sold_pl −40.
+        assert!(approx_eq(y2025.investment.net_investment.unwrap(), -40.0));
+        // 存 = income − spend; 2025's spend is 0 (start == end + salary).
+        assert!(approx_eq(y2025.assets.saved.unwrap(), 720000.0));
+        assert!(approx_eq(y2025.assets.saved_pct.unwrap(), 1.0));
+
+        // 2026: derived live. invested = HK net invested + 轉入 + adjustment.
+        let y2026 = &rows_out[1];
+        assert_eq!(y2025.investment.transferred, None);
+        assert_eq!(y2026.investment.transferred, Some(131000.0));
+        assert!(approx_eq(
+            y2026.investment.invested.unwrap(),
+            500.0 + 131000.0 - 110000.0
+        ));
+        assert!(approx_eq(y2026.investment.interest, 360.0));
+        // 平均回報 divides by 12 flat, not the months present.
+        assert!(approx_eq(y2026.investment.interest_avg, 30.0));
+        assert!(approx_eq(y2026.investment.net_investment.unwrap(), 360.0));
+        assert!(approx_eq(
+            y2026.investment.invested_pct.unwrap(),
+            21500.0 / (737020.0 + 360.0)
+        ));
+        // Bond derives from the held-in-year rule; the 2027-01 deposit is
+        // excluded by the End filter.
+        assert!(approx_eq(y2026.assets.bond_principal.unwrap(), 50000.0));
+        assert!(approx_eq(y2026.assets.bond_interest.unwrap(), 1000.0));
+        assert!(!y2026.assets.bond_overridden);
+        assert!(approx_eq(
+            y2026.assets.deposit_principal.unwrap(),
+            573266.77
+        ));
+        // Blends: (bond i + div) ÷ (bond p + cost) = 1030 ÷ 51500.
+        assert!(approx_eq(
+            y2026.assets.income_cost_rate.unwrap(),
+            1030.0 / 51500.0
+        ));
+        // 存 = income − spend = 737020 − 400.
+        assert!(approx_eq(y2026.assets.saved.unwrap(), 736620.0));
+        // Pool: income = 360 × 0.5 = 180; spend = 60.
+        assert!(approx_eq(y2026.ledger.pool_income, 180.0));
+        assert!(approx_eq(y2026.ledger.pool_spend, 60.0));
+        // 2026-01 spend = 1100 − (800 − 100) = 400; YoY vs 2025's 0 spend:
+        // the prior row's spend is Some(0) → absent.
+        assert!(approx_eq(y2026.ledger.spend.unwrap(), 400.0));
+        assert_eq!(y2026.ledger.spend_yoy, None);
+        // income YoY: (737020 − 720000) ÷ 720000.
+        assert!(approx_eq(
+            y2026.assets.income_yoy.unwrap(),
+            17020.0 / 720000.0
+        ));
     }
 
     #[test]

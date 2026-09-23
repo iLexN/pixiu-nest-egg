@@ -12,6 +12,7 @@ import BondsView from './views/BondsView.vue'
 import AiaView from './views/AiaView.vue'
 import MonthStatView from './views/MonthStatView.vue'
 import OverviewView from './views/OverviewView.vue'
+import YearReviewView from './views/YearReviewView.vue'
 
 type Tab =
   | 'overview'
@@ -25,7 +26,8 @@ type Tab =
   | 'bonds'
   | 'aia'
   | 'months'
-type Group = 'overview' | 'stock' | 'deposit' | 'mpf' | 'bond' | 'aia' | 'months'
+  | 'yearReview'
+type Group = 'overview' | 'stock' | 'deposit' | 'mpf' | 'bond' | 'aia' | 'months' | 'year'
 
 const NAV: { id: Group; label: string; tabs: { id: Tab; label: string }[] }[] = [
   {
@@ -71,10 +73,15 @@ const NAV: { id: Group; label: string; tabs: { id: Tab; label: string }[] }[] = 
     label: '月結',
     tabs: [{ id: 'months', label: '總覽' }],
   },
+  {
+    id: 'year',
+    label: '年結',
+    tabs: [{ id: 'yearReview', label: '回顧' }],
+  },
 ]
 
 const market = ref<Market>('HK')
-const tab = ref<Tab>('summary')
+const tab = ref<Tab>('overview')
 const activeGroup = computed(() => NAV.find((g) => g.tabs.some((t) => t.id === tab.value))!)
 const group = computed(() => activeGroup.value.id)
 
@@ -125,6 +132,7 @@ function selectGroup(g: (typeof NAV)[number]) {
     <BondsView v-else-if="tab === 'bonds'" />
     <AiaView v-else-if="tab === 'aia'" />
     <MonthStatView v-else-if="tab === 'months'" />
+    <YearReviewView v-else-if="tab === 'yearReview'" />
     <DepositHistoryView v-else />
   </main>
 </template>

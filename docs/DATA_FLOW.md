@@ -110,6 +110,7 @@ One row per (market, year) holding the frozen figures the yearly table cannot re
 | `invested` | Override for the year's net invested |
 | `cost` | Frozen 年末總成本 (cumulative buy cost) |
 | `market_value` | Frozen 年末總市值 |
+| `sold_pl` | Hand-entered realized 賣出損益 for the year (may be negative); feeds the yearly table and Month Stat's 投資純利 |
 | `updated_at` | When the snapshot was last written |
 
 ### `mpf_accounts`
@@ -144,7 +145,7 @@ When a contributions/balance update arrives in a later month and whole calendar 
 
 ### `app_meta`
 
-A generic key-value table for section-level state that no account row can hold. Currently: `mpf.note` (the MPF page's free-text note), the portfolio-level seeded maxima `mpf.seed_max_rate` / `mpf.seed_max_gain`, the Overview settings `overview.salary` / `overview.pool_rate.<year>`, the manual USD→HKD rate `aia.usd_hkd_rate`, and the 美股 sheet's IBKR account cells `ibkr.transferred_hkd` / `ibkr.now_value` / `ibkr.hkd_cash` / `ibkr.usd_cash`.
+A generic key-value table for section-level state that no account row can hold. Currently: `mpf.note` (the MPF page's free-text note), the portfolio-level seeded maxima `mpf.seed_max_rate` / `mpf.seed_max_gain`, the Overview settings `overview.salary` / `overview.pool_rate.<year>`, the manual USD→HKD rate `aia.usd_hkd_rate`, and the 美股 sheet's IBKR account cells `ibkr.now_value` / `ibkr.hkd_cash` / `ibkr.usd_cash`.
 
 | Column | Meaning |
 |---|---|
@@ -218,6 +219,19 @@ One row per month, keyed by `month` (`YYYY-MM-01`), migrated from the `Month Sta
 | `note` | Optional free-text note |
 | `created_at`, `updated_at` | Audit timestamps |
 
+### `year_review`
+
+One row per year, keyed by `year`, holding the YearInReview figures that cannot be derived from records — because the workbook entered them by hand (收入, the invested adjustment, sold P/L) or because it deleted the underlying data (matured bonds and deposits drop off the 債券/定期 sheets, so the app can no longer see past years' principal/interest). NULL means "derive live".
+
+| Column | Meaning |
+|---|---|
+| `year` | Calendar year; unique |
+| `income` | The sheet's 收入 cell — hand-entered salary total |
+| `invested_adjustment` | `invested = HK net invested + 當年 IBKR 轉入 + invested_adjustment`; seeded as `sheet invested − app HK net invested − year transfers` so the total reproduces the workbook while the transfer part derives live (it folded in US principal, bond purchases, etc.) |
+| `bond_principal`, `bond_interest` | Year-end 債券 principal held and coupons received; seeded for past years only |
+| `deposit_principal`, `deposit_interest` | 定期 principal/interest of deposits ending in the year; seeded for past years only |
+| `updated_at` | When the record was last written |
+
 ### `month_items` and `month_item_dismissals`
 
 `month_items` holds the month's line items — `adjustment` (G 調整: bank flows that are not spending), `extra_spend` (I−J extras like tax or premiums), `income` (L tail beyond `salary − spend`), `interest` (the manual part of N 利息: bank 活期 interest, promo rebates — the rest derives from deposit/coupon/dividend events), `entertainment` (O 娛樂支出). An `entertainment` item may carry `exclude_from_living`, which also subtracts it from 生活支出 — one entry then serves both the O total and the J exclusion (the sheet typed such amounts in both formulas). Imported items keep the sheet's formula text in `note` (e.g. `=47850-I23+24675`) and have no `auto_key`. Suggested items carry a stable `auto_key` (e.g. `dep-start:<id>`, `div:<id>`); a partial unique index prevents double-accepting, and `month_item_dismissals` (month + auto_key) records ignored suggestions so they stay gone.
@@ -225,6 +239,10 @@ One row per month, keyed by `month` (`YYYY-MM-01`), migrated from the `Month Sta
 ### `manual_assets`
 
 The manual Overview cells as rows: `label`, `kind` (`cash` = 活期 like HS/渣打, `asset` = 資產 like Irene/HS人壽), `amount`, `sort_order`. They feed the live 總數/流動資產 derivation and are editable inline on the 總覽 tab.
+
+### `ibkr_transfers`
+
+One row per bank→IBKR transfer (negative amounts record a withdrawal/correction): `transfer_date`, `amount_hkd`, `created_at`. 累計轉入 (美股!B1) is the log's sum, and each year's sum joins the year review's `invested`. The import seeds it with the workbook's cumulative B1 value as one row dated to the first US trade; saving the IBKR form's 轉入 delta appends a dated row.
 
 ### Values not stored
 
@@ -263,9 +281,10 @@ These are calculated by the backend when needed:
 - Active principal total and the upcoming unpaid coupon list
 - Month Stat 利息/月尾/月支出/生活支出/存/娛樂支出/Changed columns and the item Σ columns
 - Month Stat yearly aggregates, running averages, and 投資純利
+- Year in Review ledger/investment/asset figures, YoY columns, and blended 回報率 rates
 - Live 總數/流動資產 for NULL months (market + deposit principal + bonds + AIA + MPF + manual cells + IBKR account + pool)
 - The 總覽 asset table, its Sum and per-row shares, the A13 半流動 ratio, the 半流動資金 block (已定期/活期/total/`total − 25%×流動資產`), and the B1/H1/J1 headline
-- IBKR derived figures: 美股!B7 `(stock value USD + USD cash) × rate + HKD cash`, net and net% against transferred, and the computed-vs-App difference
+- IBKR derived figures: 累計轉入 = Σ `ibkr_transfers`, 美股!B7 `(stock value USD + USD cash) × rate + HKD cash`, net and net% against transferred, and the computed-vs-App difference
 - 開心Pool balances (chained per year from interest × pool rate − 娛樂 + inputs)
 
 This avoids stale copied totals.
@@ -796,7 +815,8 @@ MonthStatView loads GET /api/months/summary + /api/months?year=YYYY
 ```text
 OverviewView loads GET /api/overview
   → routes/overview.rs reuses the live-totals components, reads the manual
-    asset rows, and builds the IBKR block from the ibkr.* app_meta keys
+    asset rows, and builds the IBKR block from the ibkr.* app_meta keys and
+    the ibkr_transfers log
   → the response carries the B1/H1/J1 headline, the asset table with each
     row's share of the Sum, the 半流動資金 block, and the IBKR block
 ```
@@ -810,10 +830,13 @@ The 過去 12 個月平均 card mirrors `Overview!F3:G10` + `H6`: averages of �
 ## Edit the IBKR figures in 美股 → 總覽
 
 ```text
-Click 編輯 on the IBKR card → PATCH /api/ibkr with the four fields
-  → routes/overview.rs validates non-negative finite numbers, writes each
-    provided field to its ibkr.* app_meta key (null clears), and returns
-    the block with the derived figures recomputed
+Click 編輯 on the IBKR card → PATCH /api/ibkr with the transfer delta/date and
+    the three account fields
+  → routes/overview.rs validates non-negative finite numbers, appends
+    `transfer_hkd` (any finite delta; negative undoes an entry) to
+    `ibkr_transfers` dated `transfer_date` (default today), writes each
+    provided account field to its ibkr.* app_meta key (null clears), and
+    returns the block with the derived figures recomputed
 ```
 
 `ibkr.now_value` is the account total as the IBKR app displays it — its implied FX rate differs from `aia.usd_hkd_rate`, so it stays a manual input. `computed_total_hkd` is the sheet's `美股!B7` `(美股市值 USD + USD cash) × rate + HKD cash`; `vs_now_value` is the cross-check gap between the two.
@@ -832,7 +855,7 @@ The importer reads:
 - `港股Trade` — trade columns plus the J–O 派息 block
 - `美股Trade` — trade columns plus the J–O 派息 block
 - `港股`
-- `美股` — plus the IBKR account cells `B1` (累計轉入 HKD), `B2` (IBKR App 現值), `B4`/`B5` (HKD/USD cash) → `ibkr.*` `app_meta` keys, seeded only while unset
+- `美股` — plus the IBKR account cells `B1` (累計轉入 HKD → one `ibkr_transfers` row dated to the first US trade, seeded only while the log is empty), `B2` (IBKR App 現值), `B4`/`B5` (HKD/USD cash) → `ibkr.*` `app_meta` keys, seeded only while unset
 - `定期Info` (表_定期List) and `定期` (cached aggregates for parity)
 - `MPF` — the account table under the 總供款額/帳戶結存 headers; the fund-details table below it and the remark row are ignored
 - `債券` — the registry table under the `end` header (label / 發行編號 / principal / maturity), then each bond's coupon block under its 發行編號 label line: 付息日 / 利息釐定日 / 年息率 / 每1萬利息 / cached 利息; `待定` cells import as NULL
@@ -867,7 +890,7 @@ SummaryView loads GET /api/summary/yearly?market=HK|US
 Each row carries:
 
 - `invested` — Σ BUY − Σ SELL of trades dated in the year; a stored snapshot value wins
-- `sold_pl` — reserved, empty for now
+- `sold_pl` — 賣出損益, the hand-entered realized P/L stored on `year_snapshots` (the workbook never recorded SELL trades); seeded from YearInReview's 投資P/L, editable per market-year
 - `cost` — 年末總成本, cumulative Σ BUY total through Dec 31; a stored snapshot value wins
 - `market_value` — 年末總市值, the stored snapshot; the live total for the current year when it has no snapshot; empty for a past year without one
 - `dividends` — Σ `received_amount` with pay_date in the year (estimates excluded)
@@ -886,6 +909,58 @@ Click 凍結 on the current year's row
 ```
 
 Frozen cells are marked `*` with the snapshot's `updated_at` in the tooltip. Once frozen, later price edits or new trades no longer move that year's row — the spreadsheet's copy-raw-value step becomes explicit.
+
+## Load the 年結 → 回顧 view
+
+```text
+YearReviewView loads GET /api/year-review
+  → routes/year_review.rs loads month_stats + items + pool rates,
+    year_snapshots, the year_review records, HK trades + dividends,
+    deposits, bonds + coupons, and manual_assets
+  → calc.rs::year_review_rows builds one row per year from the union of
+    years present in those inputs
+  → the frontend renders one block per year mirroring the sheet's
+    A–D ledger, E–G investment and H–M asset groups
+```
+
+Each row reproduces the workbook block:
+
+- Ledger group — 總數+/平均總數+ (Σ `total_change` and ÷12), 支出/平均支出 (Σ `month_spend`), 生活平均支出 (the sheet's `AVERAGE` over recorded living spends), 開心 Pool 收入/支出/結餘 (chained `pool_balances`), plus the D-column YoY ratios.
+- Investment group — 利息回報 and 平均回報 (`interest ÷ 12` flat, even mid-year), 投資P/L (HK `sold_pl`), 投資純利 (`interest + sold_pl`), IBKR 轉入 (Σ the year's `ibkr_transfers`), invested (`HK net invested + 當年轉入 + invested_adjustment`), invested % (`invested ÷ (收入 + 利息回報)`), Irene + 開心 Pool (`pool_input_sum + pool_balance`), plus the G-column YoY ratios.
+- Asset group — 債券 (principal held in the year + coupons received), 股票 (yearly HK row: cost/dividends/rates/year-end value; 派息 counts received only), 定期 (deposits ending in the year, `End ≤ today`), the three blended 回報率 rates (income-returns ÷ bond+cost, all-returns ÷ bond+市值, income-returns ÷ bond+市值), 收入, 平均收入 (÷12), and 存/平均存/存% (`income − spend`, ÷income), plus the 收入 YoY.
+
+`pool_income`/`pool_spend`/`pool_balance`, `interest`, `interest_avg` and `irene_pool` always read 0 without month data — the sheet's own formulas do the same.
+
+## Edit Year in Review manual figures
+
+```text
+Click 收入 / invested 調整 / 投資P/L / a 債券 or 定期 cell, type the value, save
+  → PATCH /api/year-review/:year
+  → manual fields (income, invested_adjustment, bond/deposit overrides)
+    upsert the year_review row; clearing the last field deletes it
+  → sold_pl instead upserts year_snapshots.sold_pl for HK — the same
+    cell the yearly table edits — so both views agree
+  → null clears a field; the next read re-derives it
+```
+
+Cells holding a stored value are marked `*`; empty input clears the field back to live derivation. Clearing a seeded past-year bond/deposit override exposes the true records — a matured bond deleted from the workbook will then show 0/absent, which is honest history rather than a bug.
+
+## Year-end actions
+
+Once a year, around Dec 31 (or early January):
+
+1. **Freeze the ending year's stock figures** — 股票 → 總覽 → 每年總覽, click 凍結 on the year row, once per market (HK and US). This stores the cumulative 成本 and the live 總市值 into `year_snapshots`. A past year without a snapshot cannot recompute its year-end 市值 — there is no historical price series — so the column would go blank. `invested` needs no freeze (trades always derive it) and 凍結 never touches `sold_pl`.
+2. **Enter the year's realized P/L** — the 賣出損益 cell on each market's yearly row, or the 投資P/L cell on 年結 → 回顧 (both write `year_snapshots.sold_pl` for that market-year). Enter 0 when nothing was sold: 投資純利 (`interest + sold_pl`) stays absent until a value exists.
+3. **Enter 收入** on 年結 → 回顧 — the year's hand-entered salary total. Also set **invested 調整** if `invested` should include money outside HK trades and the year's IBKR 轉入 (which now derives from the transfer log — the sheet folded US principal and bond purchases into it); the app keeps it as a separate add-on so the two stay reconcilable.
+
+At year start nothing is required:
+
+- The new year's rows appear automatically once the first month row or trade exists.
+- The 開心Pool chain resets per year; its rate falls back to the latest earlier year — set the new year's rate in Month Stat settings only if it changed.
+- Update 薪金 (`overview.salary`) only if salary changed — new month rows snapshot it.
+- No 債券/定期 overrides are needed for future years: the app keeps matured history, so those columns keep deriving. The seeded overrides exist only for years the workbook deleted.
+
+The month ledger, deposits, dividends, coupons, and MPF all roll across the boundary on their own.
 
 ## Run parity check
 
@@ -922,9 +997,14 @@ cargo run -p wealth-backend --bin check_parity -- "財富分析報告.xlsx"
     the 美股 IBKR header cells; module-derived figures (債券/基金/MPF/已定期)
     count as real differences while cells downstream of live prices or
     user-edited manual inputs report informational
+  → rebuilds each YearInReview block and compares every cell it parses:
+    ledger sums, interest, seeded manual figures (收入/invested/投資P/L),
+    past-year bond/deposit overrides, and the derived blends; the
+    current-year block and the sheet's own stale stock cells report
+    informational
 ```
 
-Month Stat parity reports informational rows rather than failures where the sheet legitimately diverges: the live `Overview!`-linked current row (stale cached B/D/C/E), any row edited after import (`updated_at > created_at`, propagated to the previous row whose derived cells depend on it), and rows whose H cell is a hand-frozen literal rather than the `=F(next) − salary` chain (2023-12, 2024-01). 投資純利 (K) is skipped — HK sold P/L is not computed yet.
+Month Stat parity reports informational rows rather than failures where the sheet legitimately diverges: the live `Overview!`-linked current row (stale cached B/D/C/E), any row edited after import (`updated_at > created_at`, propagated to the previous row whose derived cells depend on it), and rows whose H cell is a hand-frozen literal rather than the `=F(next) − salary` chain (2023-12, 2024-01). YearInReview parity reports informational where the sheet diverges by construction: the current year's live-moving block, its stale frozen 股票 cells (which disagree with the market sheet's own year block), its pending-inclusive 派息 total, and the current year's 債券 figure (the matured bond the registry no longer holds).
 
 This verifies that the database reproduces the spreadsheet's trade-derived figures, deposit rollups, dividend totals, MPF figures, bond figures, and AIA figures. Deposit parity is point-in-time: the cached values reflect the workbook's last recalculation, so a deposit that matures after that point shows as a difference. MPF parity is the same: once the app is edited after import, its current figures legitimately diverge from the frozen sheet. Bond parity too: the sheet's `Total` cell only covers bonds it still lists, so a bond that matured since the workbook last recalculated — or an already-received coupon recorded with a different amount — shows as an informational difference.
 

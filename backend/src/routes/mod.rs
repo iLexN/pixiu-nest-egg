@@ -8,6 +8,7 @@ pub mod overview;
 pub mod stocks;
 pub mod summary;
 pub mod trades;
+pub mod year_review;
 pub mod yearly;
 
 use axum::routing::{get, patch, post};
@@ -46,6 +47,8 @@ pub fn api_router(state: AppState) -> Router {
             "/summary/yearly/{market}/{year}/freeze",
             post(yearly::freeze),
         )
+        .route("/year-review", get(year_review::list))
+        .route("/year-review/{year}", patch(year_review::update))
         .route("/deposits", get(deposits::list).post(deposits::create))
         .route("/deposits/summary", get(deposits::summary))
         .route(

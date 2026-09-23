@@ -73,6 +73,7 @@ onMounted(load)
       </p>
     </div>
 
+    <div class="overview-grid">
     <div class="card">
       <h3>資產</h3>
       <table>
@@ -287,10 +288,25 @@ onMounted(load)
       </table>
       <p class="muted">於 股票 → 美股 → 總覽 編輯 IBKR 數字</p>
     </div>
+    </div>
   </template>
 </template>
 
 <style scoped>
+.overview-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(340px, 1fr));
+  gap: 1rem;
+  margin-bottom: 1rem;
+}
+.overview-grid .card {
+  margin-bottom: 0;
+  min-width: 0;
+  overflow-x: auto;
+}
+.overview-grid tfoot td.muted {
+  white-space: normal;
+}
 .totals-grid {
   display: grid;
   grid-template-columns: repeat(auto-fit, minmax(160px, 1fr));

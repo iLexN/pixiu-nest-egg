@@ -303,6 +303,7 @@ async fn duplicate_source_rows_are_kept_once_and_only_once() {
         deposits: Vec::new(),
         deposit_cached: Default::default(),
         year_figures: Vec::new(),
+        year_review: Vec::new(),
         mpf: Vec::new(),
         mpf_cached: Default::default(),
         bonds: Vec::new(),

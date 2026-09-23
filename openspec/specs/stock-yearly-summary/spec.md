@@ -7,7 +7,7 @@ Replaces the hand-maintained per-year table in the owner's spreadsheet/Google Sh
 ## Requirements
 
 ### Requirement: Yearly rollup rows
-For each market (HK, US) the system SHALL report one row per calendar year, from the earliest year that has any trade or dividend in that market through the current year. HK and US yearly tables SHALL remain separate and SHALL NOT mix currencies. Each row SHALL carry: `year`, `invested`, `cost` (年末總成本), `market_value` (年末總市值), `dividends` (當年派息), and the derived columns defined below. A `sold_pl` column SHALL be reserved in the row and reported empty until a later change defines it.
+For each market (HK, US) the system SHALL report one row per calendar year, from the earliest year that has any trade or dividend in that market through the current year. HK and US yearly tables SHALL remain separate and SHALL NOT mix currencies. Each row SHALL carry: `year`, `invested`, `cost` (年末總成本), `market_value` (年末總市值), `dividends` (當年派息), `sold_pl` (賣出損益 — the year's realized P/L), and the derived columns defined below.
 
 #### Scenario: Rows span earliest data to current year
 - **WHEN** HK trades exist in 2023–2026 and the current year is 2026
@@ -33,7 +33,7 @@ For each year row the system SHALL compute, from stored trades and dividends in 
 - **THEN** the 2026 row reports dividends 49330.19
 
 ### Requirement: Year-end snapshots
-The system SHALL persist per `(market, year)` snapshots holding an optional frozen `market_value` (年末總市值), an optional frozen `cost` override, an optional `invested` override, and the time the snapshot was last written. The user SHALL be able to set or clear these values explicitly (manual paste of sheet figures) and to freeze a year, which stores the currently computed year-end `cost` and current total market value as that year's snapshot. A stored snapshot value SHALL take precedence over the computed figure for the same column; the current year's row SHALL fall back to live computed totals when it has no snapshot.
+The system SHALL persist per `(market, year)` snapshots holding an optional frozen `market_value` (年末總市值), an optional frozen `cost` override, an optional `invested` override, an optional manual `sold_pl` (賣出損益 — the workbook never recorded SELL trades, so the figure is entered by hand), and the time the snapshot was last written. The user SHALL be able to set or clear these values explicitly (manual paste of sheet figures) and to freeze a year, which stores the currently computed year-end `cost` and current total market value as that year's snapshot. A stored snapshot value SHALL take precedence over the computed figure for the same column; the current year's row SHALL fall back to live computed totals when it has no snapshot. `sold_pl` is reported absent while none is stored and is never computed from trades.
 
 #### Scenario: Freeze the current year
 - **WHEN** the user freezes the current year for HK
@@ -50,6 +50,10 @@ The system SHALL persist per `(market, year)` snapshots holding an optional froz
 #### Scenario: Past year without snapshot
 - **WHEN** a past year has trades and dividends but no snapshot
 - **THEN** its market_value is reported empty and derived columns needing it are empty, while invested, cost, and dividends still compute
+
+#### Scenario: Manual sold P/L
+- **WHEN** the user stores `sold_pl` `-14991.49` on the HK 2024 snapshot
+- **THEN** the HK 2024 row reports `sold_pl` `-14991.49`, and a year with no stored value reports it absent
 
 ### Requirement: Derived yearly columns
 For each year row the system SHALL derive: `yield_on_cost` (報酬率 1) = dividends ÷ cost when cost is positive; `yield_on_value` (報酬率 2) = dividends ÷ market_value when market_value is present and positive; `monthly_dividend` (月均派息) = dividends ÷ 12; `dividend_yoy` = (dividends − prior year's dividends) ÷ prior year's dividends when the prior-year value is positive; and `invested_yoy` = (cost − prior year's cost) ÷ prior year's cost when the prior-year value is positive. Derived columns SHALL be reported empty when their denominator is missing or zero.

@@ -96,6 +96,14 @@ async fn main() -> anyhow::Result<()> {
         report.months.settings_seeded,
         report.months.end_cash_seeded,
     );
+    println!(
+        "YearInReview: {} block(s) in the sheet -> {} seeded, {} skipped (empty); \
+         {} 投資P/L figure(s) seeded",
+        data.year_review.len(),
+        report.year_review.years_seeded,
+        report.year_review.years_skipped,
+        report.year_review.sold_pl_seeded,
+    );
 
     pool.close().await;
     Ok(())

@@ -17,7 +17,7 @@ use crate::calc::{
 use crate::models::Market;
 use crate::xlsx::{
     MarketSheets, SheetAiaPolicy, SheetBond, SheetDeposit, SheetStock, SheetYearFigure,
-    WorkbookData,
+    SheetYearReview, WorkbookData,
 };
 
 #[derive(Debug, Default, Clone, PartialEq, Eq)]
@@ -75,6 +75,16 @@ pub struct BondReport {
 }
 
 #[derive(Debug, Default, Clone, PartialEq, Eq)]
+pub struct YearReviewReport {
+    /// Year blocks that seeded at least one figure into `year_review`.
+    pub years_seeded: usize,
+    /// Blocks with nothing to seed.
+    pub years_skipped: usize,
+    /// 投資P/L cells written onto the HK `year_snapshots` rows.
+    pub sold_pl_seeded: usize,
+}
+
+#[derive(Debug, Default, Clone, PartialEq, Eq)]
 pub struct AiaReport {
     pub policies_imported: usize,
     pub policies_skipped: usize,
@@ -95,6 +105,7 @@ pub struct ImportReport {
     pub bonds: BondReport,
     pub aia: AiaReport,
     pub months: MonthStatReport,
+    pub year_review: YearReviewReport,
 }
 
 impl ImportReport {
@@ -115,6 +126,9 @@ pub async fn import(pool: &SqlitePool, data: &WorkbookData) -> anyhow::Result<Im
     let bonds = import_bonds(pool, &data.bonds).await?;
     let aia = import_aia(pool, data).await?;
     let months = import_months(pool, data).await?;
+    // After the snapshots: the invested adjustment is seeded against the
+    // effective (snapshot-aware) HK net invested.
+    let year_review = import_year_review(pool, &data.year_review).await?;
     seed_market_history(pool).await?;
     seed_market_figures(pool, data).await?;
     Ok(ImportReport {
@@ -126,6 +140,7 @@ pub async fn import(pool: &SqlitePool, data: &WorkbookData) -> anyhow::Result<Im
         bonds,
         aia,
         months,
+        year_review,
     })
 }
 
@@ -374,6 +389,121 @@ async fn import_year_snapshots(
         .execute(pool)
         .await?;
         report.snapshots_seeded += 1;
+    }
+    Ok(report)
+}
+
+/// Seed YearInReview's hand-entered figures: 收入 and the invested
+/// adjustment (`sheet invested − effective HK net invested`) for every block
+/// year, plus the bond/deposit cells for years before the current one — the
+/// current year derives live, like `year_snapshots`. 投資P/L seeds the HK
+/// snapshot's `sold_pl` (may be negative). NULL-filling upserts keep seeded
+/// and hand-edited values across re-imports.
+async fn import_year_review(
+    pool: &SqlitePool,
+    blocks: &[SheetYearReview],
+) -> anyhow::Result<YearReviewReport> {
+    let current_year = crate::routes::today().year();
+    let mut report = YearReviewReport::default();
+    for block in blocks {
+        if let Some(sold_pl) = block.sold_pl {
+            sqlx::query(
+                "INSERT INTO year_snapshots (market, year, sold_pl, updated_at) \
+                 VALUES ('HK', ?, ?, ?) \
+                 ON CONFLICT (market, year) DO UPDATE SET \
+                 sold_pl = COALESCE(year_snapshots.sold_pl, excluded.sold_pl)",
+            )
+            .bind(block.year)
+            .bind(sold_pl)
+            .bind(crate::routes::now_timestamp())
+            .execute(pool)
+            .await?;
+            report.sold_pl_seeded += 1;
+        }
+
+        // The snapshot-aware HK net invested, matching the yearly row.
+        let hk_invested: Option<f64> = sqlx::query_scalar(
+            "SELECT COALESCE(\
+                (SELECT invested FROM year_snapshots WHERE market = 'HK' AND year = ?),\
+                (SELECT SUM(CASE WHEN t.trade_type = 'BUY' THEN t.total ELSE -t.total END) \
+                 FROM trades t JOIN stocks s ON s.id = t.stock_id \
+                 WHERE s.market = 'HK' \
+                 AND CAST(strftime('%Y', t.trade_date) AS INTEGER) = ?))",
+        )
+        .bind(block.year)
+        .bind(block.year)
+        .fetch_one(pool)
+        .await?;
+        // The sheet's invested cell folds the year's IBKR 轉入 in (美股!B1);
+        // that part derives from the transfer log, so the adjustment keeps
+        // only the remainder.
+        let transferred: Option<f64> = sqlx::query_scalar(
+            "SELECT SUM(amount_hkd) FROM ibkr_transfers \
+             WHERE CAST(strftime('%Y', transfer_date) AS INTEGER) = ?",
+        )
+        .bind(block.year)
+        .fetch_one(pool)
+        .await?;
+        let invested_adjustment = block
+            .invested
+            .map(|invested| invested - hk_invested.unwrap_or(0.0) - transferred.unwrap_or(0.0));
+
+        // Bond/deposit cells seed as overrides only for past years — the
+        // sheets delete matured entries, so history needs the frozen cells,
+        // while the live year keeps deriving.
+        let past_year = block.year < current_year;
+        let (bond_principal, bond_interest, deposit_principal, deposit_interest) = if past_year {
+            (
+                block.bond_principal,
+                block.bond_interest,
+                block.deposit_principal,
+                block.deposit_interest,
+            )
+        } else {
+            (None, None, None, None)
+        };
+
+        if [
+            block.income,
+            invested_adjustment,
+            bond_principal,
+            bond_interest,
+            deposit_principal,
+            deposit_interest,
+        ]
+        .iter()
+        .all(Option::is_none)
+        {
+            report.years_skipped += 1;
+            continue;
+        }
+        sqlx::query(
+            "INSERT INTO year_review \
+             (year, income, invested_adjustment, bond_principal, bond_interest, \
+              deposit_principal, deposit_interest, updated_at) \
+             VALUES (?, ?, ?, ?, ?, ?, ?, ?) \
+             ON CONFLICT (year) DO UPDATE SET \
+             income = COALESCE(year_review.income, excluded.income), \
+             invested_adjustment = COALESCE(year_review.invested_adjustment, \
+                 excluded.invested_adjustment), \
+             bond_principal = COALESCE(year_review.bond_principal, excluded.bond_principal), \
+             bond_interest = COALESCE(year_review.bond_interest, excluded.bond_interest), \
+             deposit_principal = COALESCE(year_review.deposit_principal, \
+                 excluded.deposit_principal), \
+             deposit_interest = COALESCE(year_review.deposit_interest, \
+                 excluded.deposit_interest)",
+        )
+        .bind(block.year)
+        .bind(block.income)
+        .bind(invested_adjustment)
+        .bind(bond_principal)
+        .bind(bond_interest)
+        .bind(deposit_principal)
+        .bind(deposit_interest)
+        .bind(crate::routes::now_timestamp())
+        .execute(pool)
+        .await?;
+        report.years_seeded += 1;
     }
     Ok(report)
 }
@@ -1120,10 +1250,6 @@ async fn import_months(pool: &SqlitePool, data: &WorkbookData) -> anyhow::Result
     // The 美股 sheet's IBKR account cells seed `app_meta` once, like the salary.
     for (key, value) in [
         (
-            crate::routes::overview::IBKR_TRANSFERRED_KEY,
-            data.us_account.transferred_hkd,
-        ),
-        (
             crate::routes::overview::IBKR_NOW_VALUE_KEY,
             data.us_account.now_value,
         ),
@@ -1141,6 +1267,37 @@ async fn import_months(pool: &SqlitePool, data: &WorkbookData) -> anyhow::Result
                 crate::mpf::meta_put(pool, key, Some(&value.to_string())).await?;
                 report.settings_seeded += 1;
             }
+        }
+    }
+
+    // The cumulative B1 becomes the transfer log's first entry, dated to the
+    // first US trade — funding precedes the first buy — so each year's 轉入
+    // derives from the log.
+    if let Some(total) = data
+        .us_account
+        .transferred_hkd
+        .filter(|total| *total != 0.0)
+    {
+        let stored: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM ibkr_transfers")
+            .fetch_one(pool)
+            .await?;
+        if stored == 0 {
+            let first_trade: Option<String> = sqlx::query_scalar(
+                "SELECT MIN(t.trade_date) FROM trades t \
+                 JOIN stocks s ON s.id = t.stock_id WHERE s.market = 'US'",
+            )
+            .fetch_one(pool)
+            .await?;
+            sqlx::query(
+                "INSERT INTO ibkr_transfers (transfer_date, amount_hkd, created_at) \
+                 VALUES (?, ?, ?)",
+            )
+            .bind(first_trade.unwrap_or_else(|| crate::routes::today().to_string()))
+            .bind(total)
+            .bind(&now)
+            .execute(pool)
+            .await?;
+            report.settings_seeded += 1;
         }
     }
 

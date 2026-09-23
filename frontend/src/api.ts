@@ -101,6 +101,7 @@ export interface YearSnapshot {
   invested: number | null
   cost: number | null
   market_value: number | null
+  sold_pl: number | null
   updated_at: string
 }
 
@@ -135,6 +136,96 @@ export interface YearlyPatch {
   invested?: number | null
   cost?: number | null
   market_value?: number | null
+  sold_pl?: number | null
+}
+
+/** The stored `year_review` record: manual inputs plus the seeded overrides
+ * for cells whose history was deleted from the workbook. */
+export interface YearReviewRecord {
+  income: number | null
+  invested_adjustment: number | null
+  bond_principal: number | null
+  bond_interest: number | null
+  deposit_principal: number | null
+  deposit_interest: number | null
+}
+
+/** The A–D ledger group of one YearInReview block. */
+export interface YearReviewLedger {
+  asset_gain: number | null
+  asset_gain_avg: number | null
+  spend: number | null
+  spend_avg: number | null
+  living_avg: number | null
+  pool_income: number
+  pool_spend: number
+  pool_balance: number
+  asset_gain_yoy: number | null
+  spend_yoy: number | null
+  living_yoy: number | null
+  pool_income_yoy: number | null
+}
+
+/** The E–G investment group of one YearInReview block. */
+export interface YearReviewInvestment {
+  interest: number
+  interest_avg: number
+  sold_pl: number | null
+  net_investment: number | null
+  transferred: number | null
+  invested: number | null
+  invested_pct: number | null
+  irene_pool: number
+  interest_avg_yoy: number | null
+  invested_yoy: number | null
+}
+
+/** The H–M asset-returns group of one YearInReview block. */
+export interface YearReviewAssets {
+  bond_principal: number | null
+  bond_interest: number | null
+  bond_rate: number | null
+  stock_cost: number | null
+  stock_dividends: number | null
+  stock_rate: number | null
+  stock_now_value: number | null
+  stock_value_rate: number | null
+  deposit_principal: number | null
+  deposit_interest: number | null
+  income_cost_rate: number | null
+  total_value_rate: number | null
+  income_value_rate: number | null
+  income: number | null
+  income_avg: number | null
+  income_yoy: number | null
+  saved: number | null
+  saved_avg: number | null
+  saved_pct: number | null
+  bond_overridden: boolean
+  deposit_overridden: boolean
+}
+
+export interface YearReviewRow {
+  year: number
+  ledger: YearReviewLedger
+  investment: YearReviewInvestment
+  assets: YearReviewAssets
+  record: YearReviewRecord | null
+}
+
+export interface YearReviewResponse {
+  today: string
+  years: YearReviewRow[]
+}
+
+export interface YearReviewPatch {
+  income?: number | null
+  invested_adjustment?: number | null
+  sold_pl?: number | null
+  bond_principal?: number | null
+  bond_interest?: number | null
+  deposit_principal?: number | null
+  deposit_interest?: number | null
 }
 
 export interface NewStock {
@@ -805,7 +896,10 @@ export interface IbkrBlock {
 }
 
 export interface IbkrPatch {
-  transferred_hkd?: number | null
+  /** A bank→IBKR transfer delta in HKD; negative records a withdrawal. */
+  transfer_hkd?: number
+  /** Optional `YYYY-MM-DD`; defaults to today. */
+  transfer_date?: string
   now_value?: number | null
   hkd_cash?: number | null
   usd_cash?: number | null
@@ -960,6 +1054,15 @@ export const api = {
   },
   freezeYearly(market: Market, year: number): Promise<YearSnapshotRow> {
     return request(`/summary/yearly/${market}/${year}/freeze`, { method: 'POST' })
+  },
+  yearReview(): Promise<YearReviewResponse> {
+    return request('/year-review')
+  },
+  updateYearReview(year: number, patch: YearReviewPatch): Promise<YearReviewRow> {
+    return request(`/year-review/${year}`, {
+      method: 'PATCH',
+      body: JSON.stringify(patch),
+    })
   },
   listDeposits(filters: DepositFilters = {}): Promise<Deposit[]> {
     return request(`/deposits${queryString({ ...filters })}`)
