@@ -574,9 +574,9 @@ onMounted(load)
           <tr>
             <th>月份</th>
             <th class="num">總數</th>
-            <th class="num">Changed</th>
+            <th class="num">變動</th>
             <th class="num">流動資產</th>
-            <th class="num">流動資產 Changed</th>
+            <th class="num">流動資產 變動</th>
             <th class="num">月初(出糧後)</th>
             <th class="num">調整</th>
             <th class="num">月尾(出糧前)</th>
@@ -587,7 +587,7 @@ onMounted(load)
             <th class="num">利息</th>
             <th class="num">娛樂支出</th>
             <th class="num">Irene+開心Pool</th>
-            <th>Note</th>
+            <th>備註</th>
           </tr>
         </thead>
         <tbody>

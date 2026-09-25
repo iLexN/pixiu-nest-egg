@@ -127,7 +127,7 @@ onMounted(load)
       <h3>未到期定期</h3>
       <div class="totals-grid" aria-label="定期合計">
         <div class="total-card">
-          <span>Total（本金）</span>
+          <span>本金</span>
           <strong>{{ fmtMoney(summary.active_totals.principal) }}</strong>
         </div>
         <div class="total-card">
@@ -193,7 +193,7 @@ onMounted(load)
         <thead>
           <tr>
             <th>月份</th>
-            <th class="num">Total</th>
+            <th class="num">合計</th>
             <th class="num">利息</th>
             <th class="num">定期</th>
           </tr>
@@ -216,7 +216,7 @@ onMounted(load)
         <thead>
           <tr>
             <th>銀行</th>
-            <th class="num">Total</th>
+            <th class="num">合計</th>
             <th class="num">利息</th>
             <th class="num">定期</th>
           </tr>

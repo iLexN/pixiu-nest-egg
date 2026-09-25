@@ -30,16 +30,16 @@ function overdue(deposit: Deposit): boolean {
   <table>
     <thead>
       <tr>
-        <th>end date</th>
-        <th>id</th>
+        <th>到期日</th>
+        <th>編號</th>
         <th>銀行</th>
-        <th class="num">input</th>
-        <th class="num">rate</th>
+        <th class="num">本金</th>
+        <th class="num">利率</th>
         <th class="num">利息</th>
-        <th class="num">total</th>
+        <th class="num">合計</th>
         <th v-if="props.showStatus">狀態</th>
-        <th>note1</th>
-        <th>note2</th>
+        <th>備註1</th>
+        <th>備註2</th>
         <th></th>
       </tr>
     </thead>

@@ -133,7 +133,7 @@ async function submit() {
       </label>
 
       <label>
-        input（本金）
+        本金
         <input v-model="form.principal" type="number" step="any" inputmode="decimal" />
         <small v-if="error?.fieldMessage('principal')" class="error">{{
           error.fieldMessage('principal')

@@ -323,7 +323,7 @@ onMounted(load)
           </datalist>
         </label>
         <label>
-          input（本金）
+          本金
           <input v-model="draft.principal" type="number" step="any" inputmode="decimal" />
         </label>
         <label>
@@ -391,14 +391,14 @@ onMounted(load)
         <thead>
           <tr>
             <th>持有人</th>
-            <th>end date</th>
-            <th>id</th>
+            <th>到期日</th>
+            <th>編號</th>
             <th>銀行</th>
-            <th class="num">input</th>
+            <th class="num">本金</th>
             <th class="num">利息</th>
-            <th class="num">total</th>
+            <th class="num">合計</th>
             <th>開始日</th>
-            <th>note</th>
+            <th>備註</th>
             <th></th>
           </tr>
         </thead>
@@ -466,12 +466,12 @@ onMounted(load)
         <thead>
           <tr>
             <th>持有人</th>
-            <th>end date</th>
-            <th>id</th>
+            <th>到期日</th>
+            <th>編號</th>
             <th>銀行</th>
-            <th class="num">input</th>
+            <th class="num">本金</th>
             <th class="num">利息</th>
-            <th class="num">total</th>
+            <th class="num">合計</th>
             <th>狀態</th>
             <th></th>
           </tr>

@@ -30,13 +30,13 @@ const columns = computed(() => (props.receivable ? 9 : 11))
         <th class="num">總買入成本</th>
         <th class="num">每股</th>
         <th v-if="props.receivable" class="num">預期派息</th>
-        <th class="num">rate</th>
+        <th class="num">息率</th>
         <template v-if="!props.receivable">
           <th class="num">實收派息</th>
           <th class="num">現價</th>
-          <th class="num">rate</th>
+          <th class="num">息率</th>
         </template>
-        <th>note</th>
+        <th>備註</th>
         <th></th>
       </tr>
     </thead>

@@ -61,11 +61,11 @@ function returnClassFor(trade: Trade): string {
         <th>類別</th>
         <th class="num">股數</th>
         <th class="num">單價</th>
-        <th class="num">fee</th>
-        <th class="num">buy total</th>
-        <th class="num" title="buy total ÷ 股數">平均單價</th>
+        <th class="num">手續費</th>
+        <th class="num">買入總額</th>
+        <th class="num" title="買入總額 ÷ 股數">平均單價</th>
         <th class="num">現價</th>
-        <th class="num" title="(現價 − 平均單價（含 fee）) ÷ 平均單價（含 fee）">報酬率</th>
+        <th class="num" title="(現價 − 平均單價（含手續費）) ÷ 平均單價（含手續費）">報酬率</th>
         <th>備註</th>
         <th></th>
       </tr>
@@ -74,7 +74,7 @@ function returnClassFor(trade: Trade): string {
       <tr v-for="trade in props.trades" :key="trade.id">
         <td>{{ trade.trade_date }}</td>
         <td>{{ trade.code }}</td>
-        <td>{{ trade.trade_type }}</td>
+        <td>{{ trade.trade_type === 'BUY' ? '買入' : '賣出' }}</td>
         <td class="num">{{ fmtShares(trade.shares) }}</td>
         <td class="num">{{ fmtPrice(trade.unit_price) }}</td>
         <td class="num">{{ fmtMoney(trade.fee) }}</td>
@@ -95,7 +95,7 @@ function returnClassFor(trade: Trade): string {
       <tr>
         <td colspan="6">{{ props.trades.length }} 筆交易</td>
         <td class="num">{{ fmtMoney(totalCost) }}</td>
-        <td colspan="5" class="muted">BUY 合計</td>
+        <td colspan="5" class="muted">買入合計</td>
       </tr>
     </tfoot>
   </table>

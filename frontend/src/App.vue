@@ -100,7 +100,7 @@ function selectGroup(g: (typeof NAV)[number]) {
 
 <template>
   <header>
-    <h1>財富記錄</h1>
+    <h1>財富報告</h1>
     <nav class="groups">
       <button
         v-for="g in NAV"

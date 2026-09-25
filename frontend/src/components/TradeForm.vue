@@ -171,8 +171,8 @@ async function submit() {
       <label>
         類別
         <select v-model="form.trade_type">
-          <option value="BUY">BUY</option>
-          <option value="SELL">SELL</option>
+          <option value="BUY">買入</option>
+          <option value="SELL">賣出</option>
         </select>
       </label>
 
@@ -201,7 +201,7 @@ async function submit() {
       </label>
 
       <label v-if="isHk">
-        buy total（已含 fee）
+        買入總額（已含手續費）
         <input v-model="form.total" type="number" step="any" inputmode="decimal" required />
         <small v-if="error?.fieldMessage('total')" class="error">{{
           error.fieldMessage('total')
@@ -209,7 +209,7 @@ async function submit() {
       </label>
 
       <label v-else>
-        fee
+        手續費
         <input v-model="form.fee" type="number" step="any" inputmode="decimal" required />
         <small v-if="error?.fieldMessage('fee')" class="error">{{
           error.fieldMessage('fee')
@@ -218,14 +218,14 @@ async function submit() {
 
       <label class="wide">
         備註
-        <input v-model="form.note" type="text" placeholder="調整或負 fee 時必填" />
+        <input v-model="form.note" type="text" placeholder="調整或負手續費時必填" />
       </label>
     </div>
 
     <p v-if="preview" class="preview">
-      <span v-if="isHk">fee <strong>{{ fmtMoney(preview.fee) }}</strong></span>
-      <span v-else>buy total <strong>{{ fmtMoney(preview.total) }}</strong></span>
-      <span>平均單價（含 fee） <strong>{{ fmtPrice(preview.unitInclFee) }}</strong></span>
+      <span v-if="isHk">手續費 <strong>{{ fmtMoney(preview.fee) }}</strong></span>
+      <span v-else>買入總額 <strong>{{ fmtMoney(preview.total) }}</strong></span>
+      <span>平均單價（含手續費） <strong>{{ fmtPrice(preview.unitInclFee) }}</strong></span>
     </p>
     <p v-else class="preview muted">填入 股數、單價 及 {{ isHk ? 'buy total' : 'fee' }} 後顯示計算結果</p>
 

@@ -376,10 +376,10 @@ watch(() => props.market, load)
     <table>
       <thead>
         <tr>
-          <th aria-label="Reorder"></th>
+          <th aria-label="拖曳排序"></th>
           <th>類別</th>
           <th>股票代碼</th>
-          <th>Stock</th>
+          <th>股票</th>
           <th class="num">股數</th>
           <th class="num" :title="summary.average_price_definition">平均單價</th>
           <th class="num">成本</th>
@@ -504,7 +504,7 @@ watch(() => props.market, load)
         <thead>
           <tr>
             <th>年份</th>
-            <th class="num">net invested</th>
+            <th class="num">淨投入</th>
             <th class="num">賣出損益</th>
             <th class="num">成本</th>
             <th class="num">總市值</th>
@@ -512,8 +512,8 @@ watch(() => props.market, load)
             <th class="num">派息 ÷ 市值</th>
             <th class="num">派息</th>
             <th class="num">月均派息</th>
-            <th class="num">派息 YoY</th>
-            <th class="num">invested YoY</th>
+            <th class="num">派息按年</th>
+            <th class="num">淨投入按年</th>
             <th aria-label="凍結"></th>
           </tr>
         </thead>

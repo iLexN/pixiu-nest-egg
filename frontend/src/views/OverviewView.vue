@@ -128,7 +128,7 @@ onMounted(load)
         </tbody>
         <tfoot>
           <tr>
-            <td>Sum</td>
+            <td>合計</td>
             <td class="num">{{ fmtMoney(data.assets_sum) || '—' }}</td>
             <td colspan="2"></td>
           </tr>
@@ -294,7 +294,7 @@ onMounted(load)
       <p class="muted">於 股票 → 美股 → 總覽 編輯 IBKR 數字</p>
     </div>
 
-    <div class="card">
+    <div class="card invest-targets">
       <h3>投資目標</h3>
       <p class="muted">
         近3年平均 invested
@@ -305,8 +305,8 @@ onMounted(load)
           <tr>
             <th>年份</th>
             <th class="num">invested</th>
-            <th class="num">target</th>
-            <th class="num">remain</th>
+            <th class="num">目標</th>
+            <th class="num">剩餘</th>
             <th class="num">增長</th>
           </tr>
         </thead>
@@ -340,6 +340,9 @@ onMounted(load)
   margin-bottom: 0;
   min-width: 0;
   overflow-x: auto;
+}
+.overview-grid .card.invest-targets {
+  grid-column: span 2;
 }
 .overview-grid tfoot td.muted {
   white-space: normal;

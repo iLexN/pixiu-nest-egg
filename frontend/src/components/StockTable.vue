@@ -19,7 +19,7 @@ const emit = defineEmits<{
     <thead>
       <tr>
         <th>股票代碼</th>
-        <th>Stock</th>
+        <th>股票</th>
         <th>交易所</th>
         <th>類別</th>
         <th class="num">現價</th>
