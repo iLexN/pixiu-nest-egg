@@ -42,7 +42,8 @@
       "Exec(awk)",
       "Exec(WEALTH_DB=/tmp/wealth-mig-test.db cargo run)",
       "Exec(kill)",
-      "Exec(xargs kill)"
+      "Exec(xargs kill)",
+      "Exec(seq)"
     ]
   }
 }

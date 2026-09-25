@@ -1336,6 +1336,18 @@ pub struct SheetOverviewRow {
     pub share: Option<f64>,
 }
 
+/// One year row of `Overview`'s 投資目標 block (J23:N26): the J year and the
+/// K invested, L target, M remain, and N growth cells — any of which may be
+/// blank in the sheet.
+#[derive(Debug, Clone)]
+pub struct SheetInvestTarget {
+    pub year: i32,
+    pub invested: Option<f64>,
+    pub target: Option<f64>,
+    pub remain: Option<f64>,
+    pub growth: Option<f64>,
+}
+
 /// The `Overview` cells the app seeds from or parity-checks against.
 #[derive(Debug, Clone, Default)]
 pub struct OverviewCached {
@@ -1369,6 +1381,10 @@ pub struct OverviewCached {
     pub avg_saved: Option<f64>,
     pub avg_interest: Option<f64>,
     pub pool_balance: Option<f64>,
+    /// The J22:N27 投資目標 block: J22's average of the last three completed
+    /// years' invested, and the J23:N26 year rows.
+    pub invest_target_avg: Option<f64>,
+    pub invest_targets: Vec<SheetInvestTarget>,
 }
 
 /// The 美股 sheet's IBKR account header block (A1:B5 + B7): all manual inputs
@@ -1662,6 +1678,19 @@ fn parse_overview(rows: Option<&Rows>) -> OverviewCached {
             share: cell_num(r, 2),
         })
         .collect();
+    // J22:N27 投資目標: the J22 average, then year rows from J23 down until
+    // the J cell stops holding a number (J27 carries a text note).
+    let mut invest_targets = Vec::new();
+    for r in 22usize.. {
+        let Some(year) = cell_num(r, 9) else { break };
+        invest_targets.push(SheetInvestTarget {
+            year: year as i32,
+            invested: cell_num(r, 10),
+            target: cell_num(r, 11),
+            remain: cell_num(r, 12),
+            growth: cell_num(r, 13),
+        });
+    }
     OverviewCached {
         salary: cell_num(0, 4),
         pool_rate: cell_num(7, 13),
@@ -1683,6 +1712,8 @@ fn parse_overview(rows: Option<&Rows>) -> OverviewCached {
         avg_saved: cell_num(6, 6),
         avg_interest: cell_num(7, 6),
         pool_balance: cell_num(9, 6),
+        invest_target_avg: cell_num(21, 9),
+        invest_targets,
     }
 }
 
@@ -2194,10 +2225,10 @@ mod tests {
         let irene_annuity = &data.aia[7];
         assert_eq!(irene_annuity.label, "irene 年金");
         assert!(!irene_annuity.in_account);
-        assert!(near(irene_annuity.premium_usd, 3824.025973));
+        assert!(near(irene_annuity.premium_usd, 3825.044992));
 
         let cached = &data.aia_cached;
-        assert!(near(cached.buy_usd.expect("buy usd"), 124782.026));
+        assert!(near(cached.buy_usd.expect("buy usd"), 124783.045));
         assert!(near(cached.now_usd.expect("now usd"), 89260.78));
         assert!(near(cached.display_value.expect("display"), 87274.32));
         // B5 = B2 − B1 − B3 in the sheet. The cached cells round at ~4
@@ -2209,7 +2240,7 @@ mod tests {
             "net_change_hkd = {:?}, expected {expected_net}",
             cached.net_change_hkd
         );
-        assert!(near(cached.usd_hkd_rate.expect("rate"), 7.845135));
+        assert!(near(cached.usd_hkd_rate.expect("rate"), 7.843045));
     }
 
     #[test]
@@ -2264,7 +2295,24 @@ mod tests {
         assert_eq!(data.overview.living_budget, Some(14900.0));
         assert!(near(data.overview.avg_saved, 30013.27));
         assert!(near(data.overview.avg_interest, 5731.46));
-        assert!(near(data.overview.pool_balance, 22172.40));
+        assert!(near(data.overview.pool_balance, 21415.04));
+
+        // The J22:N27 投資目標 block: the average plus the four year rows,
+        // stopping before the J27 note.
+        assert!(near(data.overview.invest_target_avg, 326841.22));
+        assert_eq!(data.overview.invest_targets.len(), 4);
+        let target = |year: i32| {
+            data.overview
+                .invest_targets
+                .iter()
+                .find(|row| row.year == year)
+                .expect("year row")
+        };
+        assert!(near(target(2023).invested, 206523.15));
+        assert_eq!(target(2023).target, None);
+        assert!(near(target(2025).target, 378447.9));
+        assert!(near(target(2026).remain, 274607.62));
+        assert!(near(target(2026).growth, 0.067441));
     }
 
     #[test]

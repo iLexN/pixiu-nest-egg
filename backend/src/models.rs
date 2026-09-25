@@ -315,6 +315,68 @@ pub struct DepositPatch {
     pub note2: Option<Option<String>>,
 }
 
+/// A 家人 定期 record: a deposit held on behalf of a family member, kept in
+/// its own table so it never feeds the user's own totals. `total`,
+/// `status`, `end_year` and `end_month` are derived on read, never stored.
+#[derive(Debug, Clone, Serialize)]
+pub struct FamilyDeposit {
+    pub id: i64,
+    /// The family member the deposit belongs to, e.g. `媽媽`, `Irene`.
+    pub holder: String,
+    /// The bank reference, e.g. `SC-9179`.
+    pub label: Option<String>,
+    pub bank: Option<String>,
+    pub principal: Option<f64>,
+    /// 利息.
+    pub interest: Option<f64>,
+    /// When the principal left the bank account; NULL when unknown.
+    pub start_date: Option<String>,
+    pub end_date: String,
+    /// 收訖日; NULL while the deposit is still on the books.
+    pub received_at: Option<String>,
+    /// Free text, e.g. the bank's stepped-rate schedule.
+    pub note: Option<String>,
+    pub sort_order: i64,
+    /// principal + interest, blanks counting as 0.
+    pub total: f64,
+    /// `END` once 收訖; `ACTIVE` while unreceived (even past `end_date`).
+    pub status: DepositStatus,
+    pub end_year: i32,
+    pub end_month: u32,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+pub struct NewFamilyDeposit {
+    pub holder: String,
+    pub label: Option<String>,
+    pub bank: Option<String>,
+    pub principal: Option<f64>,
+    pub interest: Option<f64>,
+    pub start_date: Option<String>,
+    pub end_date: String,
+    pub note: Option<String>,
+}
+
+/// Absent fields are left untouched; present fields are written, so `null`
+/// clears an optional value.
+#[derive(Debug, Clone, Default, Deserialize)]
+pub struct FamilyDepositPatch {
+    pub holder: Option<String>,
+    #[serde(default, deserialize_with = "nullable")]
+    pub label: Option<Option<String>>,
+    #[serde(default, deserialize_with = "nullable")]
+    pub bank: Option<Option<String>>,
+    #[serde(default, deserialize_with = "nullable")]
+    pub principal: Option<Option<f64>>,
+    #[serde(default, deserialize_with = "nullable")]
+    pub interest: Option<Option<f64>>,
+    #[serde(default, deserialize_with = "nullable")]
+    pub start_date: Option<Option<String>>,
+    pub end_date: Option<String>,
+    #[serde(default, deserialize_with = "nullable")]
+    pub note: Option<Option<String>>,
+}
+
 /// Pending until `received_amount` is recorded.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "UPPERCASE")]
@@ -626,6 +688,10 @@ pub struct YearReviewPatch {
     pub income: Option<Option<f64>>,
     #[serde(default, deserialize_with = "nullable")]
     pub invested_adjustment: Option<Option<f64>>,
+    /// 月薪增幅 override; unlike income it may be negative. `null` restores
+    /// the salary-derived figure.
+    #[serde(default, deserialize_with = "nullable")]
+    pub raise: Option<Option<f64>>,
     #[serde(default, deserialize_with = "nullable")]
     pub sold_pl: Option<Option<f64>>,
     #[serde(default, deserialize_with = "nullable")]
@@ -1156,6 +1222,33 @@ pub struct TwelveMonthAverages {
     pub window_end: Option<String>,
 }
 
+/// The 投資目標 block (Overview!J22:N27): the J22 three-year invested average
+/// plus one row per year-review year under the unified target formula.
+#[derive(Debug, Clone, Default, Serialize)]
+pub struct InvestTargets {
+    /// J22: mean `invested` over the last three completed years, skip-absent.
+    pub avg_invested: Option<f64>,
+    pub rows: Vec<InvestTargetRow>,
+}
+
+/// One 投資目標 row (J:N): invested, the effective raise, and the derived
+/// target/remain/growth.
+#[derive(Debug, Clone, Serialize)]
+pub struct InvestTargetRow {
+    pub year: i32,
+    /// K column: the year-review `invested`; absent while none.
+    pub invested: Option<f64>,
+    /// The year's effective 月薪增幅 (override or salary-derived).
+    pub raise: Option<f64>,
+    /// L column: the year's target; absent without a prior-year `invested`.
+    pub target: Option<f64>,
+    /// M column: target − invested, on the current year only.
+    pub remain: Option<f64>,
+    /// N column: invested YoY for completed years; target vs last invested
+    /// for the current year.
+    pub growth: Option<f64>,
+}
+
 /// `GET /api/overview`: the sheet's A3:C18 block plus the B1/H1/J1 headline.
 #[derive(Debug, Clone, Serialize)]
 pub struct OverviewResponse {
@@ -1177,4 +1270,6 @@ pub struct OverviewResponse {
     pub ibkr: IbkrBlock,
     /// F3:G10 + H6.
     pub averages: TwelveMonthAverages,
+    /// J22:N27.
+    pub invest_targets: InvestTargets,
 }

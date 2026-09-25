@@ -11,9 +11,9 @@ use sqlx::{Row, SqlitePool};
 use super::{aia, bonds, mpf, now_timestamp, overview, summary, today, AppState};
 use crate::calc::{
     active_totals, aia_totals, auto_interest, build_suggestions, interest_components, live_totals,
-    month_derived, month_item_sums, month_running_averages, month_year_summaries, mpf_totals,
-    pool_balances, pool_rate_for_year, suggestions_enabled, DepositFacts, FieldError, LiveTotals,
-    LiveTotalsInput, MonthDerived, MonthItemFacts, MonthItemSums, MonthRunningAverages,
+    month_derived_with_tail, month_item_sums, month_running_averages, month_year_summaries,
+    mpf_totals, pool_balances, pool_rate_for_year, suggestions_enabled, DepositFacts, FieldError,
+    LiveTotals, LiveTotalsInput, MonthDerived, MonthItemFacts, MonthItemSums, MonthRunningAverages,
     MonthStatRow, MonthYearSummary, SuggestionAiaPayment, SuggestionDeposit, SuggestionEvents,
     SuggestionReceipt, SuggestionTrade,
 };
@@ -193,6 +193,25 @@ pub async fn load_stat_rows(
     to_stat_rows(&stored, live, &events, &items)
 }
 
+/// Stat rows for aggregate paths (yearly blocks, 回顧): live-fills NULL
+/// totals on current/future months and returns the gated live tail for
+/// `month_derived_with_tail`/`month_year_summaries`.
+pub async fn load_stat_rows_live(
+    pool: &SqlitePool,
+) -> Result<(Vec<MonthStatRow>, Option<LiveTotals>), ApiError> {
+    let stored = load_all_months(pool).await?;
+    let items = load_all_items(pool).await?;
+    let events = load_interest_events(pool).await?;
+    let live = if wants_live(&stored) {
+        Some(live_if_needed(pool).await?)
+    } else {
+        None
+    };
+    let stat_rows = to_stat_rows(&stored, live.as_ref(), &events, &items)?;
+    let tail = live_tail(&stat_rows, live);
+    Ok((stat_rows, tail))
+}
+
 fn to_stat_rows(
     stored: &[StoredMonth],
     live: Option<&LiveTotals>,
@@ -362,7 +381,7 @@ pub async fn live_totals_input(pool: &SqlitePool) -> Result<LiveTotalsInput, Api
     })
 }
 
-/// Compute the live totals once; callers check `needs_live` first.
+/// Compute the live totals once; callers check `wants_live` first.
 async fn live_if_needed(pool: &SqlitePool) -> Result<LiveTotals, ApiError> {
     let input = live_totals_input(pool).await?;
     Ok(live_totals(&input))
@@ -378,6 +397,25 @@ fn needs_live(stored: &[StoredMonth]) -> bool {
     })
 }
 
+/// Whether live totals are worth computing: a NULL B/D at or after the
+/// current month fills live, or the last stored month IS the current month
+/// and needs the live tail for its Changed cell.
+fn wants_live(stored: &[StoredMonth]) -> bool {
+    needs_live(stored)
+        || stored
+            .last()
+            .is_some_and(|row| parse_stored_month(&row.month).is_ok_and(|m| m == live_from()))
+}
+
+/// The live totals the last row's Changed cells diff against — the sheet's
+/// last-row C/E cells read the live B1/H1, so the current month reports its
+/// in-progress change. Gated to the current month: a future placeholder has
+/// no knowable change and a stale last row must not pull a live diff into
+/// an old year.
+fn live_tail(rows: &[MonthStatRow], live: Option<LiveTotals>) -> Option<LiveTotals> {
+    live.filter(|_| rows.last().is_some_and(|row| row.month == live_from()))
+}
+
 #[derive(Debug, Deserialize)]
 pub struct ListQuery {
     /// Restrict to rows of this year.
@@ -391,13 +429,13 @@ pub async fn list(
     let stored = load_all_months(&state.pool).await?;
     let items = load_all_items(&state.pool).await?;
     let interest_events = load_interest_events(&state.pool).await?;
-    let live = if needs_live(&stored) {
+    let live = if wants_live(&stored) {
         Some(live_if_needed(&state.pool).await?)
     } else {
         None
     };
     let stat_rows = to_stat_rows(&stored, live.as_ref(), &interest_events, &items)?;
-    let derived = month_derived(&stat_rows, &items);
+    let derived = month_derived_with_tail(&stat_rows, &items, live_tail(&stat_rows, live));
     let months: Vec<MonthStat> = stored
         .iter()
         .zip(derived.iter())
@@ -447,9 +485,15 @@ pub async fn summary(
     // 投資純利 = Σ interest + the year's stored HK sold P/L (absent while a
     // year has none stored).
     let hk_sold_pl = super::yearly::hk_sold_pl(&state.pool).await?;
-    let stat_rows = to_stat_rows(&stored, None, &interest_events, &items)?;
-    let years = month_year_summaries(&stat_rows, &items, &rates, &hk_sold_pl);
-    let running = month_running_averages(&stat_rows, &items);
+    let live = if wants_live(&stored) {
+        Some(live_if_needed(&state.pool).await?)
+    } else {
+        None
+    };
+    let stat_rows = to_stat_rows(&stored, live.as_ref(), &interest_events, &items)?;
+    let tail = live_tail(&stat_rows, live);
+    let years = month_year_summaries(&stat_rows, &items, &rates, &hk_sold_pl, tail);
+    let running = month_running_averages(&stat_rows, &items, tail);
     let pool_balance = stat_rows
         .last()
         .and_then(|latest| {
@@ -741,13 +785,13 @@ async fn present_month(pool: &SqlitePool, stored: &StoredMonth) -> Result<MonthS
     let all = load_all_months(pool).await?;
     let items = load_all_items(pool).await?;
     let interest_events = load_interest_events(pool).await?;
-    let live = if needs_live(&all) {
+    let live = if wants_live(&all) {
         Some(live_if_needed(pool).await?)
     } else {
         None
     };
     let stat_rows = to_stat_rows(&all, live.as_ref(), &interest_events, &items)?;
-    let derived = month_derived(&stat_rows, &items);
+    let derived = month_derived_with_tail(&stat_rows, &items, live_tail(&stat_rows, live));
     let index = all
         .iter()
         .position(|row| row.month == stored.month)

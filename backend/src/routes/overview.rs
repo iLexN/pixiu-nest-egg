@@ -1,5 +1,6 @@
 use axum::extract::State;
 use axum::Json;
+use chrono::Datelike;
 use sqlx::SqlitePool;
 
 use super::{aia, months, mpf, now_timestamp, summary, today, AppState};
@@ -204,6 +205,10 @@ pub async fn overview(State(state): State<AppState>) -> Result<Json<OverviewResp
         window_end: trailing.window_end.map(|month| month.to_string()),
     };
 
+    // J22:N27 投資目標 — a pure projection of the year-review rows.
+    let review = super::year_review::build(&state.pool).await?;
+    let invest_targets = crate::calc::invest_targets(&review.years, today().year());
+
     Ok(Json(OverviewResponse {
         today: today().to_string(),
         rate: input.usd_hkd_rate,
@@ -216,6 +221,7 @@ pub async fn overview(State(state): State<AppState>) -> Result<Json<OverviewResp
         semi_liquid,
         ibkr,
         averages,
+        invest_targets,
     }))
 }
 

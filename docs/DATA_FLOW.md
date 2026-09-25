@@ -80,6 +80,25 @@ One row per 定期 deposit (from 定期Info's 表_定期List). Nullable columns 
 | `sort_order` | Workbook row order; new entries append |
 | `created_at`, `updated_at` | Audit timestamps |
 
+### `family_deposits`
+
+One row per 定期 held on behalf of a family member (the workbook's `Mum`/`Dad` sheets — entered by hand, never imported). Record-only: the money is outside the user's own totals, so no figure derived from `deposits`, `manual_assets`, or `month_items` ever reads this table, and 收訖 has no side effects.
+
+| Column | Meaning |
+|---|---|
+| `id` | Internal deposit ID |
+| `holder` | The family member, e.g. `媽媽`, `爸爸`, `Irene` — free text, required; grouping is by exact string |
+| `label` | Bank reference like `SC-9179`, optional |
+| `bank` | Bank code, optional |
+| `principal` | The deposit's principal, optional |
+| `interest` | 利息 (the 收訖 form can correct it to the amount actually received) |
+| `start_date` | `YYYY-MM-DD` text date, optional |
+| `end_date` | `YYYY-MM-DD` text date, required |
+| `received_at` | 收訖日 (`YYYY-MM-DD`); NULL while unreceived — unlike `deposits` it is never auto-set from a past end_date |
+| `note` | Optional free text, e.g. the bank's stepped-rate schedule (there is no rate column) |
+| `sort_order` | Entry order; new entries append |
+| `created_at`, `updated_at` | Audit timestamps |
+
 ### `dividends`
 
 One row per 派息 event per stock (from the trade sheets' J–O block). The snapshot columns freeze the position at the pay date, so later trades never rewrite a recorded rate.
@@ -153,6 +172,8 @@ A generic key-value table for section-level state that no account row can hold. 
 | `value` | Free-text value |
 
 The market sheets' cached `max Balance %` / `max net` cells seed `market.HK.seed_max_percent`, `market.HK.seed_max_amount`, `market.US.seed_max_percent`, `market.US.seed_max_amount` — per-market maxima marks that floor the derived 最高, exactly like the MPF seeds.
+
+Family holder notes live here too: `family.note.<holder>` holds one free-text note per 家人 定期 holder (e.g. Mum's AIA policy lines). The key survives deleting the holder's last deposit, and clearing the note deletes the key.
 
 ### `market_history`
 
@@ -228,6 +249,7 @@ One row per year, keyed by `year`, holding the YearInReview figures that cannot 
 | `year` | Calendar year; unique |
 | `income` | The sheet's 收入 cell — hand-entered salary total |
 | `invested_adjustment` | `invested = HK net invested + 當年 IBKR 轉入 + invested_adjustment`; seeded as `sheet invested − app HK net invested − year transfers` so the total reproduces the workbook while the transfer part derives live (it folded in US principal, bond purchases, etc.) |
+| `salary_raise` | 月薪增幅 override for the 投資目標 target; NULL derives `max(0, last month salary of the year − last of the prior year)`; negative allowed |
 | `bond_principal`, `bond_interest` | Year-end 債券 principal held and coupons received; seeded for past years only |
 | `deposit_principal`, `deposit_interest` | 定期 principal/interest of deposits ending in the year; seeded for past years only |
 | `updated_at` | When the record was last written |
@@ -612,6 +634,50 @@ The list split is receipt-based: a deposit leaves 未到期定期 on 收訖 (a s
 
 The 手動步驟提醒 checklists (定期 start step / 定期 end step) are static hints for the still-unmigrated `Month Stat`, `回報率`, `Overview`, and money-master bookkeeping in the workbook.
 
+## Load the 家人 → 定期 view
+
+```text
+FamilyDepositsView (家人 → 定期)
+  → GET /api/family/deposits/summary
+      → one section per holder (anyone with deposits or a stored note):
+        their note, the unreceived 未到期 list ordered by end date
+        (flagging 已到期未收 where past due), 活躍本金 = Σ principal over
+        deposits ending in the future
+      → history_years for the year selector
+  → GET /api/family/deposits?year=YYYY&order=desc
+      → 記錄 rows for the selected year
+  → holder chips (全部 + one per holder) filter the sections
+```
+
+```text
+新增定期 / 編輯 in a row's ⋯ menu
+  → POST /api/family/deposits or PATCH /api/family/deposits/:id
+  → validates holder (required, trimmed), end_date, non-negative amounts —
+    the same rules as 定期 minus the rate (there is no rate field; the
+    bank's stepped-rate schedule goes in note)
+
+收訖 on an upcoming row
+  → POST /api/family/deposits/:id/receive { received_at?, interest? }
+  → marks the deposit received (409 if already received) and optionally
+    corrects the interest actually paid — nothing else happens: no cash
+    manual_assets credit, no month item, no suggestion, and a past
+    end_date is never auto-received on create/edit
+
+取消收訖 (history rows) → POST /api/family/deposits/:id/unreceive clears
+    received_at (409 if not received)
+
+刪除 → DELETE /api/family/deposits/:id
+```
+
+```text
+編輯 on a holder's note block
+  → PUT /api/family/holders/:holder/note { note }
+  → writes the family.note.<holder> app_meta key; empty/null deletes it
+  → the note survives deleting the holder's last deposit
+```
+
+Isolation: `family_deposits` rows are records only — they never enter 定期!B1, Overview 已定期/半流動資金/總數/流動資產, Month Stat 利息/`interest_auto`/suggestions, or the 回顧 figures, and neither the importer nor the parity check touches the `Mum`/`Dad` sheets.
+
 ## Record a dividend in 股票 → 派息
 
 ```text
@@ -802,7 +868,7 @@ MonthStatView loads GET /api/months/summary + /api/months?year=YYYY
     at/after the current month — with total_assets_live/liquid_assets_live set
 ```
 
-**Payday entry** (`PATCH /api/months/:ym`, upsert): stores `start_cash` — the 新增月份 form takes no 月初 input, so a created row has none until 重新擷取 or a manual edit; on create the row snapshots the live 總數/流動資產 and defaults `salary` to the `overview.salary` setting. Derived columns: `end_cash = end_cash_override ?? next row's start_cash − this row's salary` (the sheet's `=F(n+1) − <own salary>` — March rows prove it uses the pre-raise literal; `end_cash_override` is the editor's 月尾 field for hand-frozen months the chain can't reproduce, e.g. 2023-12's typed balance — blank/`null` derives), `month_spend = start_cash + Σadjustment − end_cash`, `living_spend = month_spend − Σextra_spend − Σ exclude_from_living entertainment`, `saved = salary − month_spend + Σincome`, `interest = Σ auto events (received deposit interest ending in the month + received coupons + received HK dividends) + Σ interest items`, `entertainment = Σ entertainment items`, `Changed = next − this` for both asset columns.
+**Payday entry** (`PATCH /api/months/:ym`, upsert): stores `start_cash` — the 新增月份 form takes no 月初 input, so a created row has none until 重新擷取 or a manual edit; on create the row snapshots the live 總數/流動資產 and defaults `salary` to the `overview.salary` setting. Derived columns: `end_cash = end_cash_override ?? next row's start_cash − this row's salary` (the sheet's `=F(n+1) − <own salary>` — March rows prove it uses the pre-raise literal; `end_cash_override` is the editor's 月尾 field for hand-frozen months the chain can't reproduce, e.g. 2023-12's typed balance — blank/`null` derives), `month_spend = start_cash + Σadjustment − end_cash`, `living_spend = month_spend − Σextra_spend − Σ exclude_from_living entertainment`, `saved = salary − month_spend + Σincome`, `interest = Σ auto events (received deposit interest ending in the month + received coupons + received HK dividends) + Σ interest items`, `entertainment = Σ entertainment items`, `Changed = next − this` for both asset columns — the last stored row, while it is the current month, diffs the live totals instead (the sheet's last-row C/E cells read live `B1`/`H1`), so the in-progress month's change counts in the yearly Σ總數+.
 
 **Suggestions** (`GET /api/months/:ym` → `suggestions`, only for months ≥ current month): `dep-start:<id>` −principal (only with `start_date`), `dep-end:<id>` +principal+interest, `trade:<id>` −BUY/+SELL total (HK only), `div:<id>` (HK only — US dividends stay inside IBKR) / `coupon:<id>` received amounts (收訖 auto-creates these items — suggestions now only catch months that had no row at receipt time), `aia-pay:<id>` premium × USD→HKD (skipped without a rate), `pool-input` −pool_input. Accepting stores an item with the same `auto_key` (second accept → 409); dismissing writes a tombstone so the suggestion never returns. IBKR transfers and deposits without `start_date` stay manual items. `interest_auto` lists the auto 利息 components (per deposit/coupon/HK dividend, with label and amount) that the derived `interest` adds on top of `interest` items — marking a dividend or coupon 收訖, or a deposit's 收訖, updates the figure with no month write; unreceived components carry `received: false` and preview muted in the breakdown without counting (with the expected/estimated amount, or `—` while 待定).
 
@@ -823,9 +889,18 @@ OverviewView loads GET /api/overview
 
 The asset table mirrors `Overview!A3:C10` — 港股 / 債券 / 基金 / MPF / manual `asset` rows / IBKR — with the C column as each row's share of the Sum. The 半流動資金 block mirrors `A14:C18`: 已定期 (Σ active deposit **principal**, matching `定期!B1`), the manual `cash` rows, 活期, the total, `total ÷ (港股 + 債券 + total + IBKR)` (A13), and `total − 25% × 流動資產` (C14). Manual rows expose their `manual_assets` id so the amount edits inline via `PATCH /api/manual-assets/:id`.
 
-`總數` = Sum + 半流動資金 (equivalently 港股 + IBKR + 定期 + 債券 + 基金 + MPF + manual assets + 活期). `流動資產` = 港股 + 半流動資金 + 債券 + IBKR − 開心Pool. J1 = `流動資產 ÷ (薪金 × 100)`. USD-denominated figures (US stocks, AIA, IBKR USD cash) convert at the stored `aia.usd_hkd_rate`; rows are absent while no rate is set.
+`總數` = Sum + 半流動資金 (equivalently 港股 + IBKR + 定期 + 債券 + 基金 + MPF + manual assets + 活期). `流動資產` = 港股 + 半流動資金 + 債券 + IBKR − 開心Pool. J1 = `流動資產 ÷ (薪金 × 100)`. The headline strip shows a fourth tile with the live 開心Pool balance (the sheet's `G10` figure — a live balance, not an average) beside them, since 流動資產 subtracts it. USD-denominated figures (US stocks, AIA, IBKR USD cash) convert at the stored `aia.usd_hkd_rate`; rows are absent while no rate is set.
 
-The 過去 12 個月平均 card mirrors `Overview!F3:G10` + `H6`: averages of 總數增加 / 支出 / 生活支出 / 存 / 利息 over the 12 most recent completed month rows (`month <` the current month; months with no value are skipped per column), the live 開心Pool balance, and 生活預算 = `ROUNDUP(生活支出_avg × 1.05, −2)`, shown green while it stays below `流動資產 × 0.0001 × 30 + 9000` and red while it exceeds it (the sheet's 預測 threshold).
+The 過去 12 個月平均 card mirrors `Overview!F3:G10` + `H6`: averages of 總數增加 / 支出 / 生活支出 / 存 / 利息 over the 12 most recent completed month rows (`month <` the current month; months with no value are skipped per column), and 生活預算 = `ROUNDUP(生活支出_avg × 1.05, −2)`, shown green while it stays below `流動資產 × 0.0001 × 30 + 9000` and red while it exceeds it (the sheet's 預測 threshold).
+
+The 投資目標 card mirrors `Overview!J22:N27`: the header shows the mean of `invested` over the last three completed years (J22), and each year row shows `invested`, `target`, `remain` (current year only: `target − invested`), and `增長` — invested YoY for completed years, `(target − prior invested) ÷ prior invested` for the current year. Unlike the sheet's per-year formulas, one formula retro-computes every year:
+
+```text
+target(Y) = invested(Y-1) − interest(Y-1) − pool_spend(Y-1)×0.7
+          + 月薪增幅(Y)×0.5×12 + interest(Y) + pool_spend(Y)×0.7
+```
+
+— the two entertainment terms net to 70% of the *year-over-year increase* in fun spending, so a steady level adds nothing new. `月薪增幅` comes from the stored month salaries (`last salary of the year − last of the prior year`, floored at 0) unless a `year_review.salary_raise` override is set; every other input already derives on the 回顧 rows.
 
 ## Edit the IBKR figures in 美股 → 總覽
 
@@ -860,7 +935,7 @@ The importer reads:
 - `MPF` — the account table under the 總供款額/帳戶結存 headers; the fund-details table below it and the remark row are ignored
 - `債券` — the registry table under the `end` header (label / 發行編號 / principal / maturity), then each bond's coupon block under its 發行編號 label line: 付息日 / 利息釐定日 / 年息率 / 每1萬利息 / cached 利息; `待定` cells import as NULL
 - `AIA` — the D–O policy block: rows with numeric `buy usd`/`now usd` cells and a label or policy number; a blank label inherits the plan name above it, and the remark cells (L onward) join into `note`. A row resuming after a blank gap imports `in_account` false, and the row whose removal reconciles Σ premium/Σ value to the cached `buy usd`/`now usd` cells imports `excluded` — `irene 20%` and `irene 年金` respectively today; unresolvable cases flag nothing and report a warning
-- `Overview` — `N3`, the cached USD→HKD rate, which seeds `aia.usd_hkd_rate` once; plus `E1` (salary → `overview.salary`), `N8` (current-year pool rate → `overview.pool_rate.<year>`), and the manual cells `B7`/`B8`/`B16`/`B17` → `manual_assets` (all seed only when unset)
+- `Overview` — `N3`, the cached USD→HKD rate, which seeds `aia.usd_hkd_rate` once; plus `E1` (salary → `overview.salary`), `N8` (current-year pool rate → `overview.pool_rate.<year>`), the manual cells `B7`/`B8`/`B16`/`B17` → `manual_assets` (all seed only when unset), and the 投資目標 block's `J:K` year/invested cells → `year_review.invested_adjustment` for years the YearInReview sheet has no block for (e.g. 2023's +110000), never overwriting a stored value
 - `Month Stat` — monthly rows since 2023-12: F/O/P store as-is (blank → 0), B/D store their cached literal unless the cell links to `Overview!` (then NULL = live), G/I−J/L-tail materialize as `month_items` keeping the formula text in `note`, and N 利息 imports as an `interest` item holding `sheet N − all in-month auto events` (the unexplained remainder, labeled 其他利息 — skipped for blank cells and exact matches; unreceived deposits are still subtracted so their later 收訖 doesn't double-count a pre-typed cell); each row's salary is recovered from its L formula's leading literal (fallbacks: previous row's H trailing literal, latest known, `Overview!E1`); the yearly block feeds only the historical pool-rate solve — past years' `overview.pool_rate.<y>` are derived from the sheet's M/G/H/N chain (e.g. 2024 → 0.53, 2025 → 0.425); date-only rows are skipped
 - The market sheets' year blocks (B year, C net invested, F 成本, H 總市值) and `YearInReview`'s 股票 rows — seeded into `year_snapshots` for years before the current one; the current year stays live
 
@@ -934,16 +1009,17 @@ Each row reproduces the workbook block:
 ## Edit Year in Review manual figures
 
 ```text
-Click 收入 / invested 調整 / 投資P/L / a 債券 or 定期 cell, type the value, save
+Click 收入 / invested 調整 / 月薪增幅 / 投資P/L / a 債券 or 定期 cell, type
+the value, save
   → PATCH /api/year-review/:year
-  → manual fields (income, invested_adjustment, bond/deposit overrides)
-    upsert the year_review row; clearing the last field deletes it
+  → manual fields (income, invested_adjustment, raise, bond/deposit
+    overrides) upsert the year_review row; clearing the last field deletes it
   → sold_pl instead upserts year_snapshots.sold_pl for HK — the same
     cell the yearly table edits — so both views agree
   → null clears a field; the next read re-derives it
 ```
 
-Cells holding a stored value are marked `*`; empty input clears the field back to live derivation. Clearing a seeded past-year bond/deposit override exposes the true records — a matured bond deleted from the workbook will then show 0/absent, which is honest history rather than a bug.
+Cells holding a stored value are marked `*`; empty input clears the field back to live derivation. 月薪增幅 normally shows the salary-derived figure (last stored month salary of the year minus the prior year's, floored at 0); an override marks `*` — negative allowed — and clearing resumes derivation. Clearing a seeded past-year bond/deposit override exposes the true records — a matured bond deleted from the workbook will then show 0/absent, which is honest history rather than a bug.
 
 ## Year-end actions
 
@@ -996,7 +1072,10 @@ cargo run -p wealth-backend --bin check_parity -- "財富分析報告.xlsx"
     shares, A13, the 半流動資金 cells, C14) and the B1/H1/J1 headline, plus
     the 美股 IBKR header cells; module-derived figures (債券/基金/MPF/已定期)
     count as real differences while cells downstream of live prices or
-    user-edited manual inputs report informational
+    user-edited manual inputs report informational. The J22:N27 投資目標
+    block compares J22, the K invested cells, and completed-year N growth
+    normally; the L/M cells and the current-year N report informational
+    since the unified formula supersedes the sheet's per-year ones
   → rebuilds each YearInReview block and compares every cell it parses:
     ledger sums, interest, seeded manual figures (收入/invested/投資P/L),
     past-year bond/deposit overrides, and the derived blends; the

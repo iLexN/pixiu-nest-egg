@@ -144,6 +144,7 @@ export interface YearlyPatch {
 export interface YearReviewRecord {
   income: number | null
   invested_adjustment: number | null
+  raise: number | null
   bond_principal: number | null
   bond_interest: number | null
   deposit_principal: number | null
@@ -176,6 +177,7 @@ export interface YearReviewInvestment {
   invested: number | null
   invested_pct: number | null
   irene_pool: number
+  raise: number | null
   interest_avg_yoy: number | null
   invested_yoy: number | null
 }
@@ -221,6 +223,7 @@ export interface YearReviewResponse {
 export interface YearReviewPatch {
   income?: number | null
   invested_adjustment?: number | null
+  raise?: number | null
   sold_pl?: number | null
   bond_principal?: number | null
   bond_interest?: number | null
@@ -369,6 +372,72 @@ export interface DepositSummary {
 
 export interface DepositFilters {
   status?: 'active' | 'ended'
+  year?: number
+  order?: 'asc' | 'desc'
+}
+
+/** A 家人 定期 record — family money, kept out of the user's own totals. */
+export interface FamilyDeposit {
+  id: number
+  /** The family member the deposit belongs to, e.g. 媽媽 / Irene. */
+  holder: string
+  /** Bank reference, e.g. SC-9179. */
+  label: string | null
+  bank: string | null
+  principal: number | null
+  interest: number | null
+  start_date: string | null
+  end_date: string
+  /** 收訖日; null while the deposit is still on the books. */
+  received_at: string | null
+  /** Free text, e.g. the bank's stepped-rate schedule. */
+  note: string | null
+  sort_order: number
+  total: number
+  status: DepositStatus
+  end_year: number
+  end_month: number
+}
+
+export interface NewFamilyDeposit {
+  holder: string
+  label?: string | null
+  bank?: string | null
+  principal?: number | null
+  interest?: number | null
+  start_date?: string | null
+  end_date: string
+  note?: string | null
+}
+
+export type FamilyDepositPatch = Partial<NewFamilyDeposit>
+
+export interface ReceiveFamilyDepositBody {
+  /** 收訖日; defaults to today server-side. */
+  received_at?: string
+  /** Corrects the stored interest to the amount actually received. */
+  interest?: number
+}
+
+export interface FamilyHolderSummary {
+  holder: string
+  note: string | null
+  /** Unreceived deposits, earliest maturity first. */
+  upcoming: FamilyDeposit[]
+  /** Σ principal over deposits ending in the future. */
+  active_principal: number
+}
+
+export interface FamilyDepositSummary {
+  today: string
+  /** Every holder with deposits or a stored note, sorted by name. */
+  holders: FamilyHolderSummary[]
+  history_years: number[]
+}
+
+export interface FamilyDepositFilters {
+  status?: 'active' | 'ended'
+  holder?: string
   year?: number
   order?: 'asc' | 'desc'
 }
@@ -936,6 +1005,21 @@ export interface TwelveMonthAverages {
   window_end: string | null
 }
 
+/** The 投資目標 block (Overview!J22:N27). */
+export interface InvestTargetRow {
+  year: number
+  invested: number | null
+  raise: number | null
+  target: number | null
+  remain: number | null
+  growth: number | null
+}
+
+export interface InvestTargets {
+  avg_invested: number | null
+  rows: InvestTargetRow[]
+}
+
 export interface OverviewResponse {
   today: string
   rate: number | null
@@ -948,6 +1032,7 @@ export interface OverviewResponse {
   semi_liquid: SemiLiquid
   ibkr: IbkrBlock
   averages: TwelveMonthAverages
+  invest_targets: InvestTargets
 }
 
 /** Carries the server's field-level messages so forms can show them inline. */
@@ -1086,6 +1171,45 @@ export const api = {
   },
   depositSummary(): Promise<DepositSummary> {
     return request('/deposits/summary')
+  },
+  listFamilyDeposits(filters: FamilyDepositFilters = {}): Promise<FamilyDeposit[]> {
+    return request(`/family/deposits${queryString({ ...filters })}`)
+  },
+  createFamilyDeposit(deposit: NewFamilyDeposit): Promise<FamilyDeposit> {
+    return request('/family/deposits', { method: 'POST', body: JSON.stringify(deposit) })
+  },
+  updateFamilyDeposit(id: number, patch: FamilyDepositPatch): Promise<FamilyDeposit> {
+    return request(`/family/deposits/${id}`, { method: 'PATCH', body: JSON.stringify(patch) })
+  },
+  deleteFamilyDeposit(id: number): Promise<void> {
+    return request(`/family/deposits/${id}`, { method: 'DELETE' })
+  },
+  /** 收訖: mark received and optionally correct the interest. Unlike 定期,
+   * no cash row is credited and no month item is recorded. */
+  receiveFamilyDeposit(
+    id: number,
+    body: ReceiveFamilyDepositBody = {},
+  ): Promise<FamilyDeposit> {
+    return request(`/family/deposits/${id}/receive`, {
+      method: 'POST',
+      body: JSON.stringify(body),
+    })
+  },
+  unreceiveFamilyDeposit(id: number): Promise<FamilyDeposit> {
+    return request(`/family/deposits/${id}/unreceive`, { method: 'POST' })
+  },
+  familyDepositSummary(): Promise<FamilyDepositSummary> {
+    return request('/family/deposits/summary')
+  },
+  /** The per-holder free-text note; `null`/empty clears it. */
+  updateFamilyHolderNote(
+    holder: string,
+    note: string | null,
+  ): Promise<{ holder: string; note: string | null }> {
+    return request(`/family/holders/${encodeURIComponent(holder)}/note`, {
+      method: 'PUT',
+      body: JSON.stringify({ note }),
+    })
   },
   listDividends(filters: DividendFilters = {}): Promise<Dividend[]> {
     return request(`/dividends${queryString({ ...filters })}`)

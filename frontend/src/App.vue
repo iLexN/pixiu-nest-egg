@@ -13,6 +13,7 @@ import AiaView from './views/AiaView.vue'
 import MonthStatView from './views/MonthStatView.vue'
 import OverviewView from './views/OverviewView.vue'
 import YearReviewView from './views/YearReviewView.vue'
+import FamilyDepositsView from './views/FamilyDepositsView.vue'
 
 type Tab =
   | 'overview'
@@ -27,7 +28,17 @@ type Tab =
   | 'aia'
   | 'months'
   | 'yearReview'
-type Group = 'overview' | 'stock' | 'deposit' | 'mpf' | 'bond' | 'aia' | 'months' | 'year'
+  | 'family-deposits'
+type Group =
+  | 'overview'
+  | 'stock'
+  | 'deposit'
+  | 'mpf'
+  | 'bond'
+  | 'aia'
+  | 'months'
+  | 'year'
+  | 'family'
 
 const NAV: { id: Group; label: string; tabs: { id: Tab; label: string }[] }[] = [
   {
@@ -77,6 +88,11 @@ const NAV: { id: Group; label: string; tabs: { id: Tab; label: string }[] }[] = 
     id: 'year',
     label: '年結',
     tabs: [{ id: 'yearReview', label: '回顧' }],
+  },
+  {
+    id: 'family',
+    label: '家人',
+    tabs: [{ id: 'family-deposits', label: '定期' }],
   },
 ]
 
@@ -133,6 +149,7 @@ function selectGroup(g: (typeof NAV)[number]) {
     <AiaView v-else-if="tab === 'aia'" />
     <MonthStatView v-else-if="tab === 'months'" />
     <YearReviewView v-else-if="tab === 'yearReview'" />
+    <FamilyDepositsView v-else-if="tab === 'family-deposits'" />
     <DepositHistoryView v-else />
   </main>
 </template>

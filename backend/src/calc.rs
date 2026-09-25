@@ -1922,6 +1922,20 @@ pub fn month_derived(
     rows: &[MonthStatRow],
     items: &HashMap<chrono::NaiveDate, Vec<MonthItemFacts>>,
 ) -> Vec<MonthDerived> {
+    month_derived_with_tail(rows, items, None)
+}
+
+/// `live_tail` stands in as the last row's missing "next row" for the C/E
+/// Changed cells — the sheet's last-row cells diff against the live B1/H1,
+/// reporting the in-progress month's change so far. Callers pass it only
+/// while the latest stored row IS the current month: a future placeholder
+/// has no knowable change, and a stale last row must not pull a live diff
+/// into an old year.
+pub fn month_derived_with_tail(
+    rows: &[MonthStatRow],
+    items: &HashMap<chrono::NaiveDate, Vec<MonthItemFacts>>,
+    live_tail: Option<LiveTotals>,
+) -> Vec<MonthDerived> {
     let mut derived: Vec<MonthDerived> = rows
         .iter()
         .enumerate()
@@ -1950,15 +1964,26 @@ pub fn month_derived(
                 (Some(salary), Some(spend)) => Some(salary - spend + sums.income),
                 _ => None,
             };
-            let total_change = next.and_then(|next| match (next.total_assets, row.total_assets) {
-                (Some(next_total), Some(total)) => Some(next_total - total),
-                _ => None,
-            });
-            let liquid_change =
-                next.and_then(|next| match (next.liquid_assets, row.liquid_assets) {
+            let total_change = match next {
+                Some(next) => match (next.total_assets, row.total_assets) {
+                    (Some(next_total), Some(total)) => Some(next_total - total),
+                    _ => None,
+                },
+                None => match (live_tail, row.total_assets) {
+                    (Some(live), Some(total)) => Some(live.total_assets - total),
+                    _ => None,
+                },
+            };
+            let liquid_change = match next {
+                Some(next) => match (next.liquid_assets, row.liquid_assets) {
                     (Some(next_liquid), Some(liquid)) => Some(next_liquid - liquid),
                     _ => None,
-                });
+                },
+                None => match (live_tail, row.liquid_assets) {
+                    (Some(live), Some(liquid)) => Some(live.liquid_assets - liquid),
+                    _ => None,
+                },
+            };
             MonthDerived {
                 end_cash,
                 month_spend,
@@ -2071,13 +2096,17 @@ pub struct MonthYearSummary {
 /// Per-year aggregates over `rows` (sorted by month ascending), with the pool
 /// figures priced by `rates` (`overview.pool_rate.<year>`). `hk_sold_pl` maps
 /// a year to its HK sold P/L for 投資純利; years without an entry report none.
+/// `live_tail` is the gated live totals for the last row's Changed cell (see
+/// `month_derived_with_tail`) — the sheet's yearly ΣC counts the current
+/// month's in-flight change.
 pub fn month_year_summaries(
     rows: &[MonthStatRow],
     items: &HashMap<chrono::NaiveDate, Vec<MonthItemFacts>>,
     rates: &BTreeMap<i32, f64>,
     hk_sold_pl: &BTreeMap<i32, f64>,
+    live_tail: Option<LiveTotals>,
 ) -> Vec<MonthYearSummary> {
-    let derived = month_derived(rows, items);
+    let derived = month_derived_with_tail(rows, items, live_tail);
     let balances = pool_balances(rows, items, rates);
 
     struct Acc {
@@ -2174,8 +2203,9 @@ pub struct MonthRunningAverages {
 pub fn month_running_averages(
     rows: &[MonthStatRow],
     items: &HashMap<chrono::NaiveDate, Vec<MonthItemFacts>>,
+    live_tail: Option<LiveTotals>,
 ) -> MonthRunningAverages {
-    let derived = month_derived(rows, items);
+    let derived = month_derived_with_tail(rows, items, live_tail);
     let avg = |values: Vec<f64>| {
         (!values.is_empty()).then(|| values.iter().sum::<f64>() / values.len() as f64)
     };
@@ -2206,6 +2236,10 @@ pub struct YearReviewRecord {
     /// `− 110000 + 美股!B1` for 2026, where the 美股!B1 part now derives from
     /// the transfer log).
     pub invested_adjustment: Option<f64>,
+    /// 月薪增幅 override for the Overview 投資目標 formula (the `salary_raise`
+    /// column — `raise` is a SQLite keyword); None derives from the stored
+    /// month salaries (last of the year minus last of the prior).
+    pub raise: Option<f64>,
     /// Overrides for the 債券 row; None derives from coupons/bonds.
     pub bond_principal: Option<f64>,
     pub bond_interest: Option<f64>,
@@ -2275,6 +2309,9 @@ pub struct YearReviewInvestment {
     pub invested_pct: Option<f64>,
     /// Irene + 開心 Pool: Σ pool_input.
     pub irene_pool: f64,
+    /// 月薪增幅: the stored `raise` override, else the salary-derived figure;
+    /// absent while neither exists. Feeds the Overview 投資目標 target.
+    pub raise: Option<f64>,
     /// The G-column YoY deltas on 平均回報 and invested.
     pub interest_avg_yoy: Option<f64>,
     pub invested_yoy: Option<f64>,
@@ -2400,20 +2437,36 @@ fn deposit_year_figures(
     (any.then_some(principal), any.then_some(interest))
 }
 
+/// The inputs `year_review_rows` derives against: `summaries` and `hk_years`
+/// are the already-built Month Stat yearly block and HK yearly table;
+/// `bonds`/`deposits` derive the asset rows that stored overrides can
+/// replace; `transfers` and `last_salaries` feed `invested` and 月薪增幅.
+#[derive(Debug)]
+pub struct YearReviewInputs<'a> {
+    pub summaries: &'a [MonthYearSummary],
+    pub hk_years: &'a [YearRow],
+    pub records: &'a BTreeMap<i32, YearReviewRecord>,
+    pub bonds: &'a [BondYearFacts],
+    pub deposits: &'a [DepositFacts<'a>],
+    pub transfers: &'a BTreeMap<i32, f64>,
+    pub last_salaries: &'a BTreeMap<i32, f64>,
+}
+
 /// Assemble the YearInReview blocks: one row per year that has a month
-/// summary or a stored `year_review` record, ascending. `summaries` and
-/// `hk_years` are the already-derived Month Stat yearly block and HK yearly
-/// table; `bonds`/`deposits` derive the asset rows that stored overrides can
-/// replace.
+/// summary or a stored `year_review` record, ascending.
 pub fn year_review_rows(
-    summaries: &[MonthYearSummary],
-    hk_years: &[YearRow],
-    records: &BTreeMap<i32, YearReviewRecord>,
-    bonds: &[BondYearFacts],
-    deposits: &[DepositFacts<'_>],
-    transfers: &BTreeMap<i32, f64>,
+    inputs: &YearReviewInputs<'_>,
     today: chrono::NaiveDate,
 ) -> Vec<YearReviewRow> {
+    let YearReviewInputs {
+        summaries,
+        hk_years,
+        records,
+        bonds,
+        deposits,
+        transfers,
+        last_salaries,
+    } = *inputs;
     let years: BTreeMap<i32, ()> = summaries
         .iter()
         .map(|summary| summary.year)
@@ -2460,6 +2513,14 @@ pub fn year_review_rows(
             (Some(income), Some(spend)) => Some(income - spend),
             _ => None,
         };
+        // 月薪增幅: the stored override wins; else the step between the last
+        // stored salary of each year. Absent while either side is missing.
+        let raise = record.raise.or_else(|| {
+            match (last_salaries.get(&year), last_salaries.get(&(year - 1))) {
+                (Some(current), Some(prior)) => Some((current - prior).max(0.0)),
+                _ => None,
+            }
+        });
 
         let bond_overridden = record.bond_principal.is_some() || record.bond_interest.is_some();
         let deposit_overridden =
@@ -2545,6 +2606,7 @@ pub fn year_review_rows(
                     _ => None,
                 },
                 irene_pool: summary.map(|s| s.pool_input_sum).unwrap_or(0.0),
+                raise,
                 interest_avg_yoy: yoy(
                     summary.map(|_| interest_avg),
                     prior.as_ref().and_then(|p| p.interest_avg),
@@ -2591,6 +2653,76 @@ pub fn year_review_rows(
         rows.push(row);
     }
     rows
+}
+
+/// The Overview J22:N27 投資目標 block, projected from the year-review rows:
+///
+/// `target(Y) = invested(Y-1) − interest(Y-1) − pool_spend(Y-1)×0.7
+///            + raise(Y)×0.5×12 + interest(Y) + pool_spend(Y)×0.7`
+///
+/// — last year's organic invested (with its embedded entertainment match
+/// stripped), plus half the year's salary raise annualized, plus this year's
+/// returns reinvested, plus 70% of the YoY increase in entertainment spend.
+/// `avg_invested` is the sheet's J22: the mean of `invested` over the last
+/// three completed years.
+pub fn invest_targets(rows: &[YearReviewRow], current_year: i32) -> crate::models::InvestTargets {
+    use crate::models::{InvestTargetRow, InvestTargets};
+    use std::collections::HashMap;
+
+    let by_year: HashMap<i32, &YearReviewRow> = rows.iter().map(|row| (row.year, row)).collect();
+    let mut target_rows = Vec::with_capacity(rows.len());
+    for row in rows {
+        let prior = by_year.get(&(row.year - 1)).copied();
+        let prior_invested = prior.and_then(|prior| prior.investment.invested);
+        // The prior row's interest/pool_spend are already f64s (0 when the
+        // year has no months); an absent raise counts as 0.
+        let target = prior_invested.map(|prior_invested| {
+            prior_invested
+                - prior.map(|prior| prior.investment.interest).unwrap_or(0.0)
+                - prior.map(|prior| prior.ledger.pool_spend).unwrap_or(0.0) * 0.7
+                + row.investment.raise.unwrap_or(0.0) * 0.5 * 12.0
+                + row.investment.interest
+                + row.ledger.pool_spend * 0.7
+        });
+        let invested = row.investment.invested;
+        let remain = if row.year == current_year {
+            target.and_then(|target| invested.map(|invested| target - invested))
+        } else {
+            None
+        };
+        // N column: completed years grow on actual invested; the current (or
+        // any later) year measures its target against last year's invested.
+        let growth = if row.year < current_year {
+            yoy(invested, prior_invested)
+        } else {
+            yoy(target, prior_invested)
+        };
+        target_rows.push(InvestTargetRow {
+            year: row.year,
+            invested,
+            raise: row.investment.raise,
+            target,
+            remain,
+            growth,
+        });
+    }
+
+    // J22: AVERAGE over the three most recent completed years' K cells,
+    // skipping rows with no invested (AVERAGE semantics).
+    let values: Vec<f64> = rows
+        .iter()
+        .filter(|row| row.year < current_year)
+        .rev()
+        .take(3)
+        .filter_map(|row| row.investment.invested)
+        .collect();
+    let avg_invested =
+        (!values.is_empty()).then(|| values.iter().sum::<f64>() / values.len() as f64);
+
+    InvestTargets {
+        avg_invested,
+        rows: target_rows,
+    }
 }
 /// completed month rows (`month < current_month`), per column skipping months
 /// with no value, matching the sheet's hand-anchored OFFSET window.
@@ -4623,6 +4755,44 @@ mod tests {
     }
 
     #[test]
+    fn last_row_diffs_the_live_tail() {
+        // The sheet's last-row C/E cells read the live B1/H1 — the current
+        // month's in-progress change — so the last stored row diffs the live
+        // totals even with no next row.
+        let mut rows = [
+            month_row("2026-09-01", Some(30000.0), Some(52700.0)),
+            month_row("2026-10-01", Some(32000.0), Some(52700.0)),
+        ];
+        rows[0].total_assets = Some(1_000_000.0);
+        rows[0].liquid_assets = Some(500_000.0);
+        rows[1].total_assets = Some(1_050_000.0);
+        rows[1].liquid_assets = Some(490_000.0);
+        let live = LiveTotals {
+            total_assets: 1_060_000.0,
+            liquid_assets: 495_000.0,
+        };
+        let derived = month_derived_with_tail(&rows, &HashMap::new(), Some(live));
+        assert!(approx_eq(derived[0].total_change.unwrap(), 50_000.0));
+        assert!(approx_eq(derived[1].total_change.unwrap(), 10_000.0));
+        assert!(approx_eq(derived[1].liquid_change.unwrap(), 5_000.0));
+
+        // A live-filled last row reports 0 — its own total IS the live total.
+        rows[1].total_assets = Some(1_060_000.0);
+        rows[1].liquid_assets = Some(495_000.0);
+        let derived = month_derived_with_tail(&rows, &HashMap::new(), Some(live));
+        assert_eq!(derived[1].total_change, Some(0.0));
+
+        // No tail and no next row → still absent; a missing last total leaves
+        // the change absent even with a tail.
+        assert_eq!(month_derived(&rows, &HashMap::new())[1].total_change, None);
+        rows[1].total_assets = None;
+        assert_eq!(
+            month_derived_with_tail(&rows, &HashMap::new(), Some(live))[1].total_change,
+            None
+        );
+    }
+
+    #[test]
     fn year_summary_aggregates_and_prices_the_pool() {
         let mut rows = vec![
             month_row("2025-11-01", Some(1.0), Some(1.0)),
@@ -4644,7 +4814,7 @@ mod tests {
         );
         let rates = BTreeMap::from([(2025, 0.425), (2026, 0.337)]);
         let sold_pl = BTreeMap::from([(2026, 24124.13)]);
-        let summaries = month_year_summaries(&rows, &items, &rates, &sold_pl);
+        let summaries = month_year_summaries(&rows, &items, &rates, &sold_pl, None);
         let y2026 = summaries.iter().find(|s| s.year == 2026).unwrap();
         assert_eq!(y2026.months, 2);
         assert!(approx_eq(y2026.interest_sum, 1500.0));
@@ -4688,7 +4858,7 @@ mod tests {
             vec![item(MonthItemCategory::Entertainment, 60.0)],
         );
         let rates = BTreeMap::from([(2026, 0.5)]);
-        let summaries = month_year_summaries(&rows, &items, &rates, &BTreeMap::new());
+        let summaries = month_year_summaries(&rows, &items, &rates, &BTreeMap::new(), None);
 
         // HK: 1000 bought in 2025, 500 in 2026; a 2025 snapshot freezes cost
         // 900 / value 2000 / sold_pl −40; a 2026 snapshot stores sold_pl 0.
@@ -4761,8 +4931,20 @@ mod tests {
         // 2026's IBKR 轉入: the year's transfer-log sum joins invested.
         let transfers = BTreeMap::from([(2026, 131000.0)]);
 
+        // The April step-ups in the stored month salaries: 47850 → 50810 →
+        // 52700, so the derived raises are the sheet's 2960 and 1890.
+        let last_salaries = BTreeMap::from([(2024, 47850.0), (2025, 50810.0), (2026, 52700.0)]);
         let rows_out = year_review_rows(
-            &summaries, &hk_years, &records, &bonds, &deposits, &transfers, today,
+            &YearReviewInputs {
+                summaries: &summaries,
+                hk_years: &hk_years,
+                records: &records,
+                bonds: &bonds,
+                deposits: &deposits,
+                transfers: &transfers,
+                last_salaries: &last_salaries,
+            },
+            today,
         );
         assert_eq!(rows_out.len(), 2);
 
@@ -4825,6 +5007,122 @@ mod tests {
             y2026.assets.income_yoy.unwrap(),
             17020.0 / 720000.0
         ));
+        // 月薪增幅 derives from the last salaries: 50810−47850 / 52700−50810.
+        assert!(approx_eq(y2025.investment.raise.unwrap(), 2960.0));
+        assert!(approx_eq(y2026.investment.raise.unwrap(), 1890.0));
+    }
+
+    #[test]
+    fn raise_prefers_the_override_and_clamps_at_zero() {
+        let records = BTreeMap::from([(
+            2026,
+            YearReviewRecord {
+                raise: Some(2500.0),
+                ..Default::default()
+            },
+        )]);
+        let salaries = BTreeMap::from([(2025, 50810.0), (2026, 50000.0)]);
+        let build = |records: &BTreeMap<i32, YearReviewRecord>, salaries: &BTreeMap<i32, f64>| {
+            year_review_rows(
+                &YearReviewInputs {
+                    summaries: &[],
+                    hk_years: &[],
+                    records,
+                    bonds: &[],
+                    deposits: &[],
+                    transfers: &BTreeMap::new(),
+                    last_salaries: salaries,
+                },
+                ym("2026-09-24"),
+            )
+        };
+        // The stored override wins over the salary diff.
+        let rows_out = build(&records, &salaries);
+        assert_eq!(rows_out[0].investment.raise, Some(2500.0));
+
+        // A pay cut derives 0, not a negative figure; a missing salary side
+        // leaves the derived raise absent.
+        let rows_out = build(
+            &BTreeMap::from([(2026, YearReviewRecord::default())]),
+            &salaries,
+        );
+        assert_eq!(rows_out[0].investment.raise, Some(0.0));
+        let rows_out = build(
+            &BTreeMap::from([(2026, YearReviewRecord::default())]),
+            &BTreeMap::from([(2026, 52700.0)]),
+        );
+        assert_eq!(rows_out[0].investment.raise, None);
+    }
+
+    #[test]
+    fn invest_targets_derive_target_remain_growth_and_average() {
+        let row = |year, invested, interest, pool_spend, raise| YearReviewRow {
+            year,
+            ledger: YearReviewLedger {
+                pool_spend,
+                ..Default::default()
+            },
+            investment: YearReviewInvestment {
+                invested,
+                interest,
+                raise,
+                ..Default::default()
+            },
+            ..Default::default()
+        };
+        let rows = vec![
+            row(2023, Some(206523.15), 0.0, 0.0, None),
+            row(2024, Some(345365.11), 36577.86, 17719.0, Some(2350.0)),
+            row(2025, Some(428635.41), 51900.65, 38729.5, Some(2960.0)),
+            row(2026, Some(182935.39), 62753.15, 9593.0, Some(1890.0)),
+        ];
+        let targets = invest_targets(&rows, 2026);
+
+        // J22 = the mean of the three completed years' invested.
+        assert!(approx_eq(
+            targets.avg_invested.unwrap(),
+            (206523.15 + 345365.11 + 428635.41) / 3.0
+        ));
+
+        // target = 428635.41 − 51900.65 − 38729.5×0.7 + 1890×6 + 62753.15
+        //          + 9593×0.7 = 430432.36.
+        let y2026 = &targets.rows[3];
+        assert!(approx_eq(y2026.target.unwrap(), 430432.36));
+        assert!(approx_eq(y2026.remain.unwrap(), 430432.36 - 182935.39));
+        // Current-year growth measures the target against last year's invested.
+        assert!(approx_eq(
+            y2026.growth.unwrap(),
+            (430432.36 - 428635.41) / 428635.41
+        ));
+
+        // Completed years grow on actual invested and carry no remain.
+        let y2025 = &targets.rows[2];
+        assert!(approx_eq(
+            y2025.growth.unwrap(),
+            (428635.41 - 345365.11) / 345365.11
+        ));
+        assert_eq!(y2025.remain, None);
+
+        // The first year has no prior: target/growth absent, invested present.
+        assert_eq!(targets.rows[0].target, None);
+        assert_eq!(targets.rows[0].growth, None);
+        assert!(targets.rows[0].invested.is_some());
+
+        // The average skips completed years with no invested.
+        let sparse = vec![
+            row(2024, None, 0.0, 0.0, None),
+            row(2025, Some(10.0), 0.0, 0.0, None),
+        ];
+        assert!(approx_eq(
+            invest_targets(&sparse, 2026).avg_invested.unwrap(),
+            10.0
+        ));
+        // Fewer than three completed years averages what's there; none → absent.
+        assert!(approx_eq(
+            invest_targets(&rows[..2], 2025).avg_invested.unwrap(),
+            (206523.15 + 345365.11) / 2.0
+        ));
+        assert_eq!(invest_targets(&rows[..1], 2023).avg_invested, None);
     }
 
     #[test]
@@ -4838,7 +5136,7 @@ mod tests {
             row.total_assets = Some((index * 100) as f64);
             row.interest = 10.0 * (index + 1) as f64;
         }
-        let averages = month_running_averages(&rows, &HashMap::new());
+        let averages = month_running_averages(&rows, &HashMap::new(), None);
         // total_change exists on the first two rows: 100 and 100.
         assert!(approx_eq(averages.total_change_avg.unwrap(), 100.0));
         // saved exists on the first two rows: 1 − 1 = 0 each.
@@ -4846,7 +5144,7 @@ mod tests {
         // interest averages over all three rows: (10+20+30)/3.
         assert!(approx_eq(averages.interest_avg.unwrap(), 20.0));
         assert_eq!(
-            month_running_averages(&[], &HashMap::new()).interest_avg,
+            month_running_averages(&[], &HashMap::new(), None).interest_avg,
             None
         );
     }

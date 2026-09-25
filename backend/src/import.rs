@@ -128,7 +128,7 @@ pub async fn import(pool: &SqlitePool, data: &WorkbookData) -> anyhow::Result<Im
     let months = import_months(pool, data).await?;
     // After the snapshots: the invested adjustment is seeded against the
     // effective (snapshot-aware) HK net invested.
-    let year_review = import_year_review(pool, &data.year_review).await?;
+    let year_review = import_year_review(pool, &data.year_review, &data.overview).await?;
     seed_market_history(pool).await?;
     seed_market_figures(pool, data).await?;
     Ok(ImportReport {
@@ -399,9 +399,51 @@ async fn import_year_snapshots(
 /// current year derives live, like `year_snapshots`. 投資P/L seeds the HK
 /// snapshot's `sold_pl` (may be negative). NULL-filling upserts keep seeded
 /// and hand-edited values across re-imports.
+/// The adjustment that makes a year's `invested` match its sheet cell:
+/// `sheet invested − effective HK net invested − the year's IBKR 轉入` — the
+/// snapshot-aware HK figure and the transfer-log sum both already derive, so
+/// the adjustment keeps only the remainder (e.g. the 110000 silver-bond
+/// purchase the sheet folds in by hand).
+async fn invested_adjustment_for(
+    pool: &SqlitePool,
+    year: i32,
+    sheet_invested: Option<f64>,
+) -> anyhow::Result<Option<f64>> {
+    let Some(sheet_invested) = sheet_invested else {
+        return Ok(None);
+    };
+    // The snapshot-aware HK net invested, matching the yearly row.
+    let hk_invested: Option<f64> = sqlx::query_scalar(
+        "SELECT COALESCE(\
+            (SELECT invested FROM year_snapshots WHERE market = 'HK' AND year = ?),\
+            (SELECT SUM(CASE WHEN t.trade_type = 'BUY' THEN t.total ELSE -t.total END) \
+             FROM trades t JOIN stocks s ON s.id = t.stock_id \
+             WHERE s.market = 'HK' \
+             AND CAST(strftime('%Y', t.trade_date) AS INTEGER) = ?))",
+    )
+    .bind(year)
+    .bind(year)
+    .fetch_one(pool)
+    .await?;
+    // The sheet's invested cell folds the year's IBKR 轉入 in (美股!B1);
+    // that part derives from the transfer log, so the adjustment keeps
+    // only the remainder.
+    let transferred: Option<f64> = sqlx::query_scalar(
+        "SELECT SUM(amount_hkd) FROM ibkr_transfers \
+         WHERE CAST(strftime('%Y', transfer_date) AS INTEGER) = ?",
+    )
+    .bind(year)
+    .fetch_one(pool)
+    .await?;
+    Ok(Some(
+        sheet_invested - hk_invested.unwrap_or(0.0) - transferred.unwrap_or(0.0),
+    ))
+}
+
 async fn import_year_review(
     pool: &SqlitePool,
     blocks: &[SheetYearReview],
+    overview: &crate::xlsx::OverviewCached,
 ) -> anyhow::Result<YearReviewReport> {
     let current_year = crate::routes::today().year();
     let mut report = YearReviewReport::default();
@@ -421,32 +463,7 @@ async fn import_year_review(
             report.sold_pl_seeded += 1;
         }
 
-        // The snapshot-aware HK net invested, matching the yearly row.
-        let hk_invested: Option<f64> = sqlx::query_scalar(
-            "SELECT COALESCE(\
-                (SELECT invested FROM year_snapshots WHERE market = 'HK' AND year = ?),\
-                (SELECT SUM(CASE WHEN t.trade_type = 'BUY' THEN t.total ELSE -t.total END) \
-                 FROM trades t JOIN stocks s ON s.id = t.stock_id \
-                 WHERE s.market = 'HK' \
-                 AND CAST(strftime('%Y', t.trade_date) AS INTEGER) = ?))",
-        )
-        .bind(block.year)
-        .bind(block.year)
-        .fetch_one(pool)
-        .await?;
-        // The sheet's invested cell folds the year's IBKR 轉入 in (美股!B1);
-        // that part derives from the transfer log, so the adjustment keeps
-        // only the remainder.
-        let transferred: Option<f64> = sqlx::query_scalar(
-            "SELECT SUM(amount_hkd) FROM ibkr_transfers \
-             WHERE CAST(strftime('%Y', transfer_date) AS INTEGER) = ?",
-        )
-        .bind(block.year)
-        .fetch_one(pool)
-        .await?;
-        let invested_adjustment = block
-            .invested
-            .map(|invested| invested - hk_invested.unwrap_or(0.0) - transferred.unwrap_or(0.0));
+        let invested_adjustment = invested_adjustment_for(pool, block.year, block.invested).await?;
 
         // Bond/deposit cells seed as overrides only for past years — the
         // sheets delete matured entries, so history needs the frozen cells,
@@ -500,6 +517,35 @@ async fn import_year_review(
         .bind(bond_interest)
         .bind(deposit_principal)
         .bind(deposit_interest)
+        .bind(crate::routes::now_timestamp())
+        .execute(pool)
+        .await?;
+        report.years_seeded += 1;
+    }
+
+    // The Overview J:K cells carry `invested` for years the YearInReview
+    // sheet has no block for (e.g. 2023's hand-entered 206523.15); seed the
+    // same adjustment so those years reproduce the sheet figure.
+    let block_years: std::collections::BTreeSet<i32> =
+        blocks.iter().map(|block| block.year).collect();
+    for row in &overview.invest_targets {
+        if block_years.contains(&row.year) {
+            continue;
+        }
+        let Some(invested_adjustment) =
+            invested_adjustment_for(pool, row.year, row.invested).await?
+        else {
+            continue;
+        };
+        sqlx::query(
+            "INSERT INTO year_review (year, invested_adjustment, updated_at) \
+             VALUES (?, ?, ?) \
+             ON CONFLICT (year) DO UPDATE SET \
+             invested_adjustment = COALESCE(year_review.invested_adjustment, \
+                 excluded.invested_adjustment)",
+        )
+        .bind(row.year)
+        .bind(invested_adjustment)
         .bind(crate::routes::now_timestamp())
         .execute(pool)
         .await?;

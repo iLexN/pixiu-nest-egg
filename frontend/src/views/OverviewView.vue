@@ -66,6 +66,10 @@ onMounted(load)
           <span>流動資產 ÷ 薪金×100</span>
           <strong>{{ fmtPercent(data.liquid_ratio) || '—' }}</strong>
         </div>
+        <div class="total-card">
+          <span>開心 Pool</span>
+          <strong>{{ fmtMoney(data.averages.pool_balance) || '—' }}</strong>
+        </div>
       </div>
       <p class="muted">
         USD→HKD {{ fmtPrice(data.rate) || '—' }} · 薪金
@@ -172,10 +176,6 @@ onMounted(load)
             <td>利息</td>
             <td class="num">{{ fmtMoney(data.averages.interest) || '—' }}</td>
           </tr>
-          <tr>
-            <td>開心 Pool</td>
-            <td class="num">{{ fmtMoney(data.averages.pool_balance) || '—' }}</td>
-          </tr>
         </tbody>
       </table>
       <p v-if="data.averages.window_start" class="muted">
@@ -231,8 +231,13 @@ onMounted(load)
         <tfoot>
           <tr>
             <td>半流動資金</td>
-            <td class="num">{{ fmtMoney(data.semi_liquid.total) || '—' }}</td>
-            <td class="muted">
+            <td class="num" :class="signClass(data.semi_liquid.vs_quarter_liquid)">
+              {{ fmtMoney(data.semi_liquid.total) || '—' }}
+            </td>
+            <td></td>
+          </tr>
+          <tr>
+            <td colspan="3" class="num muted">
               {{ fmtPercent(data.semi_liquid.share) || '—' }} · 與25%流動相差
               <span :class="signClass(data.semi_liquid.vs_quarter_liquid)">
                 {{ fmtMoney(data.semi_liquid.vs_quarter_liquid) || '—' }}
@@ -288,6 +293,38 @@ onMounted(load)
       </table>
       <p class="muted">於 股票 → 美股 → 總覽 編輯 IBKR 數字</p>
     </div>
+
+    <div class="card">
+      <h3>投資目標</h3>
+      <p class="muted">
+        近3年平均 invested
+        <strong class="avg">{{ fmtMoney(data.invest_targets.avg_invested) || '—' }}</strong>
+      </p>
+      <table>
+        <thead>
+          <tr>
+            <th>年份</th>
+            <th class="num">invested</th>
+            <th class="num">target</th>
+            <th class="num">remain</th>
+            <th class="num">增長</th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr v-for="row in data.invest_targets.rows" :key="row.year">
+            <td>{{ row.year }}</td>
+            <td class="num">{{ fmtMoney(row.invested) || '—' }}</td>
+            <td class="num">{{ fmtMoney(row.target) || '—' }}</td>
+            <td class="num" :class="signClass(row.remain)">
+              {{ fmtMoney(row.remain) || '—' }}
+            </td>
+            <td class="num" :class="signClass(row.growth)">
+              {{ fmtPercent(row.growth) || '—' }}
+            </td>
+          </tr>
+        </tbody>
+      </table>
+    </div>
     </div>
   </template>
 </template>
@@ -330,6 +367,9 @@ onMounted(load)
 .cell-input {
   width: 8rem;
   text-align: right;
+}
+.avg {
+  color: var(--text);
 }
 h3 {
   margin: 0 0 0.5rem;

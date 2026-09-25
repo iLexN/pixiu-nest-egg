@@ -5,9 +5,9 @@ use chrono::Datelike;
 use sqlx::{Row, SqlitePool};
 
 use crate::calc::{
-    active_month_rollup, active_totals, approx_eq, bank_rollup, live_totals, month_derived,
-    month_item_sums, month_running_averages, month_year_summaries, year_rollups, DepositFacts,
-    MonthItemFacts, MonthStatRow,
+    active_month_rollup, active_totals, approx_eq, bank_rollup, live_totals,
+    month_derived_with_tail, month_item_sums, month_running_averages, month_year_summaries,
+    year_rollups, DepositFacts, MonthItemFacts, MonthStatRow,
 };
 use crate::models::Market;
 use crate::xlsx::{SheetActiveSums, SheetYearSums, WorkbookData};
@@ -1132,7 +1132,9 @@ async fn check_months(
     let needs_live = stored.iter().any(|s| {
         (s.total_assets.is_none() || s.liquid_assets.is_none())
             && parse_month(&s.month).is_ok_and(|month| month >= live_from)
-    });
+    }) || stored
+        .last()
+        .is_some_and(|s| parse_month(&s.month).is_ok_and(|month| month == live_from));
     let live = if needs_live {
         let input = crate::routes::months::live_totals_input(pool).await?;
         Some(live_totals(&input))
@@ -1161,7 +1163,10 @@ async fn check_months(
             pool_input: s.pool_input,
         });
     }
-    let derived = month_derived(&stat_rows, &items);
+    // The last row's C/E cells diff against the live totals — the sheet's
+    // last-row cells do the same.
+    let tail = live.filter(|_| stat_rows.last().is_some_and(|row| row.month == live_from));
+    let derived = month_derived_with_tail(&stat_rows, &items, tail);
 
     let rate_rows =
         sqlx::query("SELECT key, value FROM app_meta WHERE key LIKE 'overview.pool_rate.%'")
@@ -1179,8 +1184,8 @@ async fn check_months(
             rates.insert(year, rate);
         }
     }
-    let years = month_year_summaries(&stat_rows, &items, &rates, &Default::default());
-    let running = month_running_averages(&stat_rows, &items);
+    let years = month_year_summaries(&stat_rows, &items, &rates, &Default::default(), tail);
+    let running = month_running_averages(&stat_rows, &items, tail);
 
     // Years containing a live-linked or edited month flag informational:
     // their aggregates legitimately move with the live cells.
@@ -1725,6 +1730,60 @@ async fn check_overview(
         ),
     ] {
         overview_compare(report, name, field, computed, sheet, false);
+    }
+
+    // J22:N27 投資目標: J22, the K invested cells, and completed-year growth
+    // must reproduce the sheet; the L/M cells and the current-year N differ
+    // by design — the sheet's per-year formulas were superseded by the
+    // unified one — so they report informational.
+    let current_year = crate::routes::today().year();
+    overview_compare(
+        report,
+        "Overview 投資目標平均",
+        "J22",
+        response.invest_targets.avg_invested,
+        cached.invest_target_avg,
+        true,
+    );
+    for sheet_row in &cached.invest_targets {
+        let computed = response
+            .invest_targets
+            .rows
+            .iter()
+            .find(|row| row.year == sheet_row.year);
+        let name = |field: &str| format!("Overview 投資目標 {} {field}", sheet_row.year);
+        overview_compare(
+            report,
+            name("invested"),
+            "K",
+            computed.and_then(|row| row.invested),
+            sheet_row.invested,
+            true,
+        );
+        overview_compare(
+            report,
+            name("target"),
+            "L",
+            computed.and_then(|row| row.target),
+            sheet_row.target,
+            false,
+        );
+        overview_compare(
+            report,
+            name("remain"),
+            "M",
+            computed.and_then(|row| row.remain),
+            sheet_row.remain,
+            false,
+        );
+        overview_compare(
+            report,
+            name("growth"),
+            "N",
+            computed.and_then(|row| row.growth),
+            sheet_row.growth,
+            sheet_row.year < current_year,
+        );
     }
     Ok(())
 }

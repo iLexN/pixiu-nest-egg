@@ -7,8 +7,8 @@ use sqlx::{Row, SqlitePool};
 
 use super::{now_timestamp, today, AppState};
 use crate::calc::{
-    month_year_summaries, year_review_rows, BondYearFacts, DepositFacts, YearReviewRecord,
-    YearReviewRow,
+    month_year_summaries, year_review_rows, BondYearFacts, DepositFacts, YearReviewInputs,
+    YearReviewRecord, YearReviewRow,
 };
 use crate::error::ApiError;
 use crate::models::{Market, YearReviewPatch};
@@ -28,23 +28,53 @@ pub async fn list(State(state): State<AppState>) -> Result<Json<YearReviewRespon
 
 pub async fn build(pool: &SqlitePool) -> Result<YearReviewResponse, ApiError> {
     let now = today();
-    let stat_rows = super::months::load_stat_rows(pool, None).await?;
+    let (stat_rows, live_tail) = super::months::load_stat_rows_live(pool).await?;
     let items = super::months::load_all_items(pool).await?;
     let rates = super::months::pool_rates(pool).await?;
     let sold_pl = super::yearly::hk_sold_pl(pool).await?;
-    let summaries = month_year_summaries(&stat_rows, &items, &rates, &sold_pl);
+    let summaries = month_year_summaries(&stat_rows, &items, &rates, &sold_pl, live_tail);
     let hk_years = super::yearly::build(pool, Market::Hk).await?.years;
     let records = load_records(pool).await?;
     let bonds = bond_facts(pool).await?;
     let deposits = deposit_facts(pool).await?;
     let transfers = ibkr_transfers_by_year(pool).await?;
+    let last_salaries = last_salaries_by_year(pool).await?;
 
     Ok(YearReviewResponse {
         today: now.to_string(),
         years: year_review_rows(
-            &summaries, &hk_years, &records, &bonds, &deposits, &transfers, now,
+            &YearReviewInputs {
+                summaries: &summaries,
+                hk_years: &hk_years,
+                records: &records,
+                bonds: &bonds,
+                deposits: &deposits,
+                transfers: &transfers,
+                last_salaries: &last_salaries,
+            },
+            now,
         ),
     })
+}
+
+/// Each year's last stored month salary — the input the derived 月薪增幅
+/// compares against the prior year's.
+async fn last_salaries_by_year(pool: &SqlitePool) -> Result<BTreeMap<i32, f64>, ApiError> {
+    let rows = sqlx::query(
+        "SELECT month, salary FROM month_stats WHERE salary IS NOT NULL ORDER BY month",
+    )
+    .fetch_all(pool)
+    .await?;
+    let mut map = BTreeMap::new();
+    for row in &rows {
+        let month: String = row.try_get("month")?;
+        let year: i32 = month
+            .get(..4)
+            .and_then(|y| y.parse().ok())
+            .ok_or_else(|| ApiError::Conflict(format!("stored month {month} is not valid")))?;
+        map.insert(year, row.try_get::<f64, _>("salary")?);
+    }
+    Ok(map)
 }
 
 /// Σ `ibkr_transfers` per calendar year — the year's IBKR 轉入.
@@ -65,7 +95,7 @@ async fn ibkr_transfers_by_year(pool: &SqlitePool) -> Result<BTreeMap<i32, f64>,
 /// The stored `year_review` records keyed by year.
 async fn load_records(pool: &SqlitePool) -> Result<BTreeMap<i32, YearReviewRecord>, ApiError> {
     let rows = sqlx::query(
-        "SELECT year, income, invested_adjustment, bond_principal, bond_interest, \
+        "SELECT year, income, invested_adjustment, salary_raise, bond_principal, bond_interest, \
          deposit_principal, deposit_interest FROM year_review",
     )
     .fetch_all(pool)
@@ -77,6 +107,7 @@ async fn load_records(pool: &SqlitePool) -> Result<BTreeMap<i32, YearReviewRecor
             YearReviewRecord {
                 income: row.try_get("income")?,
                 invested_adjustment: row.try_get("invested_adjustment")?,
+                raise: row.try_get("salary_raise")?,
                 bond_principal: row.try_get("bond_principal")?,
                 bond_interest: row.try_get("bond_interest")?,
                 deposit_principal: row.try_get("deposit_principal")?,
@@ -186,6 +217,7 @@ pub async fn update(
     }
     if patch.income.is_none()
         && patch.invested_adjustment.is_none()
+        && patch.raise.is_none()
         && patch.sold_pl.is_none()
         && patch.bond_principal.is_none()
         && patch.bond_interest.is_none()
@@ -223,13 +255,14 @@ pub async fn update(
 
     let touches_record = patch.income.is_some()
         || patch.invested_adjustment.is_some()
+        || patch.raise.is_some()
         || patch.bond_principal.is_some()
         || patch.bond_interest.is_some()
         || patch.deposit_principal.is_some()
         || patch.deposit_interest.is_some();
     if touches_record {
         let existing = sqlx::query(
-            "SELECT income, invested_adjustment, bond_principal, bond_interest, \
+            "SELECT income, invested_adjustment, salary_raise, bond_principal, bond_interest, \
              deposit_principal, deposit_interest FROM year_review WHERE year = ?",
         )
         .bind(year)
@@ -248,6 +281,7 @@ pub async fn update(
             "invested_adjustment",
             field(patch.invested_adjustment, "invested_adjustment")?,
         )?;
+        let raise = validate_signed_figure("raise", field(patch.raise, "salary_raise")?)?;
         let bond_principal = validate_figure(
             "bond_principal",
             field(patch.bond_principal, "bond_principal")?,
@@ -268,6 +302,7 @@ pub async fn update(
         if [
             income,
             invested_adjustment,
+            raise,
             bond_principal,
             bond_interest,
             deposit_principal,
@@ -283,11 +318,12 @@ pub async fn update(
         } else {
             sqlx::query(
                 "INSERT INTO year_review \
-                 (year, income, invested_adjustment, bond_principal, bond_interest, \
+                 (year, income, invested_adjustment, salary_raise, bond_principal, bond_interest, \
                   deposit_principal, deposit_interest, updated_at) \
-                 VALUES (?, ?, ?, ?, ?, ?, ?, ?) \
+                 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?) \
                  ON CONFLICT (year) DO UPDATE SET \
                  income = excluded.income, invested_adjustment = excluded.invested_adjustment, \
+                 salary_raise = excluded.salary_raise, \
                  bond_principal = excluded.bond_principal, \
                  bond_interest = excluded.bond_interest, \
                  deposit_principal = excluded.deposit_principal, \
@@ -297,6 +333,7 @@ pub async fn update(
             .bind(year)
             .bind(income)
             .bind(invested_adjustment)
+            .bind(raise)
             .bind(bond_principal)
             .bind(bond_interest)
             .bind(deposit_principal)

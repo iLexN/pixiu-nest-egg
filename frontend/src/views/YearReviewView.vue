@@ -84,6 +84,7 @@ const sections: { label: string; rows: MetricRow[] }[] = [
       },
       { label: 'invested %', get: (r) => r.investment.invested_pct, fmt: 'pct' },
       { label: 'Irene + 開心 Pool', get: (r) => r.investment.irene_pool },
+      { label: '月薪增幅', get: (r) => r.investment.raise, field: 'raise' },
     ],
   },
   {
@@ -152,8 +153,14 @@ async function saveEdit(row: YearReviewRow, field: EditField) {
     error.value = '數值必須是數字'
     return
   }
-  // sold_pl and the invested adjustment may legitimately be negative.
-  if (parsed !== null && parsed < 0 && field !== 'sold_pl' && field !== 'invested_adjustment') {
+  // sold_pl, the invested adjustment, and raise may legitimately be negative.
+  if (
+    parsed !== null &&
+    parsed < 0 &&
+    field !== 'sold_pl' &&
+    field !== 'invested_adjustment' &&
+    field !== 'raise'
+  ) {
     error.value = '數值必須是非負數字'
     return
   }
@@ -172,7 +179,7 @@ async function saveEdit(row: YearReviewRow, field: EditField) {
     <h3>回顧</h3>
     <p v-if="error" class="error">{{ error }}</p>
     <p class="muted">
-      收入、invested 調整、投資P/L 與歷史債券/定期為手動或匯入凍結值（*），點擊可修改；其餘即時計算。
+      收入、invested 調整、投資P/L 與歷史債券/定期為手動或匯入凍結值（*），點擊可修改；月薪增幅由月結薪金自動計算，（*）時為手動覆寫。
     </p>
 
     <table class="review">

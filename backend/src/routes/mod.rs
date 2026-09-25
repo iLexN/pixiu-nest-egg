@@ -2,6 +2,7 @@ pub mod aia;
 pub mod bonds;
 pub mod deposits;
 pub mod dividends;
+pub mod family;
 pub mod months;
 pub mod mpf;
 pub mod overview;
@@ -11,7 +12,7 @@ pub mod trades;
 pub mod year_review;
 pub mod yearly;
 
-use axum::routing::{get, patch, post};
+use axum::routing::{get, patch, post, put};
 use axum::Router;
 use chrono::Datelike;
 use sqlx::sqlite::SqliteRow;
@@ -23,8 +24,8 @@ use crate::calc::{
 };
 use crate::error::ApiError;
 use crate::models::{
-    Bond, BondCoupon, BondStatus, Deposit, DepositStatus, Dividend, DividendStatus, InputMode,
-    Market, Stock, Trade, TradeType,
+    Bond, BondCoupon, BondStatus, Deposit, DepositStatus, Dividend, DividendStatus, FamilyDeposit,
+    InputMode, Market, Stock, Trade, TradeType,
 };
 
 #[derive(Clone)]
@@ -57,6 +58,15 @@ pub fn api_router(state: AppState) -> Router {
         )
         .route("/deposits/{id}/receive", post(deposits::receive))
         .route("/deposits/{id}/unreceive", post(deposits::unreceive))
+        .route("/family/deposits", get(family::list).post(family::create))
+        .route("/family/deposits/summary", get(family::summary))
+        .route(
+            "/family/deposits/{id}",
+            patch(family::update).delete(family::remove),
+        )
+        .route("/family/deposits/{id}/receive", post(family::receive))
+        .route("/family/deposits/{id}/unreceive", post(family::unreceive))
+        .route("/family/holders/{holder}/note", put(family::update_note))
         .route("/dividends", get(dividends::list).post(dividends::create))
         .route("/dividends/summary", get(dividends::summary))
         .route(
@@ -313,6 +323,41 @@ pub fn row_to_deposit(row: &SqliteRow, _today: chrono::NaiveDate) -> Result<Depo
         sort_order: row.try_get("sort_order")?,
         total: deposit_total(principal, interest),
         // A deposit stays "active" until 收訖 — even past its end date.
+        status: if received_at.is_some() {
+            DepositStatus::End
+        } else {
+            DepositStatus::Active
+        },
+        end_year: parsed.year(),
+        end_month: parsed.month(),
+    })
+}
+
+pub const FAMILY_DEPOSIT_COLUMNS: &str = "id, holder, label, bank, principal, interest, \
+     start_date, end_date, received_at, note, sort_order";
+
+/// Like `row_to_deposit` minus the bank-in columns family deposits don't have;
+/// `status` derives from `received_at` only (never auto-ended by date).
+pub fn row_to_family_deposit(row: &SqliteRow) -> Result<FamilyDeposit, ApiError> {
+    let end_date: String = row.try_get("end_date")?;
+    let parsed = chrono::NaiveDate::parse_from_str(&end_date, "%Y-%m-%d")
+        .map_err(|_| ApiError::Conflict(format!("stored end_date {end_date} is not valid")))?;
+    let principal: Option<f64> = row.try_get("principal")?;
+    let interest: Option<f64> = row.try_get("interest")?;
+    let received_at: Option<String> = row.try_get("received_at")?;
+    Ok(FamilyDeposit {
+        id: row.try_get("id")?,
+        holder: row.try_get("holder")?,
+        label: row.try_get("label")?,
+        bank: row.try_get("bank")?,
+        principal,
+        interest,
+        start_date: row.try_get("start_date")?,
+        end_date,
+        received_at: received_at.clone(),
+        note: row.try_get("note")?,
+        sort_order: row.try_get("sort_order")?,
+        total: deposit_total(principal, interest),
         status: if received_at.is_some() {
             DepositStatus::End
         } else {
