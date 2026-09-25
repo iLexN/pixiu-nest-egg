@@ -1,12 +1,12 @@
-use axum::extract::{Query, State};
 use axum::Json;
+use axum::extract::{Query, State};
 use serde::{Deserialize, Serialize};
 use sqlx::{Row, SqlitePool};
 
-use super::{parse_market, AppState};
+use super::{AppState, parse_market};
 use crate::calc::{
-    market_totals, mpf_last_month, mpf_max, sector_rollup, summarize, MarketTotals, MpfPoint,
-    RollupInput, SectorRollup, StockSummary, TradeFacts,
+    MarketTotals, MpfPoint, RollupInput, SectorRollup, StockSummary, TradeFacts, market_totals,
+    mpf_last_month, mpf_max, sector_rollup, summarize,
 };
 use crate::error::ApiError;
 use crate::models::{Market, MarketFigures, Stock, TradeType};

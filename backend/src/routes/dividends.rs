@@ -1,16 +1,16 @@
+use axum::Json;
 use axum::extract::{Path, Query, State};
 use axum::http::StatusCode;
-use axum::Json;
 use chrono::Datelike;
 use serde::{Deserialize, Serialize};
 use sqlx::SqlitePool;
 
 use super::{
-    now_timestamp, record_receipt_item, row_to_dividend, today, AppState, DIVIDEND_SELECT,
+    AppState, DIVIDEND_SELECT, now_timestamp, record_receipt_item, row_to_dividend, today,
 };
 use crate::calc::{
-    dividend_year_rollups, holdings_snapshot, validate_dividend, DividendFacts, DividendInput,
-    DividendYearRollup, TradeFacts, ValidatedDividend,
+    DividendFacts, DividendInput, DividendYearRollup, TradeFacts, ValidatedDividend,
+    dividend_year_rollups, holdings_snapshot, validate_dividend,
 };
 use crate::error::ApiError;
 use crate::models::{Dividend, DividendPatch, Market, NewDividend, TradeType};
@@ -47,7 +47,7 @@ pub async fn list(
                 return Err(ApiError::field(
                     "status",
                     "status must be pending or received",
-                ))
+                ));
             }
         }
     }
@@ -66,7 +66,7 @@ pub async fn list(
         " ORDER BY d.pay_date ASC, d.id ASC"
     });
 
-    let mut statement = sqlx::query(&sql);
+    let mut statement = sqlx::query(sqlx::AssertSqlSafe(sql));
     if let Some(market) = query.market.as_deref() {
         statement = statement.bind(super::parse_market(market)?.as_str());
     }
@@ -391,7 +391,7 @@ pub async fn summary(
         sql.push_str(" WHERE s.market = ?");
     }
     sql.push_str(" ORDER BY d.pay_date ASC, d.id ASC");
-    let mut statement = sqlx::query(&sql);
+    let mut statement = sqlx::query(sqlx::AssertSqlSafe(sql));
     if let Some(market) = query.market.as_deref() {
         statement = statement.bind(super::parse_market(market)?.as_str());
     }
@@ -471,10 +471,12 @@ pub async fn insert_dividend(
 }
 
 pub async fn load_one(pool: &SqlitePool, id: i64) -> Result<Dividend, ApiError> {
-    let row = sqlx::query(&format!("{DIVIDEND_SELECT} WHERE d.id = ?"))
-        .bind(id)
-        .fetch_optional(pool)
-        .await?
-        .ok_or_else(|| ApiError::NotFound(format!("dividend {id} not found")))?;
+    let row = sqlx::query(sqlx::AssertSqlSafe(format!(
+        "{DIVIDEND_SELECT} WHERE d.id = ?"
+    )))
+    .bind(id)
+    .fetch_optional(pool)
+    .await?
+    .ok_or_else(|| ApiError::NotFound(format!("dividend {id} not found")))?;
     row_to_dividend(&row)
 }

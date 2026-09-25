@@ -1,15 +1,14 @@
+use axum::Json;
 use axum::extract::{Path, Query, State};
 use axum::http::StatusCode;
-use axum::Json;
 use chrono::Datelike;
 use serde::{Deserialize, Serialize};
 use sqlx::SqlitePool;
 
-use super::{now_timestamp, record_receipt_item, row_to_deposit, today, AppState, DEPOSIT_COLUMNS};
+use super::{AppState, DEPOSIT_COLUMNS, now_timestamp, record_receipt_item, row_to_deposit, today};
 use crate::calc::{
-    active_month_rollup, active_totals, bank_rollup, validate_deposit, year_rollups,
     ActiveMonthBucket, ActiveTotals, BankRollup, DepositFacts, DepositInput, ValidatedDeposit,
-    YearRollup,
+    YearRollup, active_month_rollup, active_totals, bank_rollup, validate_deposit, year_rollups,
 };
 use crate::error::ApiError;
 use crate::models::{Deposit, DepositPatch, NewDeposit};
@@ -52,7 +51,7 @@ pub async fn list(
         " ORDER BY end_date ASC, sort_order ASC, id ASC"
     });
 
-    let mut statement = sqlx::query(&sql);
+    let mut statement = sqlx::query(sqlx::AssertSqlSafe(sql));
     if let Some(year) = query.year {
         statement = statement
             .bind(format!("{year:04}-01-01"))
@@ -422,9 +421,9 @@ pub async fn insert_deposit(
 }
 
 pub async fn load_one(pool: &SqlitePool, id: i64) -> Result<Deposit, ApiError> {
-    let row = sqlx::query(&format!(
+    let row = sqlx::query(sqlx::AssertSqlSafe(format!(
         "SELECT {DEPOSIT_COLUMNS} FROM deposits WHERE id = ?"
-    ))
+    )))
     .bind(id)
     .fetch_optional(pool)
     .await?
@@ -433,9 +432,9 @@ pub async fn load_one(pool: &SqlitePool, id: i64) -> Result<Deposit, ApiError> {
 }
 
 pub async fn load_all(pool: &SqlitePool) -> Result<Vec<Deposit>, ApiError> {
-    let rows = sqlx::query(&format!(
+    let rows = sqlx::query(sqlx::AssertSqlSafe(format!(
         "SELECT {DEPOSIT_COLUMNS} FROM deposits ORDER BY sort_order, id"
-    ))
+    )))
     .fetch_all(pool)
     .await?;
     let today = today();

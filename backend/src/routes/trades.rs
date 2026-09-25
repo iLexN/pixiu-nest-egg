@@ -1,11 +1,11 @@
+use axum::Json;
 use axum::extract::{Path, Query, State};
 use axum::http::StatusCode;
-use axum::Json;
 use serde::Deserialize;
 use sqlx::SqlitePool;
 
-use super::{now_timestamp, parse_market, row_to_trade, AppState, TRADE_SELECT};
-use crate::calc::{validate_trade, TradeInput, ValidatedTrade};
+use super::{AppState, TRADE_SELECT, now_timestamp, parse_market, row_to_trade};
+use crate::calc::{TradeInput, ValidatedTrade, validate_trade};
 use crate::error::ApiError;
 use crate::models::{InputMode, Market, NewTrade, Trade, TradePatch};
 
@@ -55,7 +55,7 @@ pub async fn list(
         " ORDER BY t.trade_date ASC, t.id ASC"
     });
 
-    let mut statement = sqlx::query(&sql);
+    let mut statement = sqlx::query(sqlx::AssertSqlSafe(sql));
     if let Some(market) = query.market.as_deref() {
         statement = statement.bind(parse_market(market)?.as_str());
     }
@@ -222,11 +222,13 @@ pub async fn insert_trade(
 }
 
 pub async fn load_one(pool: &SqlitePool, id: i64) -> Result<Trade, ApiError> {
-    let row = sqlx::query(&format!("{TRADE_SELECT} WHERE t.id = ?"))
-        .bind(id)
-        .fetch_optional(pool)
-        .await?
-        .ok_or_else(|| ApiError::NotFound(format!("trade {id} not found")))?;
+    let row = sqlx::query(sqlx::AssertSqlSafe(format!(
+        "{TRADE_SELECT} WHERE t.id = ?"
+    )))
+    .bind(id)
+    .fetch_optional(pool)
+    .await?
+    .ok_or_else(|| ApiError::NotFound(format!("trade {id} not found")))?;
     row_to_trade(&row)
 }
 

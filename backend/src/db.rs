@@ -1,17 +1,17 @@
 use std::path::Path;
 use std::str::FromStr;
 
-use sqlx::sqlite::{SqliteConnectOptions, SqlitePoolOptions};
 use sqlx::SqlitePool;
+use sqlx::sqlite::{SqliteConnectOptions, SqlitePoolOptions};
 
 pub const DEFAULT_DB_PATH: &str = "data/wealth.db";
 
 /// Open (creating if needed) the SQLite database at `path` and run migrations.
 pub async fn connect(path: &str) -> anyhow::Result<SqlitePool> {
-    if let Some(parent) = Path::new(path).parent() {
-        if !parent.as_os_str().is_empty() {
-            std::fs::create_dir_all(parent)?;
-        }
+    if let Some(parent) = Path::new(path).parent()
+        && !parent.as_os_str().is_empty()
+    {
+        std::fs::create_dir_all(parent)?;
     }
     let options = SqliteConnectOptions::new()
         .filename(path)

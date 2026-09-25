@@ -1,14 +1,14 @@
+use axum::Json;
 use axum::extract::{Path, State};
 use axum::http::StatusCode;
-use axum::Json;
 use serde::Serialize;
 use sqlx::sqlite::SqliteRow;
 use sqlx::{Row, SqlitePool};
 
-use super::{now_timestamp, today, AppState};
+use super::{AppState, now_timestamp, today};
 use crate::calc::{
-    mpf_figures, mpf_last_month, mpf_max, mpf_totals, validate_mpf_account, MpfAccountFacts,
-    MpfAccountInput, MpfPoint, MpfTotals,
+    MpfAccountFacts, MpfAccountInput, MpfPoint, MpfTotals, mpf_figures, mpf_last_month, mpf_max,
+    mpf_totals, validate_mpf_account,
 };
 use crate::error::ApiError;
 use crate::models::{MpfAccount, MpfAccountPatch, MpfHistoryRow, MpfNotePatch, NewMpfAccount};
@@ -70,9 +70,9 @@ fn row_to_history(row: &SqliteRow) -> Result<MpfHistoryRow, ApiError> {
 }
 
 pub async fn load_stored(pool: &SqlitePool, id: i64) -> Result<StoredAccount, ApiError> {
-    let row = sqlx::query(&format!(
+    let row = sqlx::query(sqlx::AssertSqlSafe(format!(
         "SELECT {MPF_COLUMNS} FROM mpf_accounts WHERE id = ?"
-    ))
+    )))
     .bind(id)
     .fetch_optional(pool)
     .await?
@@ -81,9 +81,9 @@ pub async fn load_stored(pool: &SqlitePool, id: i64) -> Result<StoredAccount, Ap
 }
 
 pub async fn load_all_stored(pool: &SqlitePool) -> Result<Vec<StoredAccount>, ApiError> {
-    let rows = sqlx::query(&format!(
+    let rows = sqlx::query(sqlx::AssertSqlSafe(format!(
         "SELECT {MPF_COLUMNS} FROM mpf_accounts ORDER BY sort_order, id"
-    ))
+    )))
     .fetch_all(pool)
     .await?;
     rows.iter().map(row_to_stored).collect()
@@ -97,17 +97,19 @@ pub async fn load_history(
          FROM mpf_history";
     let rows = match account_id {
         Some(id) => {
-            sqlx::query(&format!(
+            sqlx::query(sqlx::AssertSqlSafe(format!(
                 "{sql} WHERE account_id = ? ORDER BY recorded_on, id"
-            ))
+            )))
             .bind(id)
             .fetch_all(pool)
             .await?
         }
         None => {
-            sqlx::query(&format!("{sql} ORDER BY recorded_on, id"))
-                .fetch_all(pool)
-                .await?
+            sqlx::query(sqlx::AssertSqlSafe(format!(
+                "{sql} ORDER BY recorded_on, id"
+            )))
+            .fetch_all(pool)
+            .await?
         }
     };
     rows.iter().map(row_to_history).collect()

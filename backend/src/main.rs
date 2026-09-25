@@ -6,7 +6,7 @@ use tower_http::cors::CorsLayer;
 use tower_http::services::{ServeDir, ServeFile};
 use tower_http::trace::TraceLayer;
 use wealth_backend::db;
-use wealth_backend::routes::{api_router, AppState};
+use wealth_backend::routes::{AppState, api_router};
 
 const DEFAULT_ADDR: &str = "127.0.0.1:8787";
 

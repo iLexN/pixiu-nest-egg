@@ -7,8 +7,8 @@
 use std::collections::HashMap;
 use std::path::Path;
 
-use anyhow::{anyhow, Context};
-use calamine::{open_workbook_auto, Data, Reader};
+use anyhow::{Context, anyhow};
+use calamine::{Data, Reader, open_workbook_auto};
 
 use crate::models::{InputMode, ManualAssetKind, Market, MonthItemCategory};
 
@@ -739,7 +739,7 @@ fn parse_trades(rows: &Rows, market: Market) -> anyhow::Result<Vec<SheetTrade>> 
                 return Err(anyhow!(
                     "row {source_row} of the {} trade sheet has neither buy total nor fee",
                     market.as_str()
-                ))
+                ));
             }
         };
 
@@ -1106,7 +1106,7 @@ fn parse_bonds(rows: &Rows) -> anyhow::Result<Vec<SheetBond>> {
                     "{BOND_SHEET} coupon block at row {} matches no bond (發行編號 {:?})",
                     header + 1,
                     issue_ref
-                ))
+                ));
             }
         }
     }
@@ -2077,10 +2077,11 @@ mod tests {
         assert_eq!(sc4501.principal, Some(58000.0));
 
         // Interest-only row: no label, no principal.
-        assert!(data
-            .deposits
-            .iter()
-            .any(|d| d.label.is_none() && d.principal.is_none() && d.interest == Some(539.25)));
+        assert!(
+            data.deposits
+                .iter()
+                .any(|d| d.label.is_none() && d.principal.is_none() && d.interest == Some(539.25))
+        );
 
         // 定期!B1 and the month table (10月: Total 146278 / 利息 1278 / 定期 145000).
         assert_eq!(data.deposit_cached.active_principal, Some(445000.0));
@@ -2278,10 +2279,12 @@ mod tests {
             .iter()
             .find(|m| m.month == "2024-03-01")
             .expect("2024-03");
-        assert!(mar24
-            .items
-            .iter()
-            .any(|i| i.category == MonthItemCategory::Income && i.amount == 67680.0));
+        assert!(
+            mar24
+                .items
+                .iter()
+                .any(|i| i.category == MonthItemCategory::Income && i.amount == 67680.0)
+        );
 
         assert!(data.month_stat.years.iter().any(|y| y.year == 2024));
         assert_eq!(data.overview.salary, Some(52700.0));

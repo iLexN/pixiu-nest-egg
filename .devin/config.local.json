@@ -44,7 +44,8 @@
       "Exec(kill)",
       "Exec(xargs kill)",
       "Exec(seq)",
-      "Exec(npm ls)"
+      "Exec(npm ls)",
+      "Exec(jq)"
     ]
   }
 }

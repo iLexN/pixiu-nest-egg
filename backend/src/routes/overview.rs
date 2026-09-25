@@ -1,10 +1,10 @@
-use axum::extract::State;
 use axum::Json;
+use axum::extract::State;
 use chrono::Datelike;
 use sqlx::SqlitePool;
 
-use super::{aia, months, mpf, now_timestamp, summary, today, AppState};
-use crate::calc::{live_totals, trailing_averages, FieldError};
+use super::{AppState, aia, months, mpf, now_timestamp, summary, today};
+use crate::calc::{FieldError, live_totals, trailing_averages};
 use crate::error::ApiError;
 use crate::models::{
     IbkrBlock, IbkrPatch, ManualAsset, ManualAssetKind, OverviewAssetRow, OverviewResponse,
@@ -72,18 +72,18 @@ pub async fn update_ibkr(
         ("hkd_cash", patch.hkd_cash),
         ("usd_cash", patch.usd_cash),
     ] {
-        if let Some(Some(value)) = value {
-            if !value.is_finite() || value < 0.0 {
-                errors.push(FieldError::new(field, "value must not be negative"));
-            }
+        if let Some(Some(value)) = value
+            && (!value.is_finite() || value < 0.0)
+        {
+            errors.push(FieldError::new(field, "value must not be negative"));
         }
     }
     // A transfer delta may be negative — it records a withdrawal or undoes a
     // mistyped entry; it must only be finite.
-    if let Some(delta) = patch.transfer_hkd {
-        if !delta.is_finite() {
-            errors.push(FieldError::new("transfer_hkd", "value must be a number"));
-        }
+    if let Some(delta) = patch.transfer_hkd
+        && !delta.is_finite()
+    {
+        errors.push(FieldError::new("transfer_hkd", "value must be a number"));
     }
     let transfer_date = match &patch.transfer_date {
         Some(date) => match chrono::NaiveDate::parse_from_str(date, "%Y-%m-%d") {

@@ -2,15 +2,15 @@
 //! `deposits.rs`, but hard-isolated — this module must never credit a cash
 //! row or record a month item, because family money is not the user's money.
 
+use axum::Json;
 use axum::extract::{Path, Query, State};
 use axum::http::StatusCode;
-use axum::Json;
 use chrono::Datelike;
 use serde::{Deserialize, Serialize};
 use sqlx::SqlitePool;
 
-use super::{now_timestamp, row_to_family_deposit, today, AppState, FAMILY_DEPOSIT_COLUMNS};
-use crate::calc::{active_totals, validate_deposit, DepositFacts, DepositInput};
+use super::{AppState, FAMILY_DEPOSIT_COLUMNS, now_timestamp, row_to_family_deposit, today};
+use crate::calc::{DepositFacts, DepositInput, active_totals, validate_deposit};
 use crate::error::ApiError;
 use crate::models::{FamilyDeposit, FamilyDepositPatch, MpfNotePatch, NewFamilyDeposit};
 use crate::mpf;
@@ -65,7 +65,7 @@ pub async fn list(
         " ORDER BY end_date ASC, sort_order ASC, id ASC"
     });
 
-    let mut statement = sqlx::query(&sql);
+    let mut statement = sqlx::query(sqlx::AssertSqlSafe(sql));
     if let Some(holder) = query.holder.as_deref() {
         statement = statement.bind(holder);
     }
@@ -408,9 +408,9 @@ pub async fn summary(
 }
 
 async fn load_one(pool: &SqlitePool, id: i64) -> Result<FamilyDeposit, ApiError> {
-    let row = sqlx::query(&format!(
+    let row = sqlx::query(sqlx::AssertSqlSafe(format!(
         "SELECT {FAMILY_DEPOSIT_COLUMNS} FROM family_deposits WHERE id = ?"
-    ))
+    )))
     .bind(id)
     .fetch_optional(pool)
     .await?
@@ -419,9 +419,9 @@ async fn load_one(pool: &SqlitePool, id: i64) -> Result<FamilyDeposit, ApiError>
 }
 
 async fn load_all(pool: &SqlitePool) -> Result<Vec<FamilyDeposit>, ApiError> {
-    let rows = sqlx::query(&format!(
+    let rows = sqlx::query(sqlx::AssertSqlSafe(format!(
         "SELECT {FAMILY_DEPOSIT_COLUMNS} FROM family_deposits ORDER BY sort_order, id"
-    ))
+    )))
     .fetch_all(pool)
     .await?;
     rows.iter()

@@ -5,14 +5,14 @@
 
 use std::collections::HashMap;
 
-use anyhow::{anyhow, Context};
+use anyhow::{Context, anyhow};
 use chrono::Datelike;
 use sqlx::{Row, SqlitePool};
 
 use crate::calc::{
-    approx_eq, validate_aia_policy, validate_bond, validate_coupon, validate_deposit,
-    validate_dividend, validate_mpf_account, validate_trade, AiaPolicyInput, BondInput,
-    CouponInput, DepositInput, MpfAccountInput, TradeInput,
+    AiaPolicyInput, BondInput, CouponInput, DepositInput, MpfAccountInput, TradeInput, approx_eq,
+    validate_aia_policy, validate_bond, validate_coupon, validate_deposit, validate_dividend,
+    validate_mpf_account, validate_trade,
 };
 use crate::models::Market;
 use crate::xlsx::{
@@ -191,10 +191,11 @@ async fn seed_market_figures(pool: &SqlitePool, data: &WorkbookData) -> anyhow::
             // so shrink the assumed cost if the implied amount would exceed
             // the sheet's own `max net` — the row stays consistent with both
             // cached figures.
-            if rate > 0.0 && cost > 0.0 {
-                if let Some(max_amount) = cached.max_amount.filter(|m| *m > 0.0) {
-                    cost = cost.min(max_amount / rate);
-                }
+            if rate > 0.0
+                && cost > 0.0
+                && let Some(max_amount) = cached.max_amount.filter(|m| *m > 0.0)
+            {
+                cost = cost.min(max_amount / rate);
             }
             // A rate at or below −100% — or a non-finite cell — would seed a
             // worthless row, so skip it rather than store garbage.
@@ -627,12 +628,12 @@ async fn import_market(pool: &SqlitePool, sheets: &MarketSheets) -> anyhow::Resu
             validated.shares,
             validated.total,
         );
-        if let Some(remaining) = existing.get_mut(&key) {
-            if *remaining > 0 {
-                *remaining -= 1;
-                report.trades_skipped += 1;
-                continue;
-            }
+        if let Some(remaining) = existing.get_mut(&key)
+            && *remaining > 0
+        {
+            *remaining -= 1;
+            report.trades_skipped += 1;
+            continue;
         }
 
         let now = crate::routes::now_timestamp();
@@ -759,12 +760,12 @@ async fn import_dividends(
         };
 
         let key = DividendKey::new(stock_id, &dividend.pay_date, dividend.amount);
-        if let Some(remaining) = existing.get_mut(&key) {
-            if *remaining > 0 {
-                *remaining -= 1;
-                report.dividends_skipped += 1;
-                continue;
-            }
+        if let Some(remaining) = existing.get_mut(&key)
+            && *remaining > 0
+        {
+            *remaining -= 1;
+            report.dividends_skipped += 1;
+            continue;
         }
 
         let validated = validate_dividend(crate::calc::DividendInput {
@@ -1023,26 +1024,26 @@ async fn import_deposits(
             validated.principal,
             validated.interest,
         );
-        if let Some(remaining) = existing.get_mut(&key) {
-            if *remaining > 0 {
-                *remaining -= 1;
-                report.deposits_skipped += 1;
-                // Backfill start_date on rows already stored without one —
-                // a non-NULL start_date is never overwritten.
-                if let Some(start_date) = note2_start_date(deposit.note2.as_deref()) {
-                    report.start_dates_seeded += sqlx::query(
-                        "UPDATE deposits SET start_date = ? \
+        if let Some(remaining) = existing.get_mut(&key)
+            && *remaining > 0
+        {
+            *remaining -= 1;
+            report.deposits_skipped += 1;
+            // Backfill start_date on rows already stored without one —
+            // a non-NULL start_date is never overwritten.
+            if let Some(start_date) = note2_start_date(deposit.note2.as_deref()) {
+                report.start_dates_seeded += sqlx::query(
+                    "UPDATE deposits SET start_date = ? \
                          WHERE start_date IS NULL AND note2 = ? AND end_date = ?",
-                    )
-                    .bind(&start_date)
-                    .bind(deposit.note2.as_deref())
-                    .bind(&deposit.end_date)
-                    .execute(pool)
-                    .await?
-                    .rows_affected() as usize;
-                }
-                continue;
+                )
+                .bind(&start_date)
+                .bind(deposit.note2.as_deref())
+                .bind(&deposit.end_date)
+                .execute(pool)
+                .await?
+                .rows_affected() as usize;
             }
+            continue;
         }
 
         let now = crate::routes::now_timestamp();
@@ -1227,26 +1228,24 @@ async fn import_months(pool: &SqlitePool, data: &WorkbookData) -> anyhow::Result
     if crate::mpf::meta_get(pool, crate::routes::months::SALARY_KEY)
         .await?
         .is_none()
+        && let Some(salary) = data.overview.salary
     {
-        if let Some(salary) = data.overview.salary {
-            crate::mpf::meta_put(
-                pool,
-                crate::routes::months::SALARY_KEY,
-                Some(&salary.to_string()),
-            )
-            .await?;
-            report.settings_seeded += 1;
-        }
+        crate::mpf::meta_put(
+            pool,
+            crate::routes::months::SALARY_KEY,
+            Some(&salary.to_string()),
+        )
+        .await?;
+        report.settings_seeded += 1;
     }
     let rate_key = crate::routes::months::pool_rate_key;
     if crate::mpf::meta_get(pool, &rate_key(current_year))
         .await?
         .is_none()
+        && let Some(rate) = data.overview.pool_rate
     {
-        if let Some(rate) = data.overview.pool_rate {
-            crate::mpf::meta_put(pool, &rate_key(current_year), Some(&rate.to_string())).await?;
-            report.settings_seeded += 1;
-        }
+        crate::mpf::meta_put(pool, &rate_key(current_year), Some(&rate.to_string())).await?;
+        report.settings_seeded += 1;
     }
     // Past years' rates solve from the sheet's pool chain:
     // M(y) = M(y−1) + H(y)·rate − G(y) + N(y).
@@ -1308,11 +1307,11 @@ async fn import_months(pool: &SqlitePool, data: &WorkbookData) -> anyhow::Result
             data.us_account.usd_cash,
         ),
     ] {
-        if let Some(value) = value {
-            if crate::mpf::meta_get(pool, key).await?.is_none() {
-                crate::mpf::meta_put(pool, key, Some(&value.to_string())).await?;
-                report.settings_seeded += 1;
-            }
+        if let Some(value) = value
+            && crate::mpf::meta_get(pool, key).await?.is_none()
+        {
+            crate::mpf::meta_put(pool, key, Some(&value.to_string())).await?;
+            report.settings_seeded += 1;
         }
     }
 
@@ -1569,12 +1568,10 @@ async fn import_aia(pool: &SqlitePool, data: &WorkbookData) -> anyhow::Result<Ai
     if crate::mpf::meta_get(pool, crate::routes::aia::RATE_KEY)
         .await?
         .is_none()
+        && let Some(rate) = data.aia_cached.usd_hkd_rate
     {
-        if let Some(rate) = data.aia_cached.usd_hkd_rate {
-            crate::mpf::meta_put(pool, crate::routes::aia::RATE_KEY, Some(&rate.to_string()))
-                .await?;
-            report.rate_seeded = 1;
-        }
+        crate::mpf::meta_put(pool, crate::routes::aia::RATE_KEY, Some(&rate.to_string())).await?;
+        report.rate_seeded = 1;
     }
 
     let (excluded, warning) = reconcile_aia_excluded(&data.aia, &data.aia_cached);

@@ -1,15 +1,15 @@
+use axum::Json;
 use axum::extract::{Path, Query, State};
 use axum::http::StatusCode;
-use axum::Json;
 use serde::{Deserialize, Serialize};
 use sqlx::sqlite::SqliteRow;
 use sqlx::{Row, SqlitePool};
 
-use super::{now_timestamp, today, AppState};
+use super::{AppState, now_timestamp, today};
 use crate::calc::{
-    aia_balance_pct, aia_totals, apply_aia_payment, apply_aia_withdrawal, next_premium_due,
-    undo_aia_event_amount, validate_aia_event, validate_aia_policy, AiaEventInput, AiaPolicyFacts,
-    AiaPolicyInput, AiaTotals, ValidatedAiaPolicy,
+    AiaEventInput, AiaPolicyFacts, AiaPolicyInput, AiaTotals, ValidatedAiaPolicy, aia_balance_pct,
+    aia_totals, apply_aia_payment, apply_aia_withdrawal, next_premium_due, undo_aia_event_amount,
+    validate_aia_event, validate_aia_policy,
 };
 use crate::error::ApiError;
 use crate::models::{
@@ -82,7 +82,7 @@ pub fn facts_of(policy: &AiaPolicy) -> AiaPolicyFacts {
 }
 
 pub async fn load_policy(pool: &SqlitePool, id: i64) -> Result<AiaPolicy, ApiError> {
-    let row = sqlx::query(&format!("{AIA_SELECT} WHERE p.id = ?"))
+    let row = sqlx::query(sqlx::AssertSqlSafe(format!("{AIA_SELECT} WHERE p.id = ?")))
         .bind(id)
         .fetch_optional(pool)
         .await?
@@ -91,20 +91,24 @@ pub async fn load_policy(pool: &SqlitePool, id: i64) -> Result<AiaPolicy, ApiErr
 }
 
 pub async fn load_all_policies(pool: &SqlitePool) -> Result<Vec<AiaPolicy>, ApiError> {
-    let rows = sqlx::query(&format!("{AIA_SELECT} ORDER BY p.sort_order, p.id"))
-        .fetch_all(pool)
-        .await?;
+    let rows = sqlx::query(sqlx::AssertSqlSafe(format!(
+        "{AIA_SELECT} ORDER BY p.sort_order, p.id"
+    )))
+    .fetch_all(pool)
+    .await?;
     rows.iter()
         .map(row_to_policy)
         .collect::<Result<Vec<_>, _>>()
 }
 
 pub async fn load_event(pool: &SqlitePool, id: i64) -> Result<AiaEvent, ApiError> {
-    let row = sqlx::query(&format!("{EVENT_SELECT} WHERE e.id = ?"))
-        .bind(id)
-        .fetch_optional(pool)
-        .await?
-        .ok_or_else(|| ApiError::NotFound(format!("aia event {id} not found")))?;
+    let row = sqlx::query(sqlx::AssertSqlSafe(format!(
+        "{EVENT_SELECT} WHERE e.id = ?"
+    )))
+    .bind(id)
+    .fetch_optional(pool)
+    .await?
+    .ok_or_else(|| ApiError::NotFound(format!("aia event {id} not found")))?;
     row_to_event(&row)
 }
 
@@ -337,10 +341,10 @@ pub async fn update_rate(
     State(state): State<AppState>,
     Json(body): Json<AiaRatePatch>,
 ) -> Result<Json<RateResponse>, ApiError> {
-    if let Some(rate) = body.rate {
-        if !rate.is_finite() || rate <= 0.0 {
-            return Err(ApiError::field("rate", "rate must be a positive number"));
-        }
+    if let Some(rate) = body.rate
+        && (!rate.is_finite() || rate <= 0.0)
+    {
+        return Err(ApiError::field("rate", "rate must be a positive number"));
     }
     let value = body.rate.map(|rate| rate.to_string());
     crate::mpf::meta_put(&state.pool, RATE_KEY, value.as_deref()).await?;
@@ -364,7 +368,7 @@ pub async fn list_events(
         sql.push_str(" WHERE e.policy_id = ?");
     }
     sql.push_str(" ORDER BY e.event_date, e.id");
-    let mut statement = sqlx::query(&sql);
+    let mut statement = sqlx::query(sqlx::AssertSqlSafe(sql));
     if let Some(policy_id) = query.policy_id {
         statement = statement.bind(policy_id);
     }
@@ -381,9 +385,9 @@ pub async fn load_policy_events(
     pool: &SqlitePool,
     policy_id: i64,
 ) -> Result<Vec<AiaEvent>, ApiError> {
-    let rows = sqlx::query(&format!(
+    let rows = sqlx::query(sqlx::AssertSqlSafe(format!(
         "{EVENT_SELECT} WHERE e.policy_id = ? ORDER BY e.event_date, e.id"
-    ))
+    )))
     .bind(policy_id)
     .fetch_all(pool)
     .await?;
@@ -407,7 +411,7 @@ pub async fn create_event(
     .map_err(ApiError::Validation)?;
 
     let mut tx = state.pool.begin().await?;
-    let row = sqlx::query(&format!("{AIA_SELECT} WHERE p.id = ?"))
+    let row = sqlx::query(sqlx::AssertSqlSafe(format!("{AIA_SELECT} WHERE p.id = ?")))
         .bind(body.policy_id)
         .fetch_optional(&mut *tx)
         .await?
@@ -488,14 +492,16 @@ pub async fn remove_event(
     Path(id): Path<i64>,
 ) -> Result<StatusCode, ApiError> {
     let mut tx = state.pool.begin().await?;
-    let row = sqlx::query(&format!("{EVENT_SELECT} WHERE e.id = ?"))
-        .bind(id)
-        .fetch_optional(&mut *tx)
-        .await?
-        .ok_or_else(|| ApiError::NotFound(format!("aia event {id} not found")))?;
+    let row = sqlx::query(sqlx::AssertSqlSafe(format!(
+        "{EVENT_SELECT} WHERE e.id = ?"
+    )))
+    .bind(id)
+    .fetch_optional(&mut *tx)
+    .await?
+    .ok_or_else(|| ApiError::NotFound(format!("aia event {id} not found")))?;
     let event = row_to_event(&row)?;
 
-    let policy_row = sqlx::query(&format!("{AIA_SELECT} WHERE p.id = ?"))
+    let policy_row = sqlx::query(sqlx::AssertSqlSafe(format!("{AIA_SELECT} WHERE p.id = ?")))
         .bind(event.policy_id)
         .fetch_one(&mut *tx)
         .await?;

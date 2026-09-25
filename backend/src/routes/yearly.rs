@@ -1,13 +1,13 @@
 use std::collections::{BTreeMap, HashMap};
 
-use axum::extract::{Path, Query, State};
 use axum::Json;
+use axum::extract::{Path, Query, State};
 use chrono::Datelike;
 use serde::{Deserialize, Serialize};
 use sqlx::{Row, SqlitePool};
 
-use super::{now_timestamp, parse_market, today, AppState};
-use crate::calc::{yearly_rows, DividendFacts, TradeFacts, YearRow, YearSnapshot};
+use super::{AppState, now_timestamp, parse_market, today};
+use crate::calc::{DividendFacts, TradeFacts, YearRow, YearSnapshot, yearly_rows};
 use crate::error::ApiError;
 use crate::models::{Market, TradeType, YearlyPatch};
 

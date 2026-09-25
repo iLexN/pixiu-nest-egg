@@ -1,12 +1,12 @@
 use std::collections::HashSet;
 
+use axum::Json;
 use axum::extract::{Path, Query, State};
 use axum::http::StatusCode;
-use axum::Json;
 use serde::Deserialize;
 use sqlx::SqlitePool;
 
-use super::{now_timestamp, parse_market, row_to_stock, AppState, STOCK_COLUMNS};
+use super::{AppState, STOCK_COLUMNS, now_timestamp, parse_market, row_to_stock};
 use crate::error::ApiError;
 use crate::models::{Market, NewStock, PriceReport, Stock, StockPatch};
 use crate::prices;
@@ -36,7 +36,7 @@ pub async fn load_stocks(
             ""
         }
     );
-    let mut statement = sqlx::query(&sql);
+    let mut statement = sqlx::query(sqlx::AssertSqlSafe(sql));
     if let Some(market) = market {
         statement = statement.bind(market.as_str());
     }
@@ -148,16 +148,15 @@ pub async fn update(
     let code = match patch.code.as_deref().map(str::trim) {
         Some("") => return Err(ApiError::field("code", "股票代碼 is required")),
         Some(code) => {
-            if code != existing.code {
-                if let Some(other) = find_by_code(&state.pool, existing.market, code).await? {
-                    if other.id != id {
-                        return Err(ApiError::Conflict(format!(
-                            "{} already exists in market {}",
-                            code,
-                            existing.market.as_str()
-                        )));
-                    }
-                }
+            if code != existing.code
+                && let Some(other) = find_by_code(&state.pool, existing.market, code).await?
+                && other.id != id
+            {
+                return Err(ApiError::Conflict(format!(
+                    "{} already exists in market {}",
+                    code,
+                    existing.market.as_str()
+                )));
             }
             code.to_string()
         }
@@ -234,11 +233,13 @@ pub async fn remove(
 }
 
 pub async fn load_one(pool: &SqlitePool, id: i64) -> Result<Stock, ApiError> {
-    let row = sqlx::query(&format!("SELECT {STOCK_COLUMNS} FROM stocks WHERE id = ?"))
-        .bind(id)
-        .fetch_optional(pool)
-        .await?
-        .ok_or_else(|| ApiError::NotFound(format!("stock {id} not found")))?;
+    let row = sqlx::query(sqlx::AssertSqlSafe(format!(
+        "SELECT {STOCK_COLUMNS} FROM stocks WHERE id = ?"
+    )))
+    .bind(id)
+    .fetch_optional(pool)
+    .await?
+    .ok_or_else(|| ApiError::NotFound(format!("stock {id} not found")))?;
     row_to_stock(&row)
 }
 
@@ -247,9 +248,9 @@ pub async fn find_by_code(
     market: Market,
     code: &str,
 ) -> Result<Option<Stock>, ApiError> {
-    let row = sqlx::query(&format!(
+    let row = sqlx::query(sqlx::AssertSqlSafe(format!(
         "SELECT {STOCK_COLUMNS} FROM stocks WHERE market = ? AND code = ?"
-    ))
+    )))
     .bind(market.as_str())
     .bind(code)
     .fetch_optional(pool)

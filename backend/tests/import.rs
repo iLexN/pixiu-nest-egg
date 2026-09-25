@@ -10,7 +10,7 @@ fn workbook_path() -> PathBuf {
 }
 
 async fn count(pool: &sqlx::SqlitePool, table: &str) -> i64 {
-    sqlx::query_scalar(&format!("SELECT COUNT(*) FROM {table}"))
+    sqlx::query_scalar(sqlx::AssertSqlSafe(format!("SELECT COUNT(*) FROM {table}")))
         .fetch_one(pool)
         .await
         .expect("count")
@@ -338,10 +338,12 @@ async fn parity_is_clean_after_import_and_fails_when_a_trade_changes() {
         report.problems().collect::<Vec<_>>()
     );
     // ＦＧ恆生紅利 has no figures on either side and is reported as skipped.
-    assert!(report
-        .rows
-        .iter()
-        .any(|row| row.code == "ＦＧ恆生紅利" && row.outcome == Outcome::SkippedNoData));
+    assert!(
+        report
+            .rows
+            .iter()
+            .any(|row| row.code == "ＦＧ恆生紅利" && row.outcome == Outcome::SkippedNoData)
+    );
 
     sqlx::query("UPDATE trades SET shares = shares + 100 WHERE id = 1")
         .execute(&pool)
@@ -350,9 +352,11 @@ async fn parity_is_clean_after_import_and_fails_when_a_trade_changes() {
 
     let report = parity::check(&pool, &data).await.expect("parity");
     assert!(!report.is_clean());
-    assert!(report
-        .problems()
-        .any(|row| matches!(row.outcome, Outcome::Difference { .. })));
+    assert!(
+        report
+            .problems()
+            .any(|row| matches!(row.outcome, Outcome::Difference { .. }))
+    );
 }
 
 #[tokio::test]

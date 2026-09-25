@@ -72,7 +72,10 @@ async fn main() -> anyhow::Result<()> {
         data.bonds.len(),
         report.bonds.bonds_imported,
         report.bonds.bonds_skipped,
-        data.bonds.iter().map(|bond| bond.coupons.len()).sum::<usize>(),
+        data.bonds
+            .iter()
+            .map(|bond| bond.coupons.len())
+            .sum::<usize>(),
         report.bonds.coupons_imported,
         report.bonds.coupons_skipped,
     );

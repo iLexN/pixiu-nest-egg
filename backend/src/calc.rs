@@ -128,13 +128,13 @@ pub fn validate_trade(input: TradeInput<'_>) -> Result<ValidatedTrade, Vec<Field
             }
             Some(total) => {
                 let fee = derive_fee(input.shares, input.unit_price, total);
-                if let Some(given) = input.fee {
-                    if (given - fee).abs() > TOLERANCE {
-                        errors.push(FieldError::new(
-                            "fee",
-                            "fee conflicts with buy total; leave fee empty so it can be derived",
-                        ));
-                    }
+                if let Some(given) = input.fee
+                    && (given - fee).abs() > TOLERANCE
+                {
+                    errors.push(FieldError::new(
+                        "fee",
+                        "fee conflicts with buy total; leave fee empty so it can be derived",
+                    ));
                 }
                 (fee, total)
             }
@@ -150,13 +150,13 @@ pub fn validate_trade(input: TradeInput<'_>) -> Result<ValidatedTrade, Vec<Field
             }
             Some(fee) => {
                 let total = derive_total(input.shares, input.unit_price, fee);
-                if let Some(given) = input.total {
-                    if (given - total).abs() > TOLERANCE {
-                        errors.push(FieldError::new(
-                            "total",
-                            "buy total conflicts with fee; leave buy total empty so it can be derived",
-                        ));
-                    }
+                if let Some(given) = input.total
+                    && (given - total).abs() > TOLERANCE
+                {
+                    errors.push(FieldError::new(
+                        "total",
+                        "buy total conflicts with fee; leave buy total empty so it can be derived",
+                    ));
                 }
                 (fee, total)
             }
@@ -501,13 +501,13 @@ pub fn validate_deposit(input: DepositInput<'_>) -> Result<ValidatedDeposit, Vec
         .start_date
         .map(str::trim)
         .filter(|start_date| !start_date.is_empty());
-    if let Some(start_date) = start_date {
-        if chrono::NaiveDate::parse_from_str(start_date, "%Y-%m-%d").is_err() {
-            errors.push(FieldError::new(
-                "start_date",
-                "start date must be a calendar date in YYYY-MM-DD form",
-            ));
-        }
+    if let Some(start_date) = start_date
+        && chrono::NaiveDate::parse_from_str(start_date, "%Y-%m-%d").is_err()
+    {
+        errors.push(FieldError::new(
+            "start_date",
+            "start date must be a calendar date in YYYY-MM-DD form",
+        ));
     }
 
     let label = input.label.map(str::trim).filter(|label| !label.is_empty());
@@ -518,22 +518,23 @@ pub fn validate_deposit(input: DepositInput<'_>) -> Result<ValidatedDeposit, Vec
         ("interest", input.interest, "利息"),
         ("rate", input.rate, "rate"),
     ] {
-        if let Some(value) = value {
-            if !value.is_finite() || value < 0.0 {
-                errors.push(FieldError::new(
-                    field,
-                    format!("{name} must not be negative"),
-                ));
-            }
-        }
-    }
-    if let Some(rate) = input.rate {
-        if rate.is_finite() && rate >= 1.0 {
+        if let Some(value) = value
+            && (!value.is_finite() || value < 0.0)
+        {
             errors.push(FieldError::new(
-                "rate",
-                "rate is stored as a fraction (0.03 = 3%) and must be less than 1",
+                field,
+                format!("{name} must not be negative"),
             ));
         }
+    }
+    if let Some(rate) = input.rate
+        && rate.is_finite()
+        && rate >= 1.0
+    {
+        errors.push(FieldError::new(
+            "rate",
+            "rate is stored as a fraction (0.03 = 3%) and must be less than 1",
+        ));
     }
 
     if label.is_none() && input.principal.is_none() && input.interest.is_none() {
@@ -693,7 +694,7 @@ pub fn active_month_rollup(
         bucket.interest += deposit.interest.unwrap_or(0.0);
         bucket.total += deposit_total(deposit.principal, deposit.interest);
     }
-    buckets.sort_by(|a, b| (a.year, a.month).cmp(&(b.year, b.month)));
+    buckets.sort_by_key(|a| (a.year, a.month));
     buckets
 }
 
@@ -817,13 +818,13 @@ pub fn validate_dividend(input: DividendInput<'_>) -> Result<ValidatedDividend, 
         ("received_amount", input.received_amount, "實收派息"),
         ("received_price", input.received_price, "現價"),
     ] {
-        if let Some(value) = value {
-            if !value.is_finite() || value < 0.0 {
-                errors.push(FieldError::new(
-                    field,
-                    format!("{name} must not be negative"),
-                ));
-            }
+        if let Some(value) = value
+            && (!value.is_finite() || value < 0.0)
+        {
+            errors.push(FieldError::new(
+                field,
+                format!("{name} must not be negative"),
+            ));
         }
     }
 
@@ -1478,34 +1479,34 @@ pub fn validate_coupon(input: CouponInput<'_>) -> Result<ValidatedCoupon, Vec<Fi
             "付息日 must be a calendar date in YYYY-MM-DD form",
         ));
     }
-    if let Some(fixing_date) = input.fixing_date {
-        if chrono::NaiveDate::parse_from_str(fixing_date, "%Y-%m-%d").is_err() {
-            errors.push(FieldError::new(
-                "fixing_date",
-                "利息釐定日 must be a calendar date in YYYY-MM-DD form",
-            ));
-        }
+    if let Some(fixing_date) = input.fixing_date
+        && chrono::NaiveDate::parse_from_str(fixing_date, "%Y-%m-%d").is_err()
+    {
+        errors.push(FieldError::new(
+            "fixing_date",
+            "利息釐定日 must be a calendar date in YYYY-MM-DD form",
+        ));
     }
     for (field, value, name) in [
         ("per_10k", input.per_10k, "每1萬利息"),
         ("received_amount", input.received_amount, "實收利息"),
     ] {
-        if let Some(value) = value {
-            if !value.is_finite() || value < 0.0 {
-                errors.push(FieldError::new(
-                    field,
-                    format!("{name} must not be negative"),
-                ));
-            }
-        }
-    }
-    if let Some(rate) = input.annual_rate {
-        if !rate.is_finite() || !(0.0..1.0).contains(&rate) {
+        if let Some(value) = value
+            && (!value.is_finite() || value < 0.0)
+        {
             errors.push(FieldError::new(
-                "annual_rate",
-                "年息率 is stored as a fraction (0.04 = 4%) and must be less than 1",
+                field,
+                format!("{name} must not be negative"),
             ));
         }
+    }
+    if let Some(rate) = input.annual_rate
+        && (!rate.is_finite() || !(0.0..1.0).contains(&rate))
+    {
+        errors.push(FieldError::new(
+            "annual_rate",
+            "年息率 is stored as a fraction (0.04 = 4%) and must be less than 1",
+        ));
     }
 
     if !errors.is_empty() {
@@ -1614,21 +1615,21 @@ pub fn validate_aia_policy(
             ));
         }
     }
-    if let Some(remaining) = input.remaining_years {
-        if !remaining.is_finite() || remaining < 0.0 {
-            errors.push(FieldError::new(
-                "remaining_years",
-                "remaining years must not be negative",
-            ));
-        }
+    if let Some(remaining) = input.remaining_years
+        && (!remaining.is_finite() || remaining < 0.0)
+    {
+        errors.push(FieldError::new(
+            "remaining_years",
+            "remaining years must not be negative",
+        ));
     }
-    if let Some(next_pay_date) = input.next_pay_date {
-        if chrono::NaiveDate::parse_from_str(next_pay_date, "%Y-%m-%d").is_err() {
-            errors.push(FieldError::new(
-                "next_pay_date",
-                "next pay date must be a calendar date in YYYY-MM-DD form",
-            ));
-        }
+    if let Some(next_pay_date) = input.next_pay_date
+        && chrono::NaiveDate::parse_from_str(next_pay_date, "%Y-%m-%d").is_err()
+    {
+        errors.push(FieldError::new(
+            "next_pay_date",
+            "next pay date must be a calendar date in YYYY-MM-DD form",
+        ));
     }
 
     if !errors.is_empty() {
@@ -1805,13 +1806,13 @@ pub fn validate_aia_event(input: AiaEventInput<'_>) -> Result<ValidatedAiaEvent,
             "amount must be a positive number",
         ));
     }
-    if let Some(next_pay_date) = input.next_pay_date {
-        if chrono::NaiveDate::parse_from_str(next_pay_date, "%Y-%m-%d").is_err() {
-            errors.push(FieldError::new(
-                "next_pay_date",
-                "next pay date must be a calendar date in YYYY-MM-DD form",
-            ));
-        }
+    if let Some(next_pay_date) = input.next_pay_date
+        && chrono::NaiveDate::parse_from_str(next_pay_date, "%Y-%m-%d").is_err()
+    {
+        errors.push(FieldError::new(
+            "next_pay_date",
+            "next pay date must be a calendar date in YYYY-MM-DD form",
+        ));
     }
 
     if !errors.is_empty() {
@@ -2758,7 +2759,7 @@ pub fn trailing_averages(
         .zip(&derived)
         .filter(|(row, _)| row.month < current_month)
         .collect();
-    window.sort_by(|a, b| b.0.month.cmp(&a.0.month));
+    window.sort_by_key(|a| std::cmp::Reverse(a.0.month));
     window.truncate(12);
 
     let avg = |values: Vec<f64>| {
@@ -2950,16 +2951,16 @@ pub fn build_suggestions(
     let mut suggestions = Vec::new();
 
     for deposit in &events.deposits {
-        if let Some(start_date) = deposit.start_date {
-            if in_month(start_date, month) {
-                suggestions.push(MonthSuggestion {
-                    auto_key: format!("dep-start:{}", deposit.id),
-                    category: MonthItemCategory::Adjustment,
-                    label: deposit.label.clone(),
-                    amount: -deposit.principal,
-                    source: "deposit".to_string(),
-                });
-            }
+        if let Some(start_date) = deposit.start_date
+            && in_month(start_date, month)
+        {
+            suggestions.push(MonthSuggestion {
+                auto_key: format!("dep-start:{}", deposit.id),
+                category: MonthItemCategory::Adjustment,
+                label: deposit.label.clone(),
+                amount: -deposit.principal,
+                source: "deposit".to_string(),
+            });
         }
         if in_month(deposit.end_date, month) {
             suggestions.push(MonthSuggestion {
@@ -3012,16 +3013,16 @@ pub fn build_suggestions(
     }
 
     for payment in &events.aia_payments {
-        if in_month(payment.date, month) {
-            if let Some(rate) = events.usd_hkd_rate {
-                suggestions.push(MonthSuggestion {
-                    auto_key: format!("aia-pay:{}", payment.id),
-                    category: MonthItemCategory::ExtraSpend,
-                    label: Some(payment.policy.clone()),
-                    amount: payment.amount_usd * rate,
-                    source: "aia".to_string(),
-                });
-            }
+        if in_month(payment.date, month)
+            && let Some(rate) = events.usd_hkd_rate
+        {
+            suggestions.push(MonthSuggestion {
+                auto_key: format!("aia-pay:{}", payment.id),
+                category: MonthItemCategory::ExtraSpend,
+                label: Some(payment.policy.clone()),
+                amount: payment.amount_usd * rate,
+                source: "aia".to_string(),
+            });
         }
     }
 
@@ -4284,38 +4285,46 @@ mod tests {
         .expect("unfixed coupon is valid");
         assert_eq!(unfixed.annual_rate, None);
 
-        assert!(validate_coupon(CouponInput {
-            pay_date: "not-a-date",
-            fixing_date: None,
-            annual_rate: None,
-            per_10k: None,
-            received_amount: None,
-        })
-        .is_err());
-        assert!(validate_coupon(CouponInput {
-            pay_date: "2027-10-23",
-            fixing_date: Some("bad"),
-            annual_rate: None,
-            per_10k: None,
-            received_amount: None,
-        })
-        .is_err());
-        assert!(validate_coupon(CouponInput {
-            pay_date: "2027-10-23",
-            fixing_date: None,
-            annual_rate: Some(1.5),
-            per_10k: None,
-            received_amount: None,
-        })
-        .is_err());
-        assert!(validate_coupon(CouponInput {
-            pay_date: "2027-10-23",
-            fixing_date: None,
-            annual_rate: None,
-            per_10k: Some(-5.0),
-            received_amount: None,
-        })
-        .is_err());
+        assert!(
+            validate_coupon(CouponInput {
+                pay_date: "not-a-date",
+                fixing_date: None,
+                annual_rate: None,
+                per_10k: None,
+                received_amount: None,
+            })
+            .is_err()
+        );
+        assert!(
+            validate_coupon(CouponInput {
+                pay_date: "2027-10-23",
+                fixing_date: Some("bad"),
+                annual_rate: None,
+                per_10k: None,
+                received_amount: None,
+            })
+            .is_err()
+        );
+        assert!(
+            validate_coupon(CouponInput {
+                pay_date: "2027-10-23",
+                fixing_date: None,
+                annual_rate: Some(1.5),
+                per_10k: None,
+                received_amount: None,
+            })
+            .is_err()
+        );
+        assert!(
+            validate_coupon(CouponInput {
+                pay_date: "2027-10-23",
+                fixing_date: None,
+                annual_rate: None,
+                per_10k: Some(-5.0),
+                received_amount: None,
+            })
+            .is_err()
+        );
     }
 
     fn aia_facts(
@@ -4431,21 +4440,27 @@ mod tests {
             in_account: true,
         };
         assert!(validate_aia_policy(base.clone()).is_ok());
-        assert!(validate_aia_policy(AiaPolicyInput {
-            label: "  ",
-            ..base.clone()
-        })
-        .is_err());
-        assert!(validate_aia_policy(AiaPolicyInput {
-            premium_usd: -1.0,
-            ..base.clone()
-        })
-        .is_err());
-        assert!(validate_aia_policy(AiaPolicyInput {
-            next_pay_date: Some("not-a-date"),
-            ..base
-        })
-        .is_err());
+        assert!(
+            validate_aia_policy(AiaPolicyInput {
+                label: "  ",
+                ..base.clone()
+            })
+            .is_err()
+        );
+        assert!(
+            validate_aia_policy(AiaPolicyInput {
+                premium_usd: -1.0,
+                ..base.clone()
+            })
+            .is_err()
+        );
+        assert!(
+            validate_aia_policy(AiaPolicyInput {
+                next_pay_date: Some("not-a-date"),
+                ..base
+            })
+            .is_err()
+        );
     }
 
     #[test]
@@ -4458,20 +4473,24 @@ mod tests {
             next_pay_date: None,
         });
         assert!(valid.is_ok());
-        assert!(validate_aia_event(AiaEventInput {
-            kind: AiaEventKind::Withdrawal,
-            event_date: "2026-07-01",
-            amount_usd: 0.0,
-            next_pay_date: None,
-        })
-        .is_err());
-        assert!(validate_aia_event(AiaEventInput {
-            kind: AiaEventKind::Payment,
-            event_date: "bad",
-            amount_usd: 10.0,
-            next_pay_date: None,
-        })
-        .is_err());
+        assert!(
+            validate_aia_event(AiaEventInput {
+                kind: AiaEventKind::Withdrawal,
+                event_date: "2026-07-01",
+                amount_usd: 0.0,
+                next_pay_date: None,
+            })
+            .is_err()
+        );
+        assert!(
+            validate_aia_event(AiaEventInput {
+                kind: AiaEventKind::Payment,
+                event_date: "bad",
+                amount_usd: 10.0,
+                next_pay_date: None,
+            })
+            .is_err()
+        );
     }
 
     // --- month stat (月結) ---
@@ -5446,16 +5465,20 @@ mod tests {
         events.usd_hkd_rate = None;
         let suggestions =
             build_suggestions("2026-10-01", &events, &HashSet::new(), &HashSet::new());
-        assert!(!suggestions
-            .iter()
-            .any(|suggestion| suggestion.auto_key == "aia-pay:7"));
+        assert!(
+            !suggestions
+                .iter()
+                .any(|suggestion| suggestion.auto_key == "aia-pay:7")
+        );
 
         events.pool_input = 0.0;
         let suggestions =
             build_suggestions("2026-10-01", &events, &HashSet::new(), &HashSet::new());
-        assert!(!suggestions
-            .iter()
-            .any(|suggestion| suggestion.auto_key == "pool-input"));
+        assert!(
+            !suggestions
+                .iter()
+                .any(|suggestion| suggestion.auto_key == "pool-input")
+        );
     }
 
     #[test]

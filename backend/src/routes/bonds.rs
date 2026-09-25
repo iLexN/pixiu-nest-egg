@@ -1,15 +1,15 @@
+use axum::Json;
 use axum::extract::{Path, Query, State};
 use axum::http::StatusCode;
-use axum::Json;
 use serde::{Deserialize, Serialize};
 use sqlx::SqlitePool;
 
 use super::{
-    now_timestamp, record_receipt_item, row_to_bond, row_to_coupon, today, AppState, BOND_SELECT,
-    COUPON_SELECT,
+    AppState, BOND_SELECT, COUPON_SELECT, now_timestamp, record_receipt_item, row_to_bond,
+    row_to_coupon, today,
 };
 use crate::calc::{
-    validate_bond, validate_coupon, BondInput, CouponInput, ValidatedBond, ValidatedCoupon,
+    BondInput, CouponInput, ValidatedBond, ValidatedCoupon, validate_bond, validate_coupon,
 };
 use crate::error::ApiError;
 use crate::models::{
@@ -38,7 +38,7 @@ pub async fn list(
                 return Err(ApiError::field(
                     "status",
                     "status must be active or matured",
-                ))
+                ));
             }
         }
     }
@@ -54,7 +54,7 @@ pub async fn list(
         " ORDER BY b.maturity_date ASC, b.sort_order ASC, b.id ASC"
     });
 
-    let mut statement = sqlx::query(&sql);
+    let mut statement = sqlx::query(sqlx::AssertSqlSafe(sql));
     if query.status.is_some() {
         statement = statement.bind(today().to_string());
     }
@@ -447,7 +447,7 @@ pub async fn insert_coupon(
 }
 
 pub async fn load_bond(pool: &SqlitePool, id: i64) -> Result<Bond, ApiError> {
-    let row = sqlx::query(&format!("{BOND_SELECT} WHERE b.id = ?"))
+    let row = sqlx::query(sqlx::AssertSqlSafe(format!("{BOND_SELECT} WHERE b.id = ?")))
         .bind(id)
         .fetch_optional(pool)
         .await?
@@ -456,9 +456,11 @@ pub async fn load_bond(pool: &SqlitePool, id: i64) -> Result<Bond, ApiError> {
 }
 
 pub async fn load_all_bonds(pool: &SqlitePool) -> Result<Vec<Bond>, ApiError> {
-    let rows = sqlx::query(&format!("{BOND_SELECT} ORDER BY b.sort_order, b.id"))
-        .fetch_all(pool)
-        .await?;
+    let rows = sqlx::query(sqlx::AssertSqlSafe(format!(
+        "{BOND_SELECT} ORDER BY b.sort_order, b.id"
+    )))
+    .fetch_all(pool)
+    .await?;
     let today = today();
     rows.iter()
         .map(|row| row_to_bond(row, today))
@@ -469,9 +471,9 @@ pub async fn load_bond_coupons(
     pool: &SqlitePool,
     bond_id: i64,
 ) -> Result<Vec<BondCoupon>, ApiError> {
-    let rows = sqlx::query(&format!(
+    let rows = sqlx::query(sqlx::AssertSqlSafe(format!(
         "{COUPON_SELECT} WHERE c.bond_id = ? ORDER BY c.pay_date, c.id"
-    ))
+    )))
     .bind(bond_id)
     .fetch_all(pool)
     .await?;
@@ -494,7 +496,7 @@ pub async fn list_coupons(
         sql.push_str(" WHERE c.bond_id = ?");
     }
     sql.push_str(" ORDER BY c.pay_date, c.id");
-    let mut statement = sqlx::query(&sql);
+    let mut statement = sqlx::query(sqlx::AssertSqlSafe(sql));
     if let Some(bond_id) = query.bond_id {
         statement = statement.bind(bond_id);
     }
@@ -594,18 +596,18 @@ pub async fn update_coupon(
     match (existing.received_amount, validated.received_amount) {
         (None, Some(amount)) => {
             let mut credited = None;
-            if patch.bank_in.unwrap_or(true) {
-                if let Some(asset_id) = super::hs_cash_asset_id(&mut tx).await? {
-                    sqlx::query(
-                        "UPDATE manual_assets SET amount = amount + ?, updated_at = ? WHERE id = ?",
-                    )
-                    .bind(amount)
-                    .bind(&now)
-                    .bind(asset_id)
-                    .execute(&mut *tx)
-                    .await?;
-                    credited = Some(amount);
-                }
+            if patch.bank_in.unwrap_or(true)
+                && let Some(asset_id) = super::hs_cash_asset_id(&mut tx).await?
+            {
+                sqlx::query(
+                    "UPDATE manual_assets SET amount = amount + ?, updated_at = ? WHERE id = ?",
+                )
+                .bind(amount)
+                .bind(&now)
+                .bind(asset_id)
+                .execute(&mut *tx)
+                .await?;
+                credited = Some(amount);
             }
             sqlx::query("UPDATE bond_coupons SET credited_amount = ? WHERE id = ?")
                 .bind(credited)
@@ -619,17 +621,17 @@ pub async fn update_coupon(
             record_receipt_item(&mut tx, &month, &auto_key, &bond_label, amount).await?;
         }
         (Some(_), None) => {
-            if let Some(amount) = credited_before {
-                if let Some(asset_id) = super::hs_cash_asset_id(&mut tx).await? {
-                    sqlx::query(
-                        "UPDATE manual_assets SET amount = amount - ?, updated_at = ? WHERE id = ?",
-                    )
-                    .bind(amount)
-                    .bind(&now)
-                    .bind(asset_id)
-                    .execute(&mut *tx)
-                    .await?;
-                }
+            if let Some(amount) = credited_before
+                && let Some(asset_id) = super::hs_cash_asset_id(&mut tx).await?
+            {
+                sqlx::query(
+                    "UPDATE manual_assets SET amount = amount - ?, updated_at = ? WHERE id = ?",
+                )
+                .bind(amount)
+                .bind(&now)
+                .bind(asset_id)
+                .execute(&mut *tx)
+                .await?;
             }
             sqlx::query("UPDATE bond_coupons SET credited_amount = NULL WHERE id = ?")
                 .bind(id)
@@ -663,10 +665,12 @@ pub async fn remove_coupon(
 }
 
 pub async fn load_coupon(pool: &SqlitePool, id: i64) -> Result<BondCoupon, ApiError> {
-    let row = sqlx::query(&format!("{COUPON_SELECT} WHERE c.id = ?"))
-        .bind(id)
-        .fetch_optional(pool)
-        .await?
-        .ok_or_else(|| ApiError::NotFound(format!("coupon {id} not found")))?;
+    let row = sqlx::query(sqlx::AssertSqlSafe(format!(
+        "{COUPON_SELECT} WHERE c.id = ?"
+    )))
+    .bind(id)
+    .fetch_optional(pool)
+    .await?
+    .ok_or_else(|| ApiError::NotFound(format!("coupon {id} not found")))?;
     row_to_coupon(&row)
 }

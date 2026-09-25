@@ -1,21 +1,21 @@
 use std::collections::{BTreeMap, HashMap, HashSet};
 
+use axum::Json;
 use axum::extract::{Path, Query, State};
 use axum::http::StatusCode;
-use axum::Json;
 use chrono::Datelike;
 use serde::{Deserialize, Serialize};
 use sqlx::sqlite::SqliteRow;
 use sqlx::{Row, SqlitePool};
 
-use super::{aia, bonds, mpf, now_timestamp, overview, summary, today, AppState};
+use super::{AppState, aia, bonds, mpf, now_timestamp, overview, summary, today};
 use crate::calc::{
-    active_totals, aia_totals, auto_interest, build_suggestions, interest_components, live_totals,
+    DepositFacts, FieldError, LiveTotals, LiveTotalsInput, MonthDerived, MonthItemFacts,
+    MonthItemSums, MonthRunningAverages, MonthStatRow, MonthYearSummary, SuggestionAiaPayment,
+    SuggestionDeposit, SuggestionEvents, SuggestionReceipt, SuggestionTrade, active_totals,
+    aia_totals, auto_interest, build_suggestions, interest_components, live_totals,
     month_derived_with_tail, month_item_sums, month_running_averages, month_year_summaries,
-    mpf_totals, pool_balances, pool_rate_for_year, suggestions_enabled, DepositFacts, FieldError,
-    LiveTotals, LiveTotalsInput, MonthDerived, MonthItemFacts, MonthItemSums, MonthRunningAverages,
-    MonthStatRow, MonthYearSummary, SuggestionAiaPayment, SuggestionDeposit, SuggestionEvents,
-    SuggestionReceipt, SuggestionTrade,
+    mpf_totals, pool_balances, pool_rate_for_year, suggestions_enabled,
 };
 use crate::error::ApiError;
 use crate::models::{
@@ -106,18 +106,18 @@ const ITEM_COLUMNS: &str =
     "id, month, category, label, amount, exclude_from_living, auto_key, note, created_at";
 
 async fn load_all_months(pool: &SqlitePool) -> Result<Vec<StoredMonth>, ApiError> {
-    let rows = sqlx::query(&format!(
+    let rows = sqlx::query(sqlx::AssertSqlSafe(format!(
         "SELECT {MONTH_COLUMNS} FROM month_stats ORDER BY month"
-    ))
+    )))
     .fetch_all(pool)
     .await?;
     rows.iter().map(row_to_month).collect()
 }
 
 async fn load_month(pool: &SqlitePool, month: &str) -> Result<Option<StoredMonth>, ApiError> {
-    let row = sqlx::query(&format!(
+    let row = sqlx::query(sqlx::AssertSqlSafe(format!(
         "SELECT {MONTH_COLUMNS} FROM month_stats WHERE month = ?"
-    ))
+    )))
     .bind(month)
     .fetch_optional(pool)
     .await?;
@@ -343,7 +343,7 @@ pub async fn live_totals_input(pool: &SqlitePool) -> Result<LiveTotalsInput, Api
             None => {
                 return Err(ApiError::Conflict(format!(
                     "stored manual asset kind {kind} is not valid"
-                )))
+                )));
             }
         }
     }
@@ -526,18 +526,18 @@ pub async fn update_settings(
     Json(patch): Json<MonthSettingsPatch>,
 ) -> Result<Json<MonthSettings>, ApiError> {
     let mut errors = Vec::new();
-    if let Some(Some(salary)) = patch.salary {
-        if !salary.is_finite() || salary < 0.0 {
-            errors.push(FieldError::new("salary", "salary must not be negative"));
-        }
+    if let Some(Some(salary)) = patch.salary
+        && (!salary.is_finite() || salary < 0.0)
+    {
+        errors.push(FieldError::new("salary", "salary must not be negative"));
     }
-    if let Some(Some(rate)) = patch.pool_rate {
-        if !rate.is_finite() || !(0.0..1.0).contains(&rate) {
-            errors.push(FieldError::new(
-                "pool_rate",
-                "pool rate is stored as a fraction (0.337 = 33.7%) and must be less than 1",
-            ));
-        }
+    if let Some(Some(rate)) = patch.pool_rate
+        && (!rate.is_finite() || !(0.0..1.0).contains(&rate))
+    {
+        errors.push(FieldError::new(
+            "pool_rate",
+            "pool rate is stored as a fraction (0.337 = 33.7%) and must be less than 1",
+        ));
     }
     if !errors.is_empty() {
         return Err(ApiError::Validation(errors));
@@ -626,7 +626,7 @@ async fn load_dividend_events(
     if range.is_some() {
         sql.push_str(" AND d.pay_date >= ? AND d.pay_date < ?");
     }
-    let mut query = sqlx::query(&sql);
+    let mut query = sqlx::query(sqlx::AssertSqlSafe(sql));
     if let Some((first, next)) = &range {
         query = query.bind(first).bind(next);
     }
@@ -658,7 +658,7 @@ async fn load_coupon_events(
     if range.is_some() {
         sql.push_str(" WHERE c.pay_date >= ? AND c.pay_date < ?");
     }
-    let mut query = sqlx::query(&sql);
+    let mut query = sqlx::query(sqlx::AssertSqlSafe(sql));
     if let Some((first, next)) = &range {
         query = query.bind(first).bind(next);
     }
@@ -761,9 +761,9 @@ async fn load_events(
 }
 
 async fn load_items(pool: &SqlitePool, month: &str) -> Result<Vec<MonthItem>, ApiError> {
-    let rows = sqlx::query(&format!(
+    let rows = sqlx::query(sqlx::AssertSqlSafe(format!(
         "SELECT {ITEM_COLUMNS} FROM month_items WHERE month = ? ORDER BY id"
-    ))
+    )))
     .bind(month)
     .fetch_all(pool)
     .await?;
@@ -866,10 +866,10 @@ fn validate_figures(patch: &MonthStatPatch) -> Result<(), ApiError> {
         ),
         ("pool_input", patch.pool_input, "Irene + 開心 Pool"),
     ] {
-        if let Some(value) = value {
-            if !value.is_finite() {
-                errors.push(FieldError::new(field, format!("{name} must be a number")));
-            }
+        if let Some(value) = value
+            && !value.is_finite()
+        {
+            errors.push(FieldError::new(field, format!("{name} must be a number")));
         }
     }
     if errors.is_empty() {
@@ -1057,9 +1057,9 @@ pub async fn create_item(
     .await?;
     tx.commit().await?;
 
-    let row = sqlx::query(&format!(
+    let row = sqlx::query(sqlx::AssertSqlSafe(format!(
         "SELECT {ITEM_COLUMNS} FROM month_items WHERE id = ?"
-    ))
+    )))
     .bind(id)
     .fetch_one(&state.pool)
     .await?;
@@ -1071,9 +1071,9 @@ pub async fn update_item(
     Path(id): Path<i64>,
     Json(patch): Json<MonthItemPatch>,
 ) -> Result<Json<MonthItem>, ApiError> {
-    let row = sqlx::query(&format!(
+    let row = sqlx::query(sqlx::AssertSqlSafe(format!(
         "SELECT {ITEM_COLUMNS} FROM month_items WHERE id = ?"
-    ))
+    )))
     .bind(id)
     .fetch_optional(&state.pool)
     .await?
@@ -1101,7 +1101,7 @@ pub async fn update_item(
             return Err(ApiError::field(
                 "exclude_from_living",
                 "exclude_from_living only applies to 娛樂支出 items",
-            ))
+            ));
         }
         (Some(false), _) => false,
         (None, MonthItemCategory::Entertainment) => existing.exclude_from_living,
@@ -1121,9 +1121,9 @@ pub async fn update_item(
     .execute(&state.pool)
     .await?;
 
-    let row = sqlx::query(&format!(
+    let row = sqlx::query(sqlx::AssertSqlSafe(format!(
         "SELECT {ITEM_COLUMNS} FROM month_items WHERE id = ?"
-    ))
+    )))
     .bind(id)
     .fetch_one(&state.pool)
     .await?;
@@ -1188,9 +1188,9 @@ fn row_to_asset(row: &SqliteRow) -> Result<ManualAsset, ApiError> {
 const ASSET_COLUMNS: &str = "id, label, kind, amount, sort_order, updated_at";
 
 async fn load_asset(pool: &SqlitePool, id: i64) -> Result<ManualAsset, ApiError> {
-    let row = sqlx::query(&format!(
+    let row = sqlx::query(sqlx::AssertSqlSafe(format!(
         "SELECT {ASSET_COLUMNS} FROM manual_assets WHERE id = ?"
-    ))
+    )))
     .bind(id)
     .fetch_optional(pool)
     .await?
@@ -1199,9 +1199,9 @@ async fn load_asset(pool: &SqlitePool, id: i64) -> Result<ManualAsset, ApiError>
 }
 
 pub async fn load_assets(pool: &SqlitePool) -> Result<Vec<ManualAsset>, ApiError> {
-    let rows = sqlx::query(&format!(
+    let rows = sqlx::query(sqlx::AssertSqlSafe(format!(
         "SELECT {ASSET_COLUMNS} FROM manual_assets ORDER BY kind, sort_order, id"
-    ))
+    )))
     .fetch_all(pool)
     .await?;
     rows.iter().map(row_to_asset).collect::<Result<Vec<_>, _>>()

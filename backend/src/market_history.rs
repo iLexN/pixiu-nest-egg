@@ -6,7 +6,7 @@
 use chrono::NaiveDate;
 use sqlx::{Row, SqlitePool};
 
-use crate::calc::{mpf_gap_month_ends, MpfPoint};
+use crate::calc::{MpfPoint, mpf_gap_month_ends};
 use crate::models::Market;
 
 /// `app_meta` key holding the workbook's seeded max 未實現報酬率 for a

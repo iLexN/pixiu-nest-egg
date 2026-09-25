@@ -1,11 +1,11 @@
+use axum::Router;
 use axum::body::Body;
 use axum::http::{Request, StatusCode};
-use axum::Router;
 use http_body_util::BodyExt;
-use serde_json::{json, Value};
+use serde_json::{Value, json};
 use tower::ServiceExt;
 use wealth_backend::db;
-use wealth_backend::routes::{api_router, AppState};
+use wealth_backend::routes::{AppState, api_router};
 
 async fn app() -> Router {
     let pool = db::connect_memory().await.expect("in-memory database");
@@ -308,10 +308,12 @@ async fn summary_recomputes_after_edit() {
     approx(&row["unrealized_return"], 0.9252046404);
     approx(&body["totals"]["buy_cost"], 208746.64);
     assert_eq!(body["sectors"][0]["sector"], "Banks - Diversified");
-    assert!(body["average_price_definition"]
-        .as_str()
-        .expect("definition")
-        .contains("shares bought"));
+    assert!(
+        body["average_price_definition"]
+            .as_str()
+            .expect("definition")
+            .contains("shares bought")
+    );
 
     // Editing a trade changes the summary with no extra recalculation step.
     let (_, trades) = send(&app, "GET", "/api/trades?market=HK", None).await;
@@ -390,11 +392,13 @@ async fn errors_carry_status_and_field_messages() {
     .await;
     assert_eq!(status, StatusCode::BAD_REQUEST);
     assert_eq!(body["error"], "validation");
-    assert!(body["fields"]
-        .as_array()
-        .expect("fields")
-        .iter()
-        .any(|f| f["field"] == "trade_date"));
+    assert!(
+        body["fields"]
+            .as_array()
+            .expect("fields")
+            .iter()
+            .any(|f| f["field"] == "trade_date")
+    );
 
     let (status, body) = send(
         &app,
@@ -407,11 +411,13 @@ async fn errors_carry_status_and_field_messages() {
     )
     .await;
     assert_eq!(status, StatusCode::BAD_REQUEST);
-    assert!(body["fields"]
-        .as_array()
-        .expect("fields")
-        .iter()
-        .any(|f| f["field"] == "code"));
+    assert!(
+        body["fields"]
+            .as_array()
+            .expect("fields")
+            .iter()
+            .any(|f| f["field"] == "code")
+    );
 
     let (status, body) = send(
         &app,
@@ -600,11 +606,13 @@ async fn deposit_validation_errors_name_the_fields() {
     )
     .await;
     assert_eq!(status, StatusCode::BAD_REQUEST);
-    assert!(body["fields"]
-        .as_array()
-        .expect("fields")
-        .iter()
-        .any(|f| f["field"] == "end_date"));
+    assert!(
+        body["fields"]
+            .as_array()
+            .expect("fields")
+            .iter()
+            .any(|f| f["field"] == "end_date")
+    );
 
     let (status, body) = send(
         &app,
@@ -614,11 +622,13 @@ async fn deposit_validation_errors_name_the_fields() {
     )
     .await;
     assert_eq!(status, StatusCode::BAD_REQUEST);
-    assert!(body["fields"]
-        .as_array()
-        .expect("fields")
-        .iter()
-        .any(|f| f["field"] == "label"));
+    assert!(
+        body["fields"]
+            .as_array()
+            .expect("fields")
+            .iter()
+            .any(|f| f["field"] == "label")
+    );
 
     let (status, body) = send(
         &app,
@@ -628,11 +638,13 @@ async fn deposit_validation_errors_name_the_fields() {
     )
     .await;
     assert_eq!(status, StatusCode::BAD_REQUEST);
-    assert!(body["fields"]
-        .as_array()
-        .expect("fields")
-        .iter()
-        .any(|f| f["field"] == "principal"));
+    assert!(
+        body["fields"]
+            .as_array()
+            .expect("fields")
+            .iter()
+            .any(|f| f["field"] == "principal")
+    );
 
     let (status, body) = send(
         &app,
@@ -642,11 +654,13 @@ async fn deposit_validation_errors_name_the_fields() {
     )
     .await;
     assert_eq!(status, StatusCode::BAD_REQUEST);
-    assert!(body["fields"]
-        .as_array()
-        .expect("fields")
-        .iter()
-        .any(|f| f["field"] == "rate"));
+    assert!(
+        body["fields"]
+            .as_array()
+            .expect("fields")
+            .iter()
+            .any(|f| f["field"] == "rate")
+    );
 }
 
 #[tokio::test]
@@ -796,11 +810,13 @@ async fn deposit_receive_credits_cash_and_records_the_month_item() {
     approx(&assets[0]["amount"], 1000.0);
     let (_, detail) = send(&app, "GET", "/api/months/2099-10", None).await;
     approx(&detail["month"]["interest"], 0.0);
-    assert!(detail["items"]
-        .as_array()
-        .expect("items")
-        .iter()
-        .all(|item| item["auto_key"] != dep_end_key));
+    assert!(
+        detail["items"]
+            .as_array()
+            .expect("items")
+            .iter()
+            .all(|item| item["auto_key"] != dep_end_key)
+    );
 }
 
 #[tokio::test]
@@ -867,11 +883,13 @@ async fn bond_receive_credits_principal_and_records_the_month_item() {
     let (_, assets) = send(&app, "GET", "/api/manual-assets", None).await;
     approx(&assets[0]["amount"], 500.0);
     let (_, detail) = send(&app, "GET", "/api/months/2099-12", None).await;
-    assert!(detail["items"]
-        .as_array()
-        .expect("items")
-        .iter()
-        .all(|item| item["auto_key"] != bond_end_key));
+    assert!(
+        detail["items"]
+            .as_array()
+            .expect("items")
+            .iter()
+            .all(|item| item["auto_key"] != bond_end_key)
+    );
 }
 
 // --- 4.7 dividends (派息) ---
@@ -1063,11 +1081,13 @@ async fn coupon_and_dividend_receive_banks_in_and_records_the_item() {
     let (_, assets) = send(&app, "GET", "/api/manual-assets", None).await;
     approx(&assets[0]["amount"], 100.0);
     let (_, detail) = send(&app, "GET", "/api/months/2099-10", None).await;
-    assert!(detail["items"]
-        .as_array()
-        .expect("items")
-        .iter()
-        .all(|i| i["auto_key"] != coupon_key));
+    assert!(
+        detail["items"]
+            .as_array()
+            .expect("items")
+            .iter()
+            .all(|i| i["auto_key"] != coupon_key)
+    );
 
     // --- HK dividend: 收訖 banks into HS + div:<id> item ---
     let stock = create_stock(&app, "HK", "中國銀行", None).await;
@@ -1095,11 +1115,13 @@ async fn coupon_and_dividend_receive_banks_in_and_records_the_item() {
     approx(&assets[0]["amount"], 600.0);
     let div_key = format!("div:{div_id}");
     let (_, detail) = send(&app, "GET", "/api/months/2099-11", None).await;
-    assert!(detail["items"]
-        .as_array()
-        .expect("items")
-        .iter()
-        .any(|i| i["auto_key"] == div_key));
+    assert!(
+        detail["items"]
+            .as_array()
+            .expect("items")
+            .iter()
+            .any(|i| i["auto_key"] == div_key)
+    );
 
     // --- US dividend: 收訖 banks into IBKR USD cash, no month item ---
     create_stock(&app, "US", "AAPL", None).await;
@@ -1126,11 +1148,13 @@ async fn coupon_and_dividend_receive_banks_in_and_records_the_item() {
     let (_, overview) = send(&app, "GET", "/api/overview", None).await;
     approx(&overview["ibkr"]["usd_cash"], 200.0);
     let (_, detail) = send(&app, "GET", "/api/months/2099-11", None).await;
-    assert!(detail["items"]
-        .as_array()
-        .expect("items")
-        .iter()
-        .all(|i| i["auto_key"] != format!("div:{us_id}")));
+    assert!(
+        detail["items"]
+            .as_array()
+            .expect("items")
+            .iter()
+            .all(|i| i["auto_key"] != format!("div:{us_id}"))
+    );
 
     // Un-receipt returns the IBKR cash.
     let (status, _) = send(
@@ -1222,11 +1246,13 @@ async fn dividend_validation_errors_name_the_fields() {
     )
     .await;
     assert_eq!(status, StatusCode::BAD_REQUEST);
-    assert!(body["fields"]
-        .as_array()
-        .expect("fields")
-        .iter()
-        .any(|f| f["field"] == "pay_date"));
+    assert!(
+        body["fields"]
+            .as_array()
+            .expect("fields")
+            .iter()
+            .any(|f| f["field"] == "pay_date")
+    );
 
     let (status, body) = send(
         &app,
@@ -1236,11 +1262,13 @@ async fn dividend_validation_errors_name_the_fields() {
     )
     .await;
     assert_eq!(status, StatusCode::BAD_REQUEST);
-    assert!(body["fields"]
-        .as_array()
-        .expect("fields")
-        .iter()
-        .any(|f| f["field"] == "estimated_amount"));
+    assert!(
+        body["fields"]
+            .as_array()
+            .expect("fields")
+            .iter()
+            .any(|f| f["field"] == "estimated_amount")
+    );
 
     let (status, _) = send(
         &app,
@@ -1516,11 +1544,13 @@ async fn family_deposit_validation_errors_name_the_fields() {
     )
     .await;
     assert_eq!(status, StatusCode::BAD_REQUEST);
-    assert!(body["fields"]
-        .as_array()
-        .expect("fields")
-        .iter()
-        .any(|f| f["field"] == "holder"));
+    assert!(
+        body["fields"]
+            .as_array()
+            .expect("fields")
+            .iter()
+            .any(|f| f["field"] == "holder")
+    );
 
     let (status, body) = send(
         &app,
@@ -1530,11 +1560,13 @@ async fn family_deposit_validation_errors_name_the_fields() {
     )
     .await;
     assert_eq!(status, StatusCode::BAD_REQUEST);
-    assert!(body["fields"]
-        .as_array()
-        .expect("fields")
-        .iter()
-        .any(|f| f["field"] == "end_date"));
+    assert!(
+        body["fields"]
+            .as_array()
+            .expect("fields")
+            .iter()
+            .any(|f| f["field"] == "end_date")
+    );
 
     let (status, body) = send(
         &app,
@@ -1547,11 +1579,13 @@ async fn family_deposit_validation_errors_name_the_fields() {
     )
     .await;
     assert_eq!(status, StatusCode::BAD_REQUEST);
-    assert!(body["fields"]
-        .as_array()
-        .expect("fields")
-        .iter()
-        .any(|f| f["field"] == "principal"));
+    assert!(
+        body["fields"]
+            .as_array()
+            .expect("fields")
+            .iter()
+            .any(|f| f["field"] == "principal")
+    );
 
     let (status, body) = send(
         &app,
@@ -1561,11 +1595,13 @@ async fn family_deposit_validation_errors_name_the_fields() {
     )
     .await;
     assert_eq!(status, StatusCode::BAD_REQUEST);
-    assert!(body["fields"]
-        .as_array()
-        .expect("fields")
-        .iter()
-        .any(|f| f["field"] == "label"));
+    assert!(
+        body["fields"]
+            .as_array()
+            .expect("fields")
+            .iter()
+            .any(|f| f["field"] == "label")
+    );
 }
 
 #[tokio::test]

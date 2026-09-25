@@ -12,8 +12,8 @@ pub mod trades;
 pub mod year_review;
 pub mod yearly;
 
-use axum::routing::{get, patch, post, put};
 use axum::Router;
+use axum::routing::{get, patch, post, put};
 use chrono::Datelike;
 use sqlx::sqlite::SqliteRow;
 use sqlx::{Row, SqlitePool};
