@@ -146,7 +146,7 @@ The parity check SHALL compare, per `YearInReview` block year, the derived/effec
 
 ### Requirement: Year review page
 
-The frontend SHALL show a 年結 → 回顧 view listing one block per year reproducing the sheet's three groups — ledger aggregates, investment summary, and per-asset-class returns — with their YoY columns, the derived `IBKR 轉入` figure, the effective `raise` per year, inline editing for `income`, `invested_adjustment`, `raise`, `sold_pl`, and the four overrides (clearing restores derived figures), and a reload after every mutation.
+The frontend SHALL show a 總覽 → 年結 view listing one block per year reproducing the sheet's three groups — ledger aggregates, investment summary, and per-asset-class returns — with their YoY columns, the derived `IBKR 轉入` figure, the effective `raise` per year, inline editing for `income`, `invested_adjustment`, `raise`, `sold_pl`, and the four overrides (clearing restores derived figures), and a reload after every mutation.
 
 #### Scenario: Edit a manual figure
 

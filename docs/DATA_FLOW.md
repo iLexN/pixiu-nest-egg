@@ -857,7 +857,7 @@ Two flags reproduce the sheet's two sums: `excluded` rows sit in the AIA account
 
 Recording a payment replaces the workbook's three manual edits (buy usd, remaining years, next pay) with one action. Amounts are entered in USD; the `irene 年金` premium paid in HKD is converted before entry.
 
-## Month Stat (月結)
+## Month Stat (總覽 → 月結)
 
 ```text
 MonthStatView loads GET /api/months/summary + /api/months?year=YYYY
@@ -985,7 +985,7 @@ Click 凍結 on the current year's row
 
 Frozen cells are marked `*` with the snapshot's `updated_at` in the tooltip. Once frozen, later price edits or new trades no longer move that year's row — the spreadsheet's copy-raw-value step becomes explicit.
 
-## Load the 年結 → 回顧 view
+## Load the 總覽 → 年結 view
 
 ```text
 YearReviewView loads GET /api/year-review
@@ -1026,8 +1026,8 @@ Cells holding a stored value are marked `*`; empty input clears the field back t
 Once a year, around Dec 31 (or early January):
 
 1. **Freeze the ending year's stock figures** — 股票 → 總覽 → 每年總覽, click 凍結 on the year row, once per market (HK and US). This stores the cumulative 成本 and the live 總市值 into `year_snapshots`. A past year without a snapshot cannot recompute its year-end 市值 — there is no historical price series — so the column would go blank. `invested` needs no freeze (trades always derive it) and 凍結 never touches `sold_pl`.
-2. **Enter the year's realized P/L** — the 賣出損益 cell on each market's yearly row, or the 投資P/L cell on 年結 → 回顧 (both write `year_snapshots.sold_pl` for that market-year). Enter 0 when nothing was sold: 投資純利 (`interest + sold_pl`) stays absent until a value exists.
-3. **Enter 收入** on 年結 → 回顧 — the year's hand-entered salary total. Also set **invested 調整** if `invested` should include money outside HK trades and the year's IBKR 轉入 (which now derives from the transfer log — the sheet folded US principal and bond purchases into it); the app keeps it as a separate add-on so the two stay reconcilable.
+2. **Enter the year's realized P/L** — the 賣出損益 cell on each market's yearly row, or the 投資P/L cell on 總覽 → 年結 (both write `year_snapshots.sold_pl` for that market-year). Enter 0 when nothing was sold: 投資純利 (`interest + sold_pl`) stays absent until a value exists.
+3. **Enter 收入** on 總覽 → 年結 — the year's hand-entered salary total. Also set **invested 調整** if `invested` should include money outside HK trades and the year's IBKR 轉入 (which now derives from the transfer log — the sheet folded US principal and bond purchases into it); the app keeps it as a separate add-on so the two stay reconcilable.
 
 At year start nothing is required:
 

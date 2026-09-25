@@ -1,10 +1,6 @@
-# app-navigation Specification
+# Spec Delta
 
-## Purpose
-
-Defines the app's top-level navigation: which pages are grouped under 股票, 定期, MPF, 債券, AIA, 月結, 年結, and 家人, the labels and order of each group's sub-tabs, when the 港股/美股 market toggle is visible, and which page the app opens on.
-
-## Requirements
+## ADDED Requirements
 
 ### Requirement: Grouped top navigation with roll-ups under 總覽
 
@@ -74,20 +70,6 @@ The app SHALL open on the 總覽 group's 總覽 page (the headline totals, asset
 - **WHEN** the app loads with no prior navigation
 - **THEN** the 總覽 page is displayed, the 總覽 group button is marked active, and 總覽 is marked as the active sub-tab
 
-### Requirement: Group selection opens the group's first sub-tab
-
-Clicking a group button SHALL switch to that group and open its first sub-tab. The app SHALL NOT remember a previously visited sub-tab within a group.
-
-#### Scenario: Return to a group
-
-- **WHEN** the user is on 股票 → 管理, clicks 定期, then clicks 股票 again
-- **THEN** the 股票 → 總覽 page is shown, not 管理
-
-#### Scenario: Return to 總覽 after visiting 年結
-
-- **WHEN** the user is on 總覽 → 年結, clicks 定期, then clicks 總覽 again
-- **THEN** the 總覽 → 總覽 page is shown, not 年結
-
 ### Requirement: Market toggle is hidden outside the 股票 group
 
 The 港股/美股 market toggle SHALL be shown while the 股票 group is active and SHALL control the market for all of its sub-pages (總覽, 交易記錄, 派息, 管理). It SHALL be hidden while the 總覽 (including its 月結 and 年結 sub-tabs), 定期, MPF, 債券, AIA, or 家人 group is active. The selected market SHALL persist when switching between stock sub-tabs.
@@ -141,3 +123,36 @@ The 港股/美股 market toggle SHALL be shown while the 股票 group is active 
 
 - **WHEN** the user selects 美股 on 總覽 and then opens 交易記錄
 - **THEN** 交易記錄 shows US trades
+
+## MODIFIED Requirements
+
+### Requirement: Group selection opens the group's first sub-tab
+
+Clicking a group button SHALL switch to that group and open its first sub-tab. The app SHALL NOT remember a previously visited sub-tab within a group.
+
+#### Scenario: Return to a group
+
+- **WHEN** the user is on 股票 → 管理, clicks 定期, then clicks 股票 again
+- **THEN** the 股票 → 總覽 page is shown, not 管理
+
+#### Scenario: Return to 總覽 after visiting 年結
+
+- **WHEN** the user is on 總覽 → 年結, clicks 定期, then clicks 總覽 again
+- **THEN** the 總覽 → 總覽 page is shown, not 年結
+
+## REMOVED Requirements
+
+### Requirement: Grouped top navigation
+
+**Reason**: The 月結 and 年結 groups no longer exist, so the "Switch to the 月結 group" / "Switch to the 年結 group" scenarios cannot survive; superseded by "Grouped top navigation with roll-ups under 總覽" above.
+**Migration**: None — 月結 and 年結 are reached as sub-tabs of 總覽.
+
+### Requirement: Market toggle is scoped to the 股票 group
+
+**Reason**: Its "hidden for 月結" / "hidden for 年結" scenarios refer to groups that no longer exist; superseded by "Market toggle is hidden outside the 股票 group" above, which covers the same pages as 總覽 sub-tabs.
+**Migration**: None — behavior of the toggle is unchanged.
+
+### Requirement: Default page is 股票 → 總覽
+
+**Reason**: The app has opened on the 總覽 group for some time and that is the intended landing page; the requirement is replaced by "Default page is 總覽 → 總覽" above.
+**Migration**: None — no user action; the stock portfolio summary remains one click away at 股票 → 總覽.

@@ -36,15 +36,17 @@ type Group =
   | 'mpf'
   | 'bond'
   | 'aia'
-  | 'months'
-  | 'year'
   | 'family'
 
 const NAV: { id: Group; label: string; tabs: { id: Tab; label: string }[] }[] = [
   {
     id: 'overview',
     label: '總覽',
-    tabs: [{ id: 'overview', label: '總覽' }],
+    tabs: [
+      { id: 'overview', label: '總覽' },
+      { id: 'months', label: '月結' },
+      { id: 'yearReview', label: '年結' },
+    ],
   },
   {
     id: 'stock',
@@ -78,16 +80,6 @@ const NAV: { id: Group; label: string; tabs: { id: Tab; label: string }[] }[] = 
     id: 'aia',
     label: 'AIA',
     tabs: [{ id: 'aia', label: '總覽' }],
-  },
-  {
-    id: 'months',
-    label: '月結',
-    tabs: [{ id: 'months', label: '總覽' }],
-  },
-  {
-    id: 'year',
-    label: '年結',
-    tabs: [{ id: 'yearReview', label: '回顧' }],
   },
   {
     id: 'family',
