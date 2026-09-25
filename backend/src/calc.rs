@@ -8,6 +8,7 @@ use std::collections::{BTreeMap, HashMap, HashSet};
 
 use chrono::Datelike;
 use serde::Serialize;
+use utoipa::ToSchema;
 
 use crate::models::{
     CouponStatus, InputMode, InterestComponent, MonthItemCategory, MonthSuggestion, MpfFigures,
@@ -19,7 +20,7 @@ pub const TOLERANCE: f64 = 1e-6;
 
 pub const UNCATEGORIZED_SECTOR: &str = "未分類";
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, utoipa::ToSchema)]
 pub struct FieldError {
     pub field: String,
     pub message: String,
@@ -193,7 +194,7 @@ pub struct TradeFacts {
     pub total: f64,
 }
 
-#[derive(Debug, Clone, PartialEq, Serialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, ToSchema)]
 pub struct StockSummary {
     /// ΣBUY 股數 − ΣSELL 股數
     pub shares_held: f64,
@@ -297,7 +298,7 @@ pub struct RollupInput<'a> {
     pub dividends_received: f64,
 }
 
-#[derive(Debug, Clone, PartialEq, Serialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, ToSchema)]
 pub struct SectorRollup {
     pub sector: String,
     /// Buy cost of every stock in the sector, priced or not.
@@ -309,7 +310,7 @@ pub struct SectorRollup {
     pub percent_change: Option<f64>,
 }
 
-#[derive(Debug, Clone, PartialEq, Serialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, ToSchema)]
 pub struct MarketTotals {
     pub buy_cost: f64,
     pub buy_cost_priced: f64,
@@ -595,7 +596,7 @@ pub fn label_prefix(label: Option<&str>) -> Option<String> {
 }
 
 /// One month bucket of the 定期 active-month table.
-#[derive(Debug, Clone, PartialEq, Serialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, ToSchema)]
 pub struct ActiveMonthBucket {
     pub year: i32,
     pub month: u32,
@@ -608,7 +609,7 @@ pub struct ActiveMonthBucket {
 }
 
 /// Totals over the active deposits: `定期!B1` plus the other two sums.
-#[derive(Debug, Clone, PartialEq, Serialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, ToSchema)]
 pub struct ActiveTotals {
     pub principal: f64,
     pub interest: f64,
@@ -616,7 +617,7 @@ pub struct ActiveTotals {
 }
 
 /// One bank row of the 定期 rollup (sheet labels them SC, HS).
-#[derive(Debug, Clone, PartialEq, Serialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, ToSchema)]
 pub struct BankRollup {
     pub bank: String,
     pub principal: f64,
@@ -625,7 +626,7 @@ pub struct BankRollup {
 }
 
 /// One month row of a 定期Info year table.
-#[derive(Debug, Clone, PartialEq, Serialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, ToSchema)]
 pub struct YearMonthRow {
     pub month: u32,
     /// 利息 column: Σ interest.
@@ -637,7 +638,7 @@ pub struct YearMonthRow {
 }
 
 /// A year's month table: always all 12 months, like the sheet.
-#[derive(Debug, Clone, PartialEq, Serialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, ToSchema)]
 pub struct YearRollup {
     pub year: i32,
     pub months: Vec<YearMonthRow>,
@@ -942,7 +943,7 @@ pub struct DividendFacts<'a> {
 }
 
 /// One stock's contribution inside a year bucket.
-#[derive(Debug, Clone, PartialEq, Serialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, ToSchema)]
 pub struct DividendStockTotal {
     pub code: String,
     pub received: f64,
@@ -950,7 +951,7 @@ pub struct DividendStockTotal {
 
 /// A year's received-dividend rollup, like the 回報率 sheet's per-stock
 /// SUMIF block over the J–O columns.
-#[derive(Debug, Clone, PartialEq, Serialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, ToSchema)]
 pub struct DividendYearRollup {
     pub year: i32,
     pub total: f64,
@@ -1000,7 +1001,7 @@ pub fn dividend_year_rollups(dividends: &[DividendFacts<'_>]) -> Vec<DividendYea
 
 /// Frozen per-(market, year) figures from the `year_snapshots` table. A None
 /// field is no override — the yearly row falls back to the computed figure.
-#[derive(Debug, Clone, PartialEq, Serialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, ToSchema)]
 pub struct YearSnapshot {
     pub invested: Option<f64>,
     pub cost: Option<f64>,
@@ -1014,7 +1015,7 @@ pub struct YearSnapshot {
 /// One row of the per-market yearly summary table: the sheet's B–M year
 /// block (net invested, sold P/L, 成本, 報酬率s, year-end value, 派息, month,
 /// and the two year-over-year changes).
-#[derive(Debug, Clone, PartialEq, Serialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, ToSchema)]
 pub struct YearRow {
     pub year: i32,
     /// net invested: Σ BUY total − Σ SELL total in the year; a stored
@@ -1162,7 +1163,7 @@ pub struct MpfAccountFacts {
 }
 
 /// Section-level aggregates for the MPF overview header.
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Serialize, ToSchema)]
 pub struct MpfTotals {
     /// Σ contributions (the sheet's `buy`).
     pub buy: f64,
@@ -1674,7 +1675,7 @@ pub struct AiaPolicyFacts {
 }
 
 /// Portfolio-level AIA figures: the sheet's summary block.
-#[derive(Debug, Clone, Copy, Serialize)]
+#[derive(Debug, Clone, Copy, Serialize, ToSchema)]
 pub struct AiaTotals {
     /// Σ premium over non-excluded rows (the sheet's `buy usd`).
     pub premium: f64,
@@ -1896,7 +1897,7 @@ pub fn month_item_sums(items: &[MonthItemFacts]) -> MonthItemSums {
 
 /// The figures derived on read for one month row; every field is absent while
 /// its inputs are missing.
-#[derive(Debug, Clone, Copy, PartialEq, Serialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Serialize, ToSchema)]
 pub struct MonthDerived {
     /// H 月尾(出糧前): the stored override, else the next row's start_cash −
     /// this row's salary.
@@ -2059,7 +2060,7 @@ pub fn pool_balances(
 /// One year's aggregate row (the sheet's rows 2–4). Sums and averages are
 /// absent while no month of the year has the underlying figure; the scalar
 /// columns (interest/entertainment/pool_input) always sum.
-#[derive(Debug, Clone, PartialEq, Serialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, ToSchema)]
 pub struct MonthYearSummary {
     pub year: i32,
     /// 總數+: Σ total_change.
@@ -2188,7 +2189,7 @@ pub fn month_year_summaries(
 }
 
 /// The sheet's row-8 running averages over every stored month.
-#[derive(Debug, Clone, Copy, PartialEq, Serialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Serialize, ToSchema)]
 pub struct MonthRunningAverages {
     /// AVERAGE of total_change over months that have it.
     pub total_change_avg: Option<f64>,
@@ -2227,7 +2228,7 @@ pub fn month_running_averages(
 /// The stored `year_review` row: the figures the sheet enters by hand, plus
 /// nullable overrides for cells whose history was deleted from the workbook
 /// (pre-app bonds and deposits). A None override derives live.
-#[derive(Debug, Clone, Copy, Default, PartialEq, Serialize)]
+#[derive(Debug, Clone, Copy, Default, PartialEq, Serialize, ToSchema)]
 pub struct YearReviewRecord {
     /// 收入: the year's income, entered by hand (the sheet's own cell is a
     /// hand-built formula).
@@ -2265,7 +2266,7 @@ pub struct BondYearFacts {
 /// The sheet's A–D ledger group for one year: the Month Stat yearly block
 /// re-averaged the sheet's way (`=C/12` flat, not AVERAGE over the months
 /// present) plus the 開心Pool trio and the D-column YoY deltas.
-#[derive(Debug, Clone, Default, PartialEq, Serialize)]
+#[derive(Debug, Clone, Default, PartialEq, Serialize, ToSchema)]
 pub struct YearReviewLedger {
     /// 總數+: Σ total_change.
     pub asset_gain: Option<f64>,
@@ -2291,7 +2292,7 @@ pub struct YearReviewLedger {
 }
 
 /// The sheet's E–G investment group for one year.
-#[derive(Debug, Clone, Default, PartialEq, Serialize)]
+#[derive(Debug, Clone, Default, PartialEq, Serialize, ToSchema)]
 pub struct YearReviewInvestment {
     /// 利息回報: Σ derived month interest.
     pub interest: f64,
@@ -2319,7 +2320,7 @@ pub struct YearReviewInvestment {
 }
 
 /// The sheet's H–M asset-returns group for one year.
-#[derive(Debug, Clone, Default, PartialEq, Serialize)]
+#[derive(Debug, Clone, Default, PartialEq, Serialize, ToSchema)]
 pub struct YearReviewAssets {
     /// 債券: principal held in the year and coupon interest received — the
     /// stored overrides win where set. Absent while neither derives nor an
@@ -2368,7 +2369,7 @@ pub struct YearReviewAssets {
 
 /// One row of the 年結 → 回顧 page: the YearInReview sheet's three groups for
 /// one year, plus the stored record behind the manual/overridden cells.
-#[derive(Debug, Clone, Default, PartialEq, Serialize)]
+#[derive(Debug, Clone, Default, PartialEq, Serialize, ToSchema)]
 pub struct YearReviewRow {
     pub year: i32,
     pub ledger: YearReviewLedger,
@@ -2823,7 +2824,7 @@ pub struct LiveTotalsInput {
 }
 
 /// `Overview!B1` (總數) and `H1` (流動資產) computed inside the backend.
-#[derive(Debug, Clone, Copy, PartialEq, Serialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Serialize, ToSchema)]
 pub struct LiveTotals {
     pub total_assets: f64,
     pub liquid_assets: f64,

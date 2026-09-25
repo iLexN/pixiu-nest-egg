@@ -1,4 +1,5 @@
 use serde::{Deserialize, Deserializer, Serialize};
+use utoipa::ToSchema;
 
 /// For PATCH bodies, distinguishes "field absent" from "field present as null".
 fn nullable<'de, D, T>(deserializer: D) -> Result<Option<Option<T>>, D::Error>
@@ -9,7 +10,7 @@ where
     Option::<T>::deserialize(deserializer).map(Some)
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, ToSchema)]
 #[serde(rename_all = "UPPERCASE")]
 pub enum Market {
     Hk,
@@ -41,7 +42,7 @@ impl Market {
     }
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, ToSchema)]
 #[serde(rename_all = "UPPERCASE")]
 pub enum TradeType {
     Buy,
@@ -66,7 +67,7 @@ impl TradeType {
 }
 
 /// Which pair of money figures the user typed; the other pair is derived.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, ToSchema)]
 #[serde(rename_all = "SCREAMING_SNAKE_CASE")]
 pub enum InputMode {
     /// HK style: 單價 + buy total (fee included) given, fee derived.
@@ -92,7 +93,7 @@ impl InputMode {
     }
 }
 
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Serialize, ToSchema)]
 pub struct Stock {
     pub id: i64,
     pub market: Market,
@@ -111,7 +112,7 @@ pub struct Stock {
     pub sort_order: i64,
 }
 
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone, Deserialize, ToSchema)]
 pub struct NewStock {
     pub market: Market,
     pub code: String,
@@ -128,7 +129,7 @@ pub struct NewStock {
 
 /// Absent fields are left untouched; present fields are written, so `null`
 /// clears an optional value.
-#[derive(Debug, Clone, Default, Deserialize)]
+#[derive(Debug, Clone, Default, Deserialize, ToSchema)]
 pub struct StockPatch {
     pub code: Option<String>,
     #[serde(default, deserialize_with = "nullable")]
@@ -152,7 +153,7 @@ pub struct StockPatch {
     pub is_active: Option<bool>,
 }
 
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Serialize, ToSchema)]
 pub struct Trade {
     pub id: i64,
     pub stock_id: i64,
@@ -170,7 +171,7 @@ pub struct Trade {
     pub unit_price_incl_fee: Option<f64>,
 }
 
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone, Deserialize, ToSchema)]
 pub struct NewTrade {
     /// Either `stock_id`, or `market` + `code`, identifies the stock.
     pub stock_id: Option<i64>,
@@ -190,14 +191,14 @@ pub struct NewTrade {
 
 /// One `{symbol, price}` row from a price file. Fields are optional so a
 /// malformed entry can be reported instead of failing the whole upload.
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone, Deserialize, ToSchema)]
 pub struct RawPriceEntry {
     pub symbol: Option<String>,
     pub price: Option<f64>,
 }
 
 /// A price that was applied to a stored stock.
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Serialize, ToSchema)]
 pub struct PriceUpdate {
     pub market: Market,
     pub code: String,
@@ -206,7 +207,7 @@ pub struct PriceUpdate {
 }
 
 /// A file entry that was skipped: missing symbol or non-positive price.
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Serialize, ToSchema)]
 pub struct InvalidPriceEntry {
     pub symbol: Option<String>,
     pub price: Option<f64>,
@@ -214,7 +215,7 @@ pub struct InvalidPriceEntry {
 }
 
 /// Result of a bulk 現價 upload.
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Serialize, ToSchema)]
 pub struct PriceReport {
     pub updated: Vec<PriceUpdate>,
     /// File symbols that matched no stored stock.
@@ -225,7 +226,7 @@ pub struct PriceReport {
     pub not_updated: Vec<String>,
 }
 
-#[derive(Debug, Clone, Default, Deserialize)]
+#[derive(Debug, Clone, Default, Deserialize, ToSchema)]
 pub struct TradePatch {
     pub stock_id: Option<i64>,
     pub trade_type: Option<String>,
@@ -240,7 +241,7 @@ pub struct TradePatch {
 }
 
 /// Derived from `end_date`: `End` once the end date is today or past.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, ToSchema)]
 #[serde(rename_all = "UPPERCASE")]
 pub enum DepositStatus {
     Active,
@@ -249,7 +250,7 @@ pub enum DepositStatus {
 
 /// A 定期 deposit record. `total`, `status`, `end_year` and `end_month` are
 /// derived on read, never stored.
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Serialize, ToSchema)]
 pub struct Deposit {
     pub id: i64,
     /// The sheet's `id` column: a bank reference like `SC-9632`.
@@ -279,7 +280,7 @@ pub struct Deposit {
     pub end_month: u32,
 }
 
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone, Deserialize, ToSchema)]
 pub struct NewDeposit {
     pub label: Option<String>,
     pub bank: Option<String>,
@@ -294,7 +295,7 @@ pub struct NewDeposit {
 
 /// Absent fields are left untouched; present fields are written, so `null`
 /// clears an optional value.
-#[derive(Debug, Clone, Default, Deserialize)]
+#[derive(Debug, Clone, Default, Deserialize, ToSchema)]
 pub struct DepositPatch {
     #[serde(default, deserialize_with = "nullable")]
     pub label: Option<Option<String>>,
@@ -318,7 +319,7 @@ pub struct DepositPatch {
 /// A 家人 定期 record: a deposit held on behalf of a family member, kept in
 /// its own table so it never feeds the user's own totals. `total`,
 /// `status`, `end_year` and `end_month` are derived on read, never stored.
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Serialize, ToSchema)]
 pub struct FamilyDeposit {
     pub id: i64,
     /// The family member the deposit belongs to, e.g. `媽媽`, `Irene`.
@@ -345,7 +346,7 @@ pub struct FamilyDeposit {
     pub end_month: u32,
 }
 
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone, Deserialize, ToSchema)]
 pub struct NewFamilyDeposit {
     pub holder: String,
     pub label: Option<String>,
@@ -359,7 +360,7 @@ pub struct NewFamilyDeposit {
 
 /// Absent fields are left untouched; present fields are written, so `null`
 /// clears an optional value.
-#[derive(Debug, Clone, Default, Deserialize)]
+#[derive(Debug, Clone, Default, Deserialize, ToSchema)]
 pub struct FamilyDepositPatch {
     pub holder: Option<String>,
     #[serde(default, deserialize_with = "nullable")]
@@ -378,7 +379,7 @@ pub struct FamilyDepositPatch {
 }
 
 /// Pending until `received_amount` is recorded.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, ToSchema)]
 #[serde(rename_all = "UPPERCASE")]
 pub enum DividendStatus {
     Pending,
@@ -388,7 +389,7 @@ pub enum DividendStatus {
 /// A 派息 record. `shares_held`, `buy_cost` and `received_price` are
 /// point-in-time snapshots stored at write time; `status`, `amount`,
 /// `yield_on_cost`, `yield_on_price` and `variance` are derived on read.
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Serialize, ToSchema)]
 pub struct Dividend {
     pub id: i64,
     pub stock_id: i64,
@@ -420,7 +421,7 @@ pub struct Dividend {
     pub variance: Option<f64>,
 }
 
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone, Deserialize, ToSchema)]
 pub struct NewDividend {
     /// Either `stock_id`, or `market` + `code`, identifies the stock.
     pub stock_id: Option<i64>,
@@ -436,7 +437,7 @@ pub struct NewDividend {
 }
 
 /// Derived from `maturity_date`: `Matured` once maturity is today or past.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, ToSchema)]
 #[serde(rename_all = "UPPERCASE")]
 pub enum BondStatus {
     Active,
@@ -445,7 +446,7 @@ pub enum BondStatus {
 
 /// 待定 until `annual_rate`/`per_10k` are fixed, then `Pending` until
 /// `received_amount` is recorded.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, ToSchema)]
 #[serde(rename_all = "SCREAMING_SNAKE_CASE")]
 pub enum CouponStatus {
     PendingFix,
@@ -454,7 +455,7 @@ pub enum CouponStatus {
 }
 
 /// A 債券 record. `status` and `next_pay_date` are derived on read.
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Serialize, ToSchema)]
 pub struct Bond {
     pub id: i64,
     /// The sheet's label column, e.g. `silver bond`.
@@ -476,7 +477,7 @@ pub struct Bond {
     pub next_pay_date: Option<String>,
 }
 
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone, Deserialize, ToSchema)]
 pub struct NewBond {
     pub label: String,
     pub issue_no: Option<String>,
@@ -487,7 +488,7 @@ pub struct NewBond {
 
 /// Absent fields are left untouched; present fields are written, so `null`
 /// clears an optional value.
-#[derive(Debug, Clone, Default, Deserialize)]
+#[derive(Debug, Clone, Default, Deserialize, ToSchema)]
 pub struct BondPatch {
     pub label: Option<String>,
     #[serde(default, deserialize_with = "nullable")]
@@ -500,7 +501,7 @@ pub struct BondPatch {
 
 /// One scheduled coupon of a bond. `annual_rate`/`per_10k` stay NULL while the
 /// rate is 待定; `status`, `expected` and `variance` are derived on read.
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Serialize, ToSchema)]
 pub struct BondCoupon {
     pub id: i64,
     pub bond_id: i64,
@@ -522,7 +523,7 @@ pub struct BondCoupon {
     pub variance: Option<f64>,
 }
 
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone, Deserialize, ToSchema)]
 pub struct NewBondCoupon {
     pub bond_id: i64,
     pub pay_date: String,
@@ -536,7 +537,7 @@ pub struct NewBondCoupon {
 /// Absent fields are left untouched; present fields are written, so `null`
 /// clears an optional value — clearing `received_amount` marks the coupon
 /// unreceived, clearing `annual_rate`/`per_10k` returns it to 待定.
-#[derive(Debug, Clone, Default, Deserialize)]
+#[derive(Debug, Clone, Default, Deserialize, ToSchema)]
 pub struct BondCouponPatch {
     pub bond_id: Option<i64>,
     pub pay_date: Option<String>,
@@ -557,7 +558,7 @@ pub struct BondCouponPatch {
 }
 
 /// A rate + net gain pair. `rate` is empty when contributions are zero.
-#[derive(Debug, Clone, Copy, Serialize)]
+#[derive(Debug, Clone, Copy, Serialize, ToSchema)]
 pub struct MpfFigures {
     pub rate: Option<f64>,
     pub gain: f64,
@@ -565,7 +566,7 @@ pub struct MpfFigures {
 
 /// A 未實現報酬率 + 未實現金額 pair for a market's last-month or max figures.
 /// `percent` is empty when the recorded `buy_cost_priced` is zero.
-#[derive(Debug, Clone, Copy, Serialize)]
+#[derive(Debug, Clone, Copy, Serialize, ToSchema)]
 pub struct MarketFigures {
     pub percent: Option<f64>,
     pub amount: f64,
@@ -574,7 +575,7 @@ pub struct MarketFigures {
 /// An MPF (強積金) account. `rate`, `gain`, `last_month` and `max` are derived
 /// on read from the stored values plus the history rows; `seed_max_*` are the
 /// imported high-water marks that act as a floor for the reported maxima.
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Serialize, ToSchema)]
 pub struct MpfAccount {
     pub id: i64,
     /// The sheet's account name, e.g. `new type`, `強積金個人帳戶`.
@@ -599,7 +600,7 @@ pub struct MpfAccount {
 }
 
 /// One recorded account state. Synthetic rows backfill months with no update.
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Serialize, ToSchema)]
 pub struct MpfHistoryRow {
     pub id: i64,
     pub account_id: i64,
@@ -612,7 +613,7 @@ pub struct MpfHistoryRow {
     pub gain: f64,
 }
 
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone, Deserialize, ToSchema)]
 pub struct NewMpfAccount {
     pub label: String,
     pub trustee: Option<String>,
@@ -625,7 +626,7 @@ pub struct NewMpfAccount {
 /// Absent fields are left untouched; present fields are written, so `null`
 /// clears an optional value. Changing `contributions` or `balance` records a
 /// history row; metadata-only edits do not.
-#[derive(Debug, Clone, Default, Deserialize)]
+#[derive(Debug, Clone, Default, Deserialize, ToSchema)]
 pub struct MpfAccountPatch {
     pub label: Option<String>,
     #[serde(default, deserialize_with = "nullable")]
@@ -640,13 +641,13 @@ pub struct MpfAccountPatch {
     pub member_no: Option<Option<String>>,
 }
 
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone, Deserialize, ToSchema)]
 pub struct MpfNotePatch {
     pub note: Option<String>,
 }
 
 /// Stored frozen figures for one (market, year) in the yearly summary.
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Serialize, ToSchema)]
 pub struct YearSnapshot {
     pub market: Market,
     pub year: i32,
@@ -666,7 +667,7 @@ pub struct YearSnapshot {
 
 /// Absent fields are left untouched; present fields are written, so `null`
 /// clears a stored value and the column falls back to the computed figure.
-#[derive(Debug, Clone, Default, Deserialize)]
+#[derive(Debug, Clone, Default, Deserialize, ToSchema)]
 pub struct YearlyPatch {
     #[serde(default, deserialize_with = "nullable")]
     pub invested: Option<Option<f64>>,
@@ -682,7 +683,7 @@ pub struct YearlyPatch {
 /// `PATCH /api/year-review/:year` body. Absent fields are left untouched;
 /// `null` clears an override so the figure derives live again. `sold_pl`
 /// writes the year's HK `year_snapshots` row instead of `year_review`.
-#[derive(Debug, Clone, Default, Deserialize)]
+#[derive(Debug, Clone, Default, Deserialize, ToSchema)]
 pub struct YearReviewPatch {
     #[serde(default, deserialize_with = "nullable")]
     pub income: Option<Option<f64>>,
@@ -707,7 +708,7 @@ pub struct YearReviewPatch {
 /// Absent fields are left untouched; present fields are written, so `null`
 /// clears an optional value. `refresh_snapshots` re-derives shares_held and
 /// buy_cost from trades on or before the (possibly edited) pay_date.
-#[derive(Debug, Clone, Default, Deserialize)]
+#[derive(Debug, Clone, Default, Deserialize, ToSchema)]
 pub struct DividendPatch {
     pub stock_id: Option<i64>,
     pub pay_date: Option<String>,
@@ -737,7 +738,7 @@ pub struct DividendPatch {
 /// An AIA policy row. `balance_pct` is derived on read; the totals flags
 /// reproduce the sheet's two sums: `excluded` rows are in the account but not
 /// the user's money (irene 20%), `in_account` rows count in `display_value`.
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Serialize, ToSchema)]
 pub struct AiaPolicy {
     pub id: i64,
     /// Plan or group name, e.g. `年金 - 2024 - 2029`.
@@ -766,7 +767,7 @@ pub struct AiaPolicy {
     pub balance_pct: Option<f64>,
 }
 
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone, Deserialize, ToSchema)]
 pub struct NewAiaPolicy {
     pub label: String,
     pub policy_no: Option<String>,
@@ -790,7 +791,7 @@ fn default_true() -> bool {
 /// Absent fields are left untouched; present fields are written, so `null`
 /// clears an optional value. Changing `value_usd` refreshes
 /// `value_updated_at`.
-#[derive(Debug, Clone, Default, Deserialize)]
+#[derive(Debug, Clone, Default, Deserialize, ToSchema)]
 pub struct AiaPolicyPatch {
     pub label: Option<String>,
     #[serde(default, deserialize_with = "nullable")]
@@ -813,7 +814,7 @@ pub struct AiaPolicyPatch {
 /// One recorded premium payment or withdrawal. `prev_next_pay_date` /
 /// `prev_remaining_years` snapshot the policy fields a payment touched so
 /// deleting the event restores them.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, ToSchema)]
 #[serde(rename_all = "snake_case")]
 pub enum AiaEventKind {
     Payment,
@@ -837,7 +838,7 @@ impl AiaEventKind {
     }
 }
 
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Serialize, ToSchema)]
 pub struct AiaEvent {
     pub id: i64,
     pub policy_id: i64,
@@ -849,7 +850,7 @@ pub struct AiaEvent {
     pub prev_remaining_years: Option<f64>,
 }
 
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone, Deserialize, ToSchema)]
 pub struct NewAiaEvent {
     pub policy_id: i64,
     pub kind: AiaEventKind,
@@ -861,7 +862,7 @@ pub struct NewAiaEvent {
     pub next_pay_date: Option<String>,
 }
 
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone, Deserialize, ToSchema)]
 pub struct AiaRatePatch {
     pub rate: Option<f64>,
 }
@@ -871,7 +872,7 @@ pub struct AiaRatePatch {
 /// `extra_spend` the extras subtracted inside J, `income` the extras added
 /// inside L, `entertainment` the O 娛樂支出 items, `interest` the hand-kept
 /// part of N 利息 the auto events do not cover (bank 活期 interest, promos).
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, ToSchema)]
 #[serde(rename_all = "snake_case")]
 pub enum MonthItemCategory {
     Adjustment,
@@ -909,7 +910,7 @@ impl MonthItemCategory {
 /// `total_change` and `liquid_change` are derived on read. `total_assets`/`liquid_assets`
 /// report the effective value — stored when frozen, live-derived when NULL —
 /// and the `_live` flags tell the UI which.
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Serialize, ToSchema)]
 pub struct MonthStat {
     pub month: String,
     /// F 月初(出糧後): the 活期 total right after salary lands.
@@ -962,7 +963,7 @@ pub struct MonthStat {
 /// Upsert body for a month row. Absent fields are left untouched (or defaulted
 /// on create); `null` on `total_assets`/`liquid_assets` restores live
 /// derivation, and `recapture` re-snapshots the live totals.
-#[derive(Debug, Clone, Default, Deserialize)]
+#[derive(Debug, Clone, Default, Deserialize, ToSchema)]
 pub struct MonthStatPatch {
     pub start_cash: Option<f64>,
     pub salary: Option<f64>,
@@ -980,7 +981,7 @@ pub struct MonthStatPatch {
 }
 
 /// One labeled line item of a month.
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Serialize, ToSchema)]
 pub struct MonthItem {
     pub id: i64,
     pub month: String,
@@ -995,7 +996,7 @@ pub struct MonthItem {
     pub created_at: String,
 }
 
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone, Deserialize, ToSchema)]
 pub struct NewMonthItem {
     pub category: MonthItemCategory,
     pub label: Option<String>,
@@ -1010,7 +1011,7 @@ pub struct NewMonthItem {
 
 /// Absent fields are left untouched; present fields are written, so `null`
 /// clears an optional value.
-#[derive(Debug, Clone, Default, Deserialize)]
+#[derive(Debug, Clone, Default, Deserialize, ToSchema)]
 pub struct MonthItemPatch {
     pub category: Option<MonthItemCategory>,
     #[serde(default, deserialize_with = "nullable")]
@@ -1023,7 +1024,7 @@ pub struct MonthItemPatch {
 
 /// The kind of a manual balance: `cash` rows are the 活期 behind 月初 and the
 /// liquid totals; `asset` rows feed only 總數.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, ToSchema)]
 #[serde(rename_all = "snake_case")]
 pub enum ManualAssetKind {
     Cash,
@@ -1048,7 +1049,7 @@ impl ManualAssetKind {
 }
 
 /// A named manual balance (the Overview cells B7/B8/B16/B17).
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Serialize, ToSchema)]
 pub struct ManualAsset {
     pub id: i64,
     pub label: String,
@@ -1058,7 +1059,7 @@ pub struct ManualAsset {
     pub updated_at: String,
 }
 
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone, Deserialize, ToSchema)]
 pub struct NewManualAsset {
     pub label: String,
     pub kind: ManualAssetKind,
@@ -1066,7 +1067,7 @@ pub struct NewManualAsset {
 }
 
 /// Absent fields are left untouched; present fields are written.
-#[derive(Debug, Clone, Default, Deserialize)]
+#[derive(Debug, Clone, Default, Deserialize, ToSchema)]
 pub struct ManualAssetPatch {
     pub label: Option<String>,
     pub kind: Option<ManualAssetKind>,
@@ -1075,7 +1076,7 @@ pub struct ManualAssetPatch {
 
 /// The month-stat settings held in `app_meta`: the current salary and the
 /// per-year 開心Pool rate.
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Serialize, ToSchema)]
 pub struct MonthSettings {
     pub salary: Option<f64>,
     /// The rate in effect for `pool_rate_year`.
@@ -1084,7 +1085,7 @@ pub struct MonthSettings {
 }
 
 /// Absent fields are left untouched; `null` clears `salary`/`pool_rate`.
-#[derive(Debug, Clone, Default, Deserialize)]
+#[derive(Debug, Clone, Default, Deserialize, ToSchema)]
 pub struct MonthSettingsPatch {
     #[serde(default, deserialize_with = "nullable")]
     pub salary: Option<Option<f64>>,
@@ -1095,7 +1096,7 @@ pub struct MonthSettingsPatch {
 }
 
 /// A computed candidate item for a month, never stored until accepted.
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Serialize, ToSchema)]
 pub struct MonthSuggestion {
     pub auto_key: String,
     pub category: MonthItemCategory,
@@ -1109,7 +1110,7 @@ pub struct MonthSuggestion {
 /// coupon, or a received HK dividend dated in the month. Deposit components
 /// are `received: false` while the deposit is not yet 收訖 — they preview in
 /// the breakdown but do not count in the derived 利息.
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Serialize, ToSchema)]
 pub struct InterestComponent {
     /// `deposit`, `coupon` or `dividend`.
     pub source: String,
@@ -1123,7 +1124,7 @@ pub struct InterestComponent {
 /// The 美股 sheet's IBKR account block (A1:B5 + B7): four manual inputs plus
 /// the derived cross-checks. `now_value` is the account total as the IBKR app
 /// displays it — its implied FX rate differs from `aia.usd_hkd_rate`.
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Serialize, ToSchema)]
 pub struct IbkrBlock {
     /// 美股!B1: cumulative bank→IBKR transfers — Σ `ibkr_transfers`.
     pub transferred_hkd: Option<f64>,
@@ -1147,7 +1148,7 @@ pub struct IbkrBlock {
 /// Absent fields are left untouched; `null` clears a field. `transfer_hkd`
 /// appends a dated row to `ibkr_transfers` instead — a positive value is a
 /// bank→IBKR transfer, a negative one a withdrawal/correction.
-#[derive(Debug, Clone, Default, Deserialize)]
+#[derive(Debug, Clone, Default, Deserialize, ToSchema)]
 pub struct IbkrPatch {
     #[serde(default)]
     pub transfer_hkd: Option<f64>,
@@ -1164,7 +1165,7 @@ pub struct IbkrPatch {
 
 /// One row of the 總覽 asset table (Overview!A3:C9): a module total or a
 /// manual `asset` row, with its share of the sum (the C column).
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Serialize, ToSchema)]
 pub struct OverviewAssetRow {
     pub key: String,
     pub label: String,
@@ -1177,7 +1178,7 @@ pub struct OverviewAssetRow {
 }
 
 /// The Overview!A14:C18 半流動資金 block plus the A13 ratio.
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Serialize, ToSchema)]
 pub struct SemiLiquid {
     /// 已定期 (B15): Σ principal over active deposits.
     pub deposits: f64,
@@ -1196,7 +1197,7 @@ pub struct SemiLiquid {
 /// `Overview!F3:G10` (+`H6`): trailing averages over the 12 completed months
 /// before the current one, the live pool balance, and the living budget with
 /// its 預測 red-flag floor.
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Serialize, ToSchema)]
 pub struct TwelveMonthAverages {
     /// G4 總數增加.
     pub total_change: Option<f64>,
@@ -1224,7 +1225,7 @@ pub struct TwelveMonthAverages {
 
 /// The 投資目標 block (Overview!J22:N27): the J22 three-year invested average
 /// plus one row per year-review year under the unified target formula.
-#[derive(Debug, Clone, Default, Serialize)]
+#[derive(Debug, Clone, Default, Serialize, ToSchema)]
 pub struct InvestTargets {
     /// J22: mean `invested` over the last three completed years, skip-absent.
     pub avg_invested: Option<f64>,
@@ -1233,7 +1234,7 @@ pub struct InvestTargets {
 
 /// One 投資目標 row (J:N): invested, the effective raise, and the derived
 /// target/remain/growth.
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Serialize, ToSchema)]
 pub struct InvestTargetRow {
     pub year: i32,
     /// K column: the year-review `invested`; absent while none.
@@ -1250,7 +1251,7 @@ pub struct InvestTargetRow {
 }
 
 /// `GET /api/overview`: the sheet's A3:C18 block plus the B1/H1/J1 headline.
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Serialize, ToSchema)]
 pub struct OverviewResponse {
     pub today: String,
     /// `aia.usd_hkd_rate`; absent while unset.

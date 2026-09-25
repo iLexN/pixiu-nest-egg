@@ -10,7 +10,7 @@ use crate::calc::{
     MpfAccountFacts, MpfAccountInput, MpfPoint, MpfTotals, mpf_figures, mpf_last_month, mpf_max,
     mpf_totals, validate_mpf_account,
 };
-use crate::error::ApiError;
+use crate::error::{ApiError, ErrorBody};
 use crate::models::{MpfAccount, MpfAccountPatch, MpfHistoryRow, MpfNotePatch, NewMpfAccount};
 use crate::mpf;
 
@@ -174,7 +174,7 @@ pub async fn meta_f64(pool: &SqlitePool, key: &str) -> Result<Option<f64>, ApiEr
         .and_then(|raw| raw.parse::<f64>().ok()))
 }
 
-#[derive(Debug, Serialize)]
+#[derive(Debug, Serialize, utoipa::ToSchema)]
 pub struct MpfResponse {
     pub today: String,
     pub accounts: Vec<MpfAccount>,
@@ -183,6 +183,14 @@ pub struct MpfResponse {
     pub history: Vec<MpfHistoryRow>,
 }
 
+#[utoipa::path(
+    get,
+    path = "/api/mpf",
+    tag = "mpf",
+    responses(
+        (status = 200, description = "MPF accounts with derived figures, history, note, and totals", body = MpfResponse),
+    )
+)]
 pub async fn overview(State(state): State<AppState>) -> Result<Json<MpfResponse>, ApiError> {
     let today = today();
     let stored = load_all_stored(&state.pool).await?;
@@ -211,6 +219,16 @@ pub async fn overview(State(state): State<AppState>) -> Result<Json<MpfResponse>
     }))
 }
 
+#[utoipa::path(
+    post,
+    path = "/api/mpf/accounts",
+    tag = "mpf",
+    request_body = NewMpfAccount,
+    responses(
+        (status = 201, description = "MPF account created", body = MpfAccount),
+        (status = 400, description = "Missing or invalid fields", body = ErrorBody),
+    )
+)]
 pub async fn create(
     State(state): State<AppState>,
     Json(body): Json<NewMpfAccount>,
@@ -253,6 +271,18 @@ pub async fn create(
     ))
 }
 
+#[utoipa::path(
+    patch,
+    path = "/api/mpf/accounts/{id}",
+    tag = "mpf",
+    params(("id" = i64, Path, description = "MPF account id")),
+    request_body = MpfAccountPatch,
+    responses(
+        (status = 200, description = "Updated MPF account (a balance update also records history)", body = MpfAccount),
+        (status = 400, description = "Missing or invalid fields", body = ErrorBody),
+        (status = 404, description = "MPF account not found", body = ErrorBody),
+    )
+)]
 pub async fn update(
     State(state): State<AppState>,
     Path(id): Path<i64>,
@@ -322,6 +352,16 @@ pub async fn update(
 }
 
 /// An account with history rows is refused so the record never loses its past.
+#[utoipa::path(
+    delete,
+    path = "/api/mpf/accounts/{id}",
+    tag = "mpf",
+    params(("id" = i64, Path, description = "MPF account id")),
+    responses(
+        (status = 204, description = "MPF account and its history deleted"),
+        (status = 404, description = "MPF account not found", body = ErrorBody),
+    )
+)]
 pub async fn remove(
     State(state): State<AppState>,
     Path(id): Path<i64>,
@@ -343,11 +383,20 @@ pub async fn remove(
     Ok(StatusCode::NO_CONTENT)
 }
 
-#[derive(Debug, Serialize)]
+#[derive(Debug, Serialize, utoipa::ToSchema)]
 pub struct NoteResponse {
     pub note: Option<String>,
 }
 
+#[utoipa::path(
+    patch,
+    path = "/api/mpf/note",
+    tag = "mpf",
+    request_body = MpfNotePatch,
+    responses(
+        (status = 200, description = "Stored MPF page note (null clears it)", body = NoteResponse),
+    )
+)]
 pub async fn update_note(
     State(state): State<AppState>,
     Json(body): Json<MpfNotePatch>,
@@ -359,6 +408,16 @@ pub async fn update_note(
 }
 
 /// Deleting a stale row recomputes last-month/max without it on next read.
+#[utoipa::path(
+    delete,
+    path = "/api/mpf/history/{id}",
+    tag = "mpf",
+    params(("id" = i64, Path, description = "History row id")),
+    responses(
+        (status = 204, description = "History row deleted"),
+        (status = 404, description = "History row not found", body = ErrorBody),
+    )
+)]
 pub async fn remove_history(
     State(state): State<AppState>,
     Path(id): Path<i64>,

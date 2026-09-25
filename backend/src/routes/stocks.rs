@@ -7,15 +7,25 @@ use serde::Deserialize;
 use sqlx::SqlitePool;
 
 use super::{AppState, STOCK_COLUMNS, now_timestamp, parse_market, row_to_stock};
-use crate::error::ApiError;
+use crate::error::{ApiError, ErrorBody};
 use crate::models::{Market, NewStock, PriceReport, Stock, StockPatch};
 use crate::prices;
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Deserialize, utoipa::ToSchema, utoipa::IntoParams)]
 pub struct ListQuery {
     pub market: Option<String>,
 }
 
+#[utoipa::path(
+    get,
+    path = "/api/stocks",
+    tag = "stocks",
+    params(ListQuery),
+    responses(
+        (status = 200, description = "List stocks, optionally filtered by market", body = [Stock]),
+        (status = 400, description = "Invalid market", body = ErrorBody),
+    )
+)]
 pub async fn list(
     State(state): State<AppState>,
     Query(query): Query<ListQuery>,
@@ -48,6 +58,17 @@ pub async fn load_stocks(
         .collect()
 }
 
+#[utoipa::path(
+    post,
+    path = "/api/stocks",
+    tag = "stocks",
+    request_body = NewStock,
+    responses(
+        (status = 201, description = "Stock created", body = Stock),
+        (status = 400, description = "Missing or invalid fields", body = ErrorBody),
+        (status = 409, description = "Stock code already exists in market", body = ErrorBody),
+    )
+)]
 pub async fn create(
     State(state): State<AppState>,
     Json(body): Json<NewStock>,
@@ -97,7 +118,7 @@ pub async fn create(
     Ok((StatusCode::CREATED, Json(load_one(&state.pool, id).await?)))
 }
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Deserialize, utoipa::ToSchema, utoipa::IntoParams)]
 pub struct ReorderRequest {
     pub market: String,
     pub stock_ids: Vec<i64>,
@@ -105,6 +126,16 @@ pub struct ReorderRequest {
 
 /// Persist a complete ordering for one market. Requiring every stock prevents a
 /// partial drag/drop request from silently dropping rows from the saved order.
+#[utoipa::path(
+    post,
+    path = "/api/stocks/order",
+    tag = "stocks",
+    request_body = ReorderRequest,
+    responses(
+        (status = 200, description = "Stocks in the new saved order", body = [Stock]),
+        (status = 400, description = "Id list is not the complete market set", body = ErrorBody),
+    )
+)]
 pub async fn reorder(
     State(state): State<AppState>,
     Json(body): Json<ReorderRequest>,
@@ -138,6 +169,19 @@ pub async fn reorder(
     Ok(Json(load_stocks(&state.pool, Some(market)).await?))
 }
 
+#[utoipa::path(
+    patch,
+    path = "/api/stocks/{id}",
+    tag = "stocks",
+    params(("id" = i64, Path, description = "Stock id")),
+    request_body = StockPatch,
+    responses(
+        (status = 200, description = "Updated stock", body = Stock),
+        (status = 400, description = "Missing or invalid fields", body = ErrorBody),
+        (status = 404, description = "Stock not found", body = ErrorBody),
+        (status = 409, description = "Stock code already exists in market", body = ErrorBody),
+    )
+)]
 pub async fn update(
     State(state): State<AppState>,
     Path(id): Path<i64>,
@@ -197,6 +241,20 @@ pub async fn update(
 
 /// Bulk 現價 update from a `current-price.json` body. Takes the raw file text
 /// so parse errors surface as a normal validation response.
+#[utoipa::path(
+    post,
+    path = "/api/stocks/prices",
+    tag = "stocks",
+    request_body(
+        content = String,
+        content_type = "text/plain",
+        description = "Raw current-price.json text: {\"stocks\": [{\"symbol\", \"price\"}]}",
+    ),
+    responses(
+        (status = 200, description = "Bulk price update report", body = PriceReport),
+        (status = 400, description = "File could not be parsed", body = ErrorBody),
+    )
+)]
 pub async fn upload_prices(
     State(state): State<AppState>,
     body: String,
@@ -205,6 +263,17 @@ pub async fn upload_prices(
     Ok(Json(prices::apply(&state.pool, upload).await?))
 }
 
+#[utoipa::path(
+    delete,
+    path = "/api/stocks/{id}",
+    tag = "stocks",
+    params(("id" = i64, Path, description = "Stock id")),
+    responses(
+        (status = 204, description = "Stock deleted"),
+        (status = 404, description = "Stock not found", body = ErrorBody),
+        (status = 409, description = "Stock still has trades or dividends", body = ErrorBody),
+    )
+)]
 pub async fn remove(
     State(state): State<AppState>,
     Path(id): Path<i64>,

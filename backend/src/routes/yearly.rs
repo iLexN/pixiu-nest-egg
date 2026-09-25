@@ -8,15 +8,15 @@ use sqlx::{Row, SqlitePool};
 
 use super::{AppState, now_timestamp, parse_market, today};
 use crate::calc::{DividendFacts, TradeFacts, YearRow, YearSnapshot, yearly_rows};
-use crate::error::ApiError;
+use crate::error::{ApiError, ErrorBody};
 use crate::models::{Market, TradeType, YearlyPatch};
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Deserialize, utoipa::ToSchema, utoipa::IntoParams)]
 pub struct YearlyQuery {
     pub market: String,
 }
 
-#[derive(Debug, Serialize)]
+#[derive(Debug, Serialize, utoipa::ToSchema)]
 pub struct YearlyResponse {
     pub market: Market,
     /// The date the response was generated.
@@ -24,6 +24,16 @@ pub struct YearlyResponse {
     pub years: Vec<YearRow>,
 }
 
+#[utoipa::path(
+    get,
+    path = "/api/summary/yearly",
+    tag = "summary",
+    params(YearlyQuery),
+    responses(
+        (status = 200, description = "Per-year rollup for one market", body = YearlyResponse),
+        (status = 400, description = "Invalid market", body = ErrorBody),
+    )
+)]
 pub async fn list(
     State(state): State<AppState>,
     Query(query): Query<YearlyQuery>,
@@ -211,6 +221,20 @@ pub async fn hk_sold_pl(pool: &SqlitePool) -> Result<BTreeMap<i32, f64>, ApiErro
     Ok(map)
 }
 
+#[utoipa::path(
+    patch,
+    path = "/api/summary/yearly/{market}/{year}",
+    tag = "summary",
+    params(
+        ("market" = String, Path, description = "HK or US"),
+        ("year" = i32, Path, description = "Snapshot year"),
+    ),
+    request_body = YearlyPatch,
+    responses(
+        (status = 200, description = "Upserted or cleared year snapshot", body = crate::models::YearSnapshot),
+        (status = 400, description = "Invalid market, year, or figure", body = ErrorBody),
+    )
+)]
 pub async fn update(
     State(state): State<AppState>,
     Path((market, year)): Path<(String, i32)>,
@@ -298,6 +322,19 @@ pub async fn update(
 
 /// Freeze the year: store the currently computed cumulative 成本 and the
 /// live 總市值 as the snapshot. `invested` is left untouched.
+#[utoipa::path(
+    post,
+    path = "/api/summary/yearly/{market}/{year}/freeze",
+    tag = "summary",
+    params(
+        ("market" = String, Path, description = "HK or US"),
+        ("year" = i32, Path, description = "Snapshot year"),
+    ),
+    responses(
+        (status = 200, description = "Snapshot frozen at computed cost and live market value", body = crate::models::YearSnapshot),
+        (status = 400, description = "Invalid market or year", body = ErrorBody),
+    )
+)]
 pub async fn freeze(
     State(state): State<AppState>,
     Path((market, year)): Path<(String, i32)>,

@@ -20,6 +20,12 @@ The **backend is authoritative**. The frontend may show a temporary preview whil
 
 There is **no summary table** in SQLite. Summary figures are recomputed from `stocks` and `trades` every time the summary API is called, and deposit rollups are recomputed from `deposits`.
 
+## API reference and playground
+
+The backend serves an interactive API playground at `http://127.0.0.1:8787/scalar` (Scalar) backed by the generated OpenAPI document at `GET /api-docs/openapi.json`. Every `/api` endpoint is listed there with its parameters, request body, and response schema, and each operation can be executed against the running backend from the browser. The document is generated from the `#[utoipa::path]` annotations on the route handlers at build time, so it cannot drift from the compiled code. The playground page loads its UI script from a CDN; the backend itself makes no outbound calls.
+
+When adding an endpoint, annotate the handler with `#[utoipa::path]` and register it in `api_router` via `utoipa_axum::routes!` — a plain `.route()` call compiles but leaves the endpoint undocumented. `routes::tests::openapi_documents_every_api_operation` pins the full path+method list and fails when the surface changes.
+
 ## Database tables
 
 ### `stocks`

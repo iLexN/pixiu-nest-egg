@@ -11,7 +11,7 @@ use sqlx::SqlitePool;
 
 use super::{AppState, FAMILY_DEPOSIT_COLUMNS, now_timestamp, row_to_family_deposit, today};
 use crate::calc::{DepositFacts, DepositInput, active_totals, validate_deposit};
-use crate::error::ApiError;
+use crate::error::{ApiError, ErrorBody};
 use crate::models::{FamilyDeposit, FamilyDepositPatch, MpfNotePatch, NewFamilyDeposit};
 use crate::mpf;
 
@@ -22,7 +22,7 @@ fn note_key(holder: &str) -> String {
     format!("{FAMILY_NOTE_PREFIX}{holder}")
 }
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Deserialize, utoipa::ToSchema, utoipa::IntoParams)]
 pub struct ListQuery {
     /// `active` (not yet 收訖, even past end date) or `ended` (received).
     pub status: Option<String>,
@@ -34,6 +34,15 @@ pub struct ListQuery {
     pub order: Option<String>,
 }
 
+#[utoipa::path(
+    get,
+    path = "/api/family/deposits",
+    tag = "family",
+    params(ListQuery),
+    responses(
+        (status = 200, description = "List family deposits", body = [FamilyDeposit]),
+    )
+)]
 pub async fn list(
     State(state): State<AppState>,
     Query(query): Query<ListQuery>,
@@ -92,6 +101,16 @@ fn validate_holder(holder: &str) -> Result<String, ApiError> {
     Ok(holder.to_string())
 }
 
+#[utoipa::path(
+    post,
+    path = "/api/family/deposits",
+    tag = "family",
+    request_body = NewFamilyDeposit,
+    responses(
+        (status = 201, description = "Family deposit created", body = FamilyDeposit),
+        (status = 400, description = "Missing or invalid fields", body = ErrorBody),
+    )
+)]
 pub async fn create(
     State(state): State<AppState>,
     Json(body): Json<NewFamilyDeposit>,
@@ -141,6 +160,18 @@ pub async fn create(
     Ok((StatusCode::CREATED, Json(load_one(&state.pool, id).await?)))
 }
 
+#[utoipa::path(
+    patch,
+    path = "/api/family/deposits/{id}",
+    tag = "family",
+    params(("id" = i64, Path, description = "Family deposit id")),
+    request_body = FamilyDepositPatch,
+    responses(
+        (status = 200, description = "Updated family deposit", body = FamilyDeposit),
+        (status = 400, description = "Missing or invalid fields", body = ErrorBody),
+        (status = 404, description = "Family deposit not found", body = ErrorBody),
+    )
+)]
 pub async fn update(
     State(state): State<AppState>,
     Path(id): Path<i64>,
@@ -202,6 +233,16 @@ pub async fn update(
     Ok(Json(load_one(&state.pool, id).await?))
 }
 
+#[utoipa::path(
+    delete,
+    path = "/api/family/deposits/{id}",
+    tag = "family",
+    params(("id" = i64, Path, description = "Family deposit id")),
+    responses(
+        (status = 204, description = "Family deposit deleted"),
+        (status = 404, description = "Family deposit not found", body = ErrorBody),
+    )
+)]
 pub async fn remove(
     State(state): State<AppState>,
     Path(id): Path<i64>,
@@ -216,7 +257,7 @@ pub async fn remove(
     Ok(StatusCode::NO_CONTENT)
 }
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Deserialize, utoipa::ToSchema, utoipa::IntoParams)]
 pub struct ReceiveFamilyDeposit {
     /// 收訖日 (`YYYY-MM-DD`); defaults to today.
     pub received_at: Option<String>,
@@ -226,6 +267,19 @@ pub struct ReceiveFamilyDeposit {
 
 /// 收訖: mark the deposit received and optionally correct the interest — no
 /// cash credit and no month item; family money never enters the ledger.
+#[utoipa::path(
+    post,
+    path = "/api/family/deposits/{id}/receive",
+    tag = "family",
+    params(("id" = i64, Path, description = "Family deposit id")),
+    request_body = ReceiveFamilyDeposit,
+    responses(
+        (status = 200, description = "Family deposit marked 收訖 (no side effects)", body = FamilyDeposit),
+        (status = 400, description = "Missing or invalid fields", body = ErrorBody),
+        (status = 404, description = "Family deposit not found", body = ErrorBody),
+        (status = 409, description = "Family deposit already received", body = ErrorBody),
+    )
+)]
 pub async fn receive(
     State(state): State<AppState>,
     Path(id): Path<i64>,
@@ -265,6 +319,17 @@ pub async fn receive(
 }
 
 /// 取消收訖: clear the received flag so the deposit returns to 未到期.
+#[utoipa::path(
+    post,
+    path = "/api/family/deposits/{id}/unreceive",
+    tag = "family",
+    params(("id" = i64, Path, description = "Family deposit id")),
+    responses(
+        (status = 200, description = "收訖 cleared", body = FamilyDeposit),
+        (status = 404, description = "Family deposit not found", body = ErrorBody),
+        (status = 409, description = "Family deposit is not received", body = ErrorBody),
+    )
+)]
 pub async fn unreceive(
     State(state): State<AppState>,
     Path(id): Path<i64>,
@@ -284,13 +349,23 @@ pub async fn unreceive(
     Ok(Json(load_one(&state.pool, id).await?))
 }
 
-#[derive(Debug, Serialize)]
+#[derive(Debug, Serialize, utoipa::ToSchema)]
 pub struct HolderNoteResponse {
     pub holder: String,
     pub note: Option<String>,
 }
 
 /// `PUT /family/holders/:holder/note` — an empty or `null` note clears it.
+#[utoipa::path(
+    put,
+    path = "/api/family/holders/{holder}/note",
+    tag = "family",
+    params(("holder" = String, Path, description = "Holder name")),
+    request_body = MpfNotePatch,
+    responses(
+        (status = 200, description = "Stored holder note (null clears it)", body = HolderNoteResponse),
+    )
+)]
 pub async fn update_note(
     State(state): State<AppState>,
     Path(holder): Path<String>,
@@ -309,7 +384,7 @@ pub async fn update_note(
     }))
 }
 
-#[derive(Debug, Serialize)]
+#[derive(Debug, Serialize, utoipa::ToSchema)]
 pub struct FamilyHolderSummary {
     pub holder: String,
     pub note: Option<String>,
@@ -319,7 +394,7 @@ pub struct FamilyHolderSummary {
     pub active_principal: f64,
 }
 
-#[derive(Debug, Serialize)]
+#[derive(Debug, Serialize, utoipa::ToSchema)]
 pub struct FamilyDepositSummary {
     /// The date `status`/`active_principal` were derived against.
     pub today: String,
@@ -330,6 +405,14 @@ pub struct FamilyDepositSummary {
 }
 
 /// Every figure here is derived from the stored family deposits on each read.
+#[utoipa::path(
+    get,
+    path = "/api/family/deposits/summary",
+    tag = "family",
+    responses(
+        (status = 200, description = "Per-holder family deposit summary", body = FamilyDepositSummary),
+    )
+)]
 pub async fn summary(
     State(state): State<AppState>,
 ) -> Result<Json<FamilyDepositSummary>, ApiError> {

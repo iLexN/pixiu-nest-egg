@@ -10,10 +10,10 @@ use crate::calc::{
     ActiveMonthBucket, ActiveTotals, BankRollup, DepositFacts, DepositInput, ValidatedDeposit,
     YearRollup, active_month_rollup, active_totals, bank_rollup, validate_deposit, year_rollups,
 };
-use crate::error::ApiError;
+use crate::error::{ApiError, ErrorBody};
 use crate::models::{Deposit, DepositPatch, NewDeposit};
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Deserialize, utoipa::ToSchema, utoipa::IntoParams)]
 pub struct ListQuery {
     /// `active` (not yet 收訖, even past end date) or `ended` (received).
     pub status: Option<String>,
@@ -23,6 +23,15 @@ pub struct ListQuery {
     pub order: Option<String>,
 }
 
+#[utoipa::path(
+    get,
+    path = "/api/deposits",
+    tag = "deposits",
+    params(ListQuery),
+    responses(
+        (status = 200, description = "List 定期 deposits", body = [Deposit]),
+    )
+)]
 pub async fn list(
     State(state): State<AppState>,
     Query(query): Query<ListQuery>,
@@ -68,6 +77,16 @@ pub async fn list(
         .map(Json)
 }
 
+#[utoipa::path(
+    post,
+    path = "/api/deposits",
+    tag = "deposits",
+    request_body = NewDeposit,
+    responses(
+        (status = 201, description = "Deposit created", body = Deposit),
+        (status = 400, description = "Missing or invalid fields", body = ErrorBody),
+    )
+)]
 pub async fn create(
     State(state): State<AppState>,
     Json(body): Json<NewDeposit>,
@@ -91,6 +110,18 @@ pub async fn create(
     Ok((StatusCode::CREATED, Json(load_one(&state.pool, id).await?)))
 }
 
+#[utoipa::path(
+    patch,
+    path = "/api/deposits/{id}",
+    tag = "deposits",
+    params(("id" = i64, Path, description = "Deposit id")),
+    request_body = DepositPatch,
+    responses(
+        (status = 200, description = "Updated deposit", body = Deposit),
+        (status = 400, description = "Missing or invalid fields", body = ErrorBody),
+        (status = 404, description = "Deposit not found", body = ErrorBody),
+    )
+)]
 pub async fn update(
     State(state): State<AppState>,
     Path(id): Path<i64>,
@@ -151,6 +182,16 @@ pub async fn update(
     Ok(Json(load_one(&state.pool, id).await?))
 }
 
+#[utoipa::path(
+    delete,
+    path = "/api/deposits/{id}",
+    tag = "deposits",
+    params(("id" = i64, Path, description = "Deposit id")),
+    responses(
+        (status = 204, description = "Deposit deleted"),
+        (status = 404, description = "Deposit not found", body = ErrorBody),
+    )
+)]
 pub async fn remove(
     State(state): State<AppState>,
     Path(id): Path<i64>,
@@ -165,7 +206,7 @@ pub async fn remove(
     Ok(StatusCode::NO_CONTENT)
 }
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Deserialize, utoipa::ToSchema, utoipa::IntoParams)]
 pub struct ReceiveDeposit {
     /// 收訖日 (`YYYY-MM-DD`); defaults to today.
     pub received_at: Option<String>,
@@ -180,6 +221,19 @@ pub struct ReceiveDeposit {
 /// 收訖: mark the deposit received, optionally credit its principal + interest
 /// to a cash manual asset, and record the month's `dep-end` adjustment item —
 /// the whole sheet "定期 end step" in one action.
+#[utoipa::path(
+    post,
+    path = "/api/deposits/{id}/receive",
+    tag = "deposits",
+    params(("id" = i64, Path, description = "Deposit id")),
+    request_body = ReceiveDeposit,
+    responses(
+        (status = 200, description = "Deposit marked 收訖 with optional bank-in", body = Deposit),
+        (status = 400, description = "Missing or invalid fields", body = ErrorBody),
+        (status = 404, description = "Deposit not found", body = ErrorBody),
+        (status = 409, description = "Deposit already received", body = ErrorBody),
+    )
+)]
 pub async fn receive(
     State(state): State<AppState>,
     Path(id): Path<i64>,
@@ -270,6 +324,17 @@ pub async fn receive(
 
 /// Undo a 收訖: reverse the stored cash credit, drop the auto-created dep-end
 /// item, and clear the received flag so the deposit returns to 未到期定期.
+#[utoipa::path(
+    post,
+    path = "/api/deposits/{id}/unreceive",
+    tag = "deposits",
+    params(("id" = i64, Path, description = "Deposit id")),
+    responses(
+        (status = 200, description = "收訖 cleared and bank-in reversed", body = Deposit),
+        (status = 404, description = "Deposit not found", body = ErrorBody),
+        (status = 409, description = "Deposit is not received", body = ErrorBody),
+    )
+)]
 pub async fn unreceive(
     State(state): State<AppState>,
     Path(id): Path<i64>,
@@ -313,7 +378,7 @@ pub async fn unreceive(
     Ok(Json(load_one(&state.pool, id).await?))
 }
 
-#[derive(Debug, Serialize)]
+#[derive(Debug, Serialize, utoipa::ToSchema)]
 pub struct DepositSummaryResponse {
     /// The date `status` was derived against.
     pub today: String,
@@ -331,6 +396,14 @@ pub struct DepositSummaryResponse {
 }
 
 /// Every figure here is derived from the stored deposits on each read.
+#[utoipa::path(
+    get,
+    path = "/api/deposits/summary",
+    tag = "deposits",
+    responses(
+        (status = 200, description = "Active deposits plus month/bank/year rollups", body = DepositSummaryResponse),
+    )
+)]
 pub async fn summary(
     State(state): State<AppState>,
 ) -> Result<Json<DepositSummaryResponse>, ApiError> {

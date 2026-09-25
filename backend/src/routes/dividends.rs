@@ -12,10 +12,10 @@ use crate::calc::{
     DividendFacts, DividendInput, DividendYearRollup, TradeFacts, ValidatedDividend,
     dividend_year_rollups, holdings_snapshot, validate_dividend,
 };
-use crate::error::ApiError;
+use crate::error::{ApiError, ErrorBody};
 use crate::models::{Dividend, DividendPatch, Market, NewDividend, TradeType};
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Deserialize, utoipa::ToSchema, utoipa::IntoParams)]
 pub struct ListQuery {
     pub market: Option<String>,
     pub stock_id: Option<i64>,
@@ -27,6 +27,15 @@ pub struct ListQuery {
     pub order: Option<String>,
 }
 
+#[utoipa::path(
+    get,
+    path = "/api/dividends",
+    tag = "dividends",
+    params(ListQuery),
+    responses(
+        (status = 200, description = "List dividend records", body = [Dividend]),
+    )
+)]
 pub async fn list(
     State(state): State<AppState>,
     Query(query): Query<ListQuery>,
@@ -138,6 +147,17 @@ async fn derive_snapshots(
     Ok(holdings_snapshot(&facts, as_of))
 }
 
+#[utoipa::path(
+    post,
+    path = "/api/dividends",
+    tag = "dividends",
+    request_body = NewDividend,
+    responses(
+        (status = 201, description = "Dividend created with frozen holding/cost snapshots", body = Dividend),
+        (status = 400, description = "Missing or invalid fields", body = ErrorBody),
+        (status = 404, description = "Stock not found", body = ErrorBody),
+    )
+)]
 pub async fn create(
     State(state): State<AppState>,
     Json(body): Json<NewDividend>,
@@ -178,6 +198,18 @@ pub async fn create(
     Ok((StatusCode::CREATED, Json(load_one(&state.pool, id).await?)))
 }
 
+#[utoipa::path(
+    patch,
+    path = "/api/dividends/{id}",
+    tag = "dividends",
+    params(("id" = i64, Path, description = "Dividend id")),
+    request_body = DividendPatch,
+    responses(
+        (status = 200, description = "Updated dividend (receipt lifecycle fields)", body = Dividend),
+        (status = 400, description = "Missing or invalid fields", body = ErrorBody),
+        (status = 404, description = "Dividend not found", body = ErrorBody),
+    )
+)]
 pub async fn update(
     State(state): State<AppState>,
     Path(id): Path<i64>,
@@ -355,6 +387,16 @@ async fn credit_ibkr_usd(
     Ok(())
 }
 
+#[utoipa::path(
+    delete,
+    path = "/api/dividends/{id}",
+    tag = "dividends",
+    params(("id" = i64, Path, description = "Dividend id")),
+    responses(
+        (status = 204, description = "Dividend deleted"),
+        (status = 404, description = "Dividend not found", body = ErrorBody),
+    )
+)]
 pub async fn remove(
     State(state): State<AppState>,
     Path(id): Path<i64>,
@@ -369,7 +411,7 @@ pub async fn remove(
     Ok(StatusCode::NO_CONTENT)
 }
 
-#[derive(Debug, Serialize)]
+#[derive(Debug, Serialize, utoipa::ToSchema)]
 pub struct DividendSummaryResponse {
     /// The date the response was generated.
     pub today: String,
@@ -382,6 +424,15 @@ pub struct DividendSummaryResponse {
 }
 
 /// Every figure here is derived from the stored dividends on each read.
+#[utoipa::path(
+    get,
+    path = "/api/dividends/summary",
+    tag = "dividends",
+    params(ListQuery),
+    responses(
+        (status = 200, description = "Dividend totals and year rollups", body = DividendSummaryResponse),
+    )
+)]
 pub async fn summary(
     State(state): State<AppState>,
     Query(query): Query<ListQuery>,

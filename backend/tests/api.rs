@@ -9,7 +9,9 @@ use wealth_backend::routes::{AppState, api_router};
 
 async fn app() -> Router {
     let pool = db::connect_memory().await.expect("in-memory database");
-    Router::new().nest("/api", api_router(AppState { pool }))
+    // Route paths already carry the /api prefix.
+    let (api, _openapi) = api_router(AppState { pool });
+    Router::new().merge(api)
 }
 
 async fn send(app: &Router, method: &str, uri: &str, body: Option<Value>) -> (StatusCode, Value) {

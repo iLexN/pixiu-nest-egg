@@ -13,10 +13,10 @@ pub mod year_review;
 pub mod yearly;
 
 use axum::Router;
-use axum::routing::{get, patch, post, put};
 use chrono::Datelike;
 use sqlx::sqlite::SqliteRow;
 use sqlx::{Row, SqlitePool};
+use utoipa::OpenApi;
 
 use crate::calc::{
     bond_active, coupon_expected, coupon_status, coupon_variance, deposit_total, dividend_amount,
@@ -33,102 +33,94 @@ pub struct AppState {
     pub pool: SqlitePool,
 }
 
-pub fn api_router(state: AppState) -> Router {
-    Router::new()
-        .route("/stocks", get(stocks::list).post(stocks::create))
-        .route("/stocks/order", post(stocks::reorder))
-        .route("/stocks/prices", post(stocks::upload_prices))
-        .route("/stocks/{id}", patch(stocks::update).delete(stocks::remove))
-        .route("/trades", get(trades::list).post(trades::create))
-        .route("/trades/{id}", patch(trades::update).delete(trades::remove))
-        .route("/summary", get(summary::show))
-        .route("/summary/yearly", get(yearly::list))
-        .route("/summary/yearly/{market}/{year}", patch(yearly::update))
-        .route(
-            "/summary/yearly/{market}/{year}/freeze",
-            post(yearly::freeze),
-        )
-        .route("/year-review", get(year_review::list))
-        .route("/year-review/{year}", patch(year_review::update))
-        .route("/deposits", get(deposits::list).post(deposits::create))
-        .route("/deposits/summary", get(deposits::summary))
-        .route(
-            "/deposits/{id}",
-            patch(deposits::update).delete(deposits::remove),
-        )
-        .route("/deposits/{id}/receive", post(deposits::receive))
-        .route("/deposits/{id}/unreceive", post(deposits::unreceive))
-        .route("/family/deposits", get(family::list).post(family::create))
-        .route("/family/deposits/summary", get(family::summary))
-        .route(
-            "/family/deposits/{id}",
-            patch(family::update).delete(family::remove),
-        )
-        .route("/family/deposits/{id}/receive", post(family::receive))
-        .route("/family/deposits/{id}/unreceive", post(family::unreceive))
-        .route("/family/holders/{holder}/note", put(family::update_note))
-        .route("/dividends", get(dividends::list).post(dividends::create))
-        .route("/dividends/summary", get(dividends::summary))
-        .route(
-            "/dividends/{id}",
-            patch(dividends::update).delete(dividends::remove),
-        )
-        .route("/bonds", get(bonds::list).post(bonds::create))
-        .route("/bonds/summary", get(bonds::summary))
-        .route("/bonds/{id}", patch(bonds::update).delete(bonds::remove))
-        .route("/bonds/{id}/receive", post(bonds::receive))
-        .route("/bonds/{id}/unreceive", post(bonds::unreceive))
-        .route(
-            "/coupons",
-            get(bonds::list_coupons).post(bonds::create_coupon),
-        )
-        .route(
-            "/coupons/{id}",
-            patch(bonds::update_coupon).delete(bonds::remove_coupon),
-        )
-        .route("/mpf", get(mpf::overview))
-        .route("/mpf/accounts", post(mpf::create))
-        .route("/mpf/accounts/{id}", patch(mpf::update).delete(mpf::remove))
-        .route("/mpf/note", patch(mpf::update_note))
-        .route(
-            "/mpf/history/{id}",
-            axum::routing::delete(mpf::remove_history),
-        )
-        .route("/aia/policies", get(aia::list).post(aia::create))
-        .route("/aia/summary", get(aia::summary))
-        .route("/aia/rate", patch(aia::update_rate))
-        .route("/aia/policies/{id}", patch(aia::update).delete(aia::remove))
-        .route("/aia/events", get(aia::list_events).post(aia::create_event))
-        .route("/aia/events/{id}", axum::routing::delete(aia::remove_event))
-        .route("/months", get(months::list))
-        .route("/months/summary", get(months::summary))
-        .route(
-            "/months/settings",
-            get(months::settings).patch(months::update_settings),
-        )
-        .route(
-            "/months/{ym}",
-            get(months::show)
-                .patch(months::upsert)
-                .delete(months::remove),
-        )
-        .route("/months/{ym}/items", post(months::create_item))
-        .route("/months/{ym}/items/dismiss", post(months::dismiss_item))
-        .route(
-            "/month-items/{id}",
-            patch(months::update_item).delete(months::remove_item),
-        )
-        .route(
-            "/manual-assets",
-            get(months::list_assets).post(months::create_asset),
-        )
-        .route(
-            "/manual-assets/{id}",
-            patch(months::update_asset).delete(months::remove_asset),
-        )
-        .route("/overview", get(overview::overview))
-        .route("/ibkr", get(overview::ibkr).patch(overview::update_ibkr))
-        .with_state(state)
+#[derive(utoipa::OpenApi)]
+#[openapi(info(title = "Wealth Report API", version = "0.1.0"))]
+struct ApiDoc;
+
+/// Build the API router and the OpenAPI document describing it. Routes MUST be
+/// registered via `routes!` — a plain `.route()` on an `OpenApiRouter` compiles
+/// but silently leaves the endpoint out of the doc.
+pub fn api_router(state: AppState) -> (Router, utoipa::openapi::OpenApi) {
+    let (router, api) = utoipa_axum::router::OpenApiRouter::with_openapi(ApiDoc::openapi())
+        .routes(utoipa_axum::routes!(stocks::list, stocks::create))
+        .routes(utoipa_axum::routes!(stocks::reorder))
+        .routes(utoipa_axum::routes!(stocks::upload_prices))
+        .routes(utoipa_axum::routes!(stocks::update, stocks::remove))
+        .routes(utoipa_axum::routes!(trades::list, trades::create))
+        .routes(utoipa_axum::routes!(trades::update, trades::remove))
+        .routes(utoipa_axum::routes!(summary::show))
+        .routes(utoipa_axum::routes!(yearly::list))
+        .routes(utoipa_axum::routes!(yearly::update))
+        .routes(utoipa_axum::routes!(yearly::freeze))
+        .routes(utoipa_axum::routes!(year_review::list))
+        .routes(utoipa_axum::routes!(year_review::update))
+        .routes(utoipa_axum::routes!(deposits::list, deposits::create))
+        .routes(utoipa_axum::routes!(deposits::summary))
+        .routes(utoipa_axum::routes!(deposits::update, deposits::remove))
+        .routes(utoipa_axum::routes!(deposits::receive))
+        .routes(utoipa_axum::routes!(deposits::unreceive))
+        .routes(utoipa_axum::routes!(family::list, family::create))
+        .routes(utoipa_axum::routes!(family::summary))
+        .routes(utoipa_axum::routes!(family::update, family::remove))
+        .routes(utoipa_axum::routes!(family::receive))
+        .routes(utoipa_axum::routes!(family::unreceive))
+        .routes(utoipa_axum::routes!(family::update_note))
+        .routes(utoipa_axum::routes!(dividends::list, dividends::create))
+        .routes(utoipa_axum::routes!(dividends::summary))
+        .routes(utoipa_axum::routes!(dividends::update, dividends::remove))
+        .routes(utoipa_axum::routes!(bonds::list, bonds::create))
+        .routes(utoipa_axum::routes!(bonds::summary))
+        .routes(utoipa_axum::routes!(bonds::update, bonds::remove))
+        .routes(utoipa_axum::routes!(bonds::receive))
+        .routes(utoipa_axum::routes!(bonds::unreceive))
+        .routes(utoipa_axum::routes!(
+            bonds::list_coupons,
+            bonds::create_coupon
+        ))
+        .routes(utoipa_axum::routes!(
+            bonds::update_coupon,
+            bonds::remove_coupon
+        ))
+        .routes(utoipa_axum::routes!(mpf::overview))
+        .routes(utoipa_axum::routes!(mpf::create))
+        .routes(utoipa_axum::routes!(mpf::update, mpf::remove))
+        .routes(utoipa_axum::routes!(mpf::update_note))
+        .routes(utoipa_axum::routes!(mpf::remove_history))
+        .routes(utoipa_axum::routes!(aia::list, aia::create))
+        .routes(utoipa_axum::routes!(aia::summary))
+        .routes(utoipa_axum::routes!(aia::update_rate))
+        .routes(utoipa_axum::routes!(aia::update, aia::remove))
+        .routes(utoipa_axum::routes!(aia::list_events, aia::create_event))
+        .routes(utoipa_axum::routes!(aia::remove_event))
+        .routes(utoipa_axum::routes!(months::list))
+        .routes(utoipa_axum::routes!(months::summary))
+        .routes(utoipa_axum::routes!(
+            months::settings,
+            months::update_settings
+        ))
+        .routes(utoipa_axum::routes!(
+            months::show,
+            months::upsert,
+            months::remove
+        ))
+        .routes(utoipa_axum::routes!(months::create_item))
+        .routes(utoipa_axum::routes!(months::dismiss_item))
+        .routes(utoipa_axum::routes!(
+            months::update_item,
+            months::remove_item
+        ))
+        .routes(utoipa_axum::routes!(
+            months::list_assets,
+            months::create_asset
+        ))
+        .routes(utoipa_axum::routes!(
+            months::update_asset,
+            months::remove_asset
+        ))
+        .routes(utoipa_axum::routes!(overview::overview))
+        .routes(utoipa_axum::routes!(overview::ibkr, overview::update_ibkr))
+        .split_for_parts();
+    (router.with_state(state), api)
 }
 
 /// Kept next to the router so both stock and trade handlers share it.
@@ -420,4 +412,123 @@ pub fn row_to_coupon(row: &SqliteRow) -> Result<BondCoupon, ApiError> {
         expected,
         variance: coupon_variance(received_amount, expected),
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::db::connect_memory;
+    use std::collections::BTreeSet;
+
+    /// The doc is generated from the same `routes!` registrations that serve
+    /// requests, so an undocumented endpoint is impossible — this instead pins
+    /// the exact surface so a route change always updates this list.
+    #[tokio::test]
+    async fn openapi_documents_every_api_operation() {
+        let pool = connect_memory().await.expect("memory db");
+        let (_router, api) = api_router(AppState { pool });
+
+        let doc: serde_json::Value =
+            serde_json::from_str(&api.to_json().expect("openapi serializes")).unwrap();
+        let actual: BTreeSet<(String, String)> = doc["paths"]
+            .as_object()
+            .expect("paths object")
+            .iter()
+            .flat_map(|(path, item)| {
+                item.as_object()
+                    .expect("path item")
+                    .keys()
+                    .map(|method| (path.clone(), method.clone()))
+                    .collect::<Vec<_>>()
+            })
+            .collect();
+
+        let expected: BTreeSet<(String, String)> = [
+            ("/api/aia/events", "get"),
+            ("/api/aia/events", "post"),
+            ("/api/aia/events/{id}", "delete"),
+            ("/api/aia/policies", "get"),
+            ("/api/aia/policies", "post"),
+            ("/api/aia/policies/{id}", "delete"),
+            ("/api/aia/policies/{id}", "patch"),
+            ("/api/aia/rate", "patch"),
+            ("/api/aia/summary", "get"),
+            ("/api/bonds", "get"),
+            ("/api/bonds", "post"),
+            ("/api/bonds/summary", "get"),
+            ("/api/bonds/{id}", "delete"),
+            ("/api/bonds/{id}", "patch"),
+            ("/api/bonds/{id}/receive", "post"),
+            ("/api/bonds/{id}/unreceive", "post"),
+            ("/api/coupons", "get"),
+            ("/api/coupons", "post"),
+            ("/api/coupons/{id}", "delete"),
+            ("/api/coupons/{id}", "patch"),
+            ("/api/deposits", "get"),
+            ("/api/deposits", "post"),
+            ("/api/deposits/summary", "get"),
+            ("/api/deposits/{id}", "delete"),
+            ("/api/deposits/{id}", "patch"),
+            ("/api/deposits/{id}/receive", "post"),
+            ("/api/deposits/{id}/unreceive", "post"),
+            ("/api/dividends", "get"),
+            ("/api/dividends", "post"),
+            ("/api/dividends/summary", "get"),
+            ("/api/dividends/{id}", "delete"),
+            ("/api/dividends/{id}", "patch"),
+            ("/api/family/deposits", "get"),
+            ("/api/family/deposits", "post"),
+            ("/api/family/deposits/summary", "get"),
+            ("/api/family/deposits/{id}", "delete"),
+            ("/api/family/deposits/{id}", "patch"),
+            ("/api/family/deposits/{id}/receive", "post"),
+            ("/api/family/deposits/{id}/unreceive", "post"),
+            ("/api/family/holders/{holder}/note", "put"),
+            ("/api/ibkr", "get"),
+            ("/api/ibkr", "patch"),
+            ("/api/manual-assets", "get"),
+            ("/api/manual-assets", "post"),
+            ("/api/manual-assets/{id}", "delete"),
+            ("/api/manual-assets/{id}", "patch"),
+            ("/api/month-items/{id}", "delete"),
+            ("/api/month-items/{id}", "patch"),
+            ("/api/months", "get"),
+            ("/api/months/settings", "get"),
+            ("/api/months/settings", "patch"),
+            ("/api/months/summary", "get"),
+            ("/api/months/{ym}", "delete"),
+            ("/api/months/{ym}", "get"),
+            ("/api/months/{ym}", "patch"),
+            ("/api/months/{ym}/items", "post"),
+            ("/api/months/{ym}/items/dismiss", "post"),
+            ("/api/mpf", "get"),
+            ("/api/mpf/accounts", "post"),
+            ("/api/mpf/accounts/{id}", "delete"),
+            ("/api/mpf/accounts/{id}", "patch"),
+            ("/api/mpf/history/{id}", "delete"),
+            ("/api/mpf/note", "patch"),
+            ("/api/overview", "get"),
+            ("/api/stocks", "get"),
+            ("/api/stocks", "post"),
+            ("/api/stocks/order", "post"),
+            ("/api/stocks/prices", "post"),
+            ("/api/stocks/{id}", "delete"),
+            ("/api/stocks/{id}", "patch"),
+            ("/api/summary", "get"),
+            ("/api/summary/yearly", "get"),
+            ("/api/summary/yearly/{market}/{year}", "patch"),
+            ("/api/summary/yearly/{market}/{year}/freeze", "post"),
+            ("/api/trades", "get"),
+            ("/api/trades", "post"),
+            ("/api/trades/{id}", "delete"),
+            ("/api/trades/{id}", "patch"),
+            ("/api/year-review", "get"),
+            ("/api/year-review/{year}", "patch"),
+        ]
+        .iter()
+        .map(|(path, method)| (path.to_string(), method.to_string()))
+        .collect();
+
+        assert_eq!(actual, expected);
+    }
 }

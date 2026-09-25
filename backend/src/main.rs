@@ -2,9 +2,12 @@ use std::net::SocketAddr;
 use std::path::PathBuf;
 
 use axum::Router;
+use axum::http::header::CONTENT_TYPE;
+use axum::routing::get;
 use tower_http::cors::CorsLayer;
 use tower_http::services::{ServeDir, ServeFile};
 use tower_http::trace::TraceLayer;
+use utoipa_scalar::Servable;
 use wealth_backend::db;
 use wealth_backend::routes::{AppState, api_router};
 
@@ -27,7 +30,10 @@ async fn main() -> anyhow::Result<()> {
         .unwrap_or_else(|_| DEFAULT_ADDR.to_string())
         .parse()?;
 
-    let app = build_app(AppState { pool });
+    let app = build_app(AppState { pool }).unwrap_or_else(|err| {
+        tracing::error!("failed to build app: {err}");
+        std::process::exit(1);
+    });
     let listener = tokio::net::TcpListener::bind(addr).await?;
     tracing::info!("listening on http://{addr}");
     axum::serve(listener, app)
@@ -36,16 +42,52 @@ async fn main() -> anyhow::Result<()> {
     Ok(())
 }
 
-fn build_app(state: AppState) -> Router {
+/// Scalar page: the spec is inlined as `$spec`; `data-configuration` disables
+/// the Ask AI agent button, which the default bundle enables on loopback.
+const SCALAR_HTML: &str = r#"<!doctype html>
+<html>
+<head>
+    <title>Scalar</title>
+    <meta charset="utf-8"/>
+    <meta name="viewport" content="width=device-width, initial-scale=1"/>
+</head>
+<body>
+<script
+        id="api-reference"
+        type="application/json"
+        data-configuration='{"agentEnabled": false, "agent": {"disabled": true}}'>
+    $spec
+</script>
+<script src="https://cdn.jsdelivr.net/npm/@scalar/api-reference"></script>
+</body>
+</html>
+"#;
+
+fn build_app(state: AppState) -> anyhow::Result<Router> {
     let dist = frontend_dist();
     // Serving index.html as the fallback keeps client-side routing working.
     let static_files = ServeDir::new(&dist).fallback(ServeFile::new(dist.join("index.html")));
 
-    Router::new()
-        .nest("/api", api_router(state))
+    // Route paths already carry the /api prefix, so the router merges at the
+    // root; the same declaration produces the OpenAPI document.
+    let (api, openapi) = api_router(state);
+    let spec = openapi.to_json()?;
+
+    Ok(Router::new()
+        .merge(api)
+        .route(
+            "/api-docs/openapi.json",
+            get(move || {
+                let spec = spec.clone();
+                async move { ([(CONTENT_TYPE, "application/json")], spec) }
+            }),
+        )
+        .merge(
+            utoipa_scalar::Scalar::with_url("/scalar", openapi).custom_html(SCALAR_HTML),
+        )
         .fallback_service(static_files)
         .layer(CorsLayer::permissive())
-        .layer(TraceLayer::new_for_http())
+        .layer(TraceLayer::new_for_http()))
 }
 
 fn frontend_dist() -> PathBuf {

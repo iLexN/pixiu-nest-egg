@@ -8,19 +8,19 @@ use crate::calc::{
     MarketTotals, MpfPoint, RollupInput, SectorRollup, StockSummary, TradeFacts, market_totals,
     mpf_last_month, mpf_max, sector_rollup, summarize,
 };
-use crate::error::ApiError;
+use crate::error::{ApiError, ErrorBody};
 use crate::models::{Market, MarketFigures, Stock, TradeType};
 
 /// Shown next to 加權平均買入單價 so the definition travels with the number.
 pub const AVERAGE_PRICE_DEFINITION: &str =
     "加權平均買入單價 = 總買入成本 ÷ Σ BUY 股數 (shares bought, not shares held)";
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Deserialize, utoipa::ToSchema, utoipa::IntoParams)]
 pub struct SummaryQuery {
     pub market: String,
 }
 
-#[derive(Debug, Serialize)]
+#[derive(Debug, Serialize, utoipa::ToSchema)]
 pub struct StockRow {
     #[serde(flatten)]
     pub stock: Stock,
@@ -29,7 +29,7 @@ pub struct StockRow {
     pub trade_count: usize,
 }
 
-#[derive(Debug, Serialize)]
+#[derive(Debug, Serialize, utoipa::ToSchema)]
 pub struct SummaryResponse {
     pub market: Market,
     pub average_price_definition: &'static str,
@@ -44,6 +44,16 @@ pub struct SummaryResponse {
     pub max: Option<MarketFigures>,
 }
 
+#[utoipa::path(
+    get,
+    path = "/api/summary",
+    tag = "summary",
+    params(SummaryQuery),
+    responses(
+        (status = 200, description = "Per-stock summary, sector rollup, and market totals", body = SummaryResponse),
+        (status = 400, description = "Invalid market", body = ErrorBody),
+    )
+)]
 pub async fn show(
     State(state): State<AppState>,
     Query(query): Query<SummaryQuery>,

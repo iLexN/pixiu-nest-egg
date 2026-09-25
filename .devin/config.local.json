@@ -45,7 +45,9 @@
       "Exec(xargs kill)",
       "Exec(seq)",
       "Exec(npm ls)",
-      "Exec(jq)"
+      "Exec(jq)",
+      "Exec(git tag)",
+      "Exec(WEALTH_ADDR=127.0.0.1:8788 cargo run)"
     ]
   }
 }

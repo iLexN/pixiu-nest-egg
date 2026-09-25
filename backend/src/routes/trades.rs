@@ -6,10 +6,10 @@ use sqlx::SqlitePool;
 
 use super::{AppState, TRADE_SELECT, now_timestamp, parse_market, row_to_trade};
 use crate::calc::{TradeInput, ValidatedTrade, validate_trade};
-use crate::error::ApiError;
+use crate::error::{ApiError, ErrorBody};
 use crate::models::{InputMode, Market, NewTrade, Trade, TradePatch};
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Deserialize, utoipa::ToSchema, utoipa::IntoParams)]
 pub struct ListQuery {
     pub market: Option<String>,
     pub stock_id: Option<i64>,
@@ -22,6 +22,16 @@ pub struct ListQuery {
     pub order: Option<String>,
 }
 
+#[utoipa::path(
+    get,
+    path = "/api/trades",
+    tag = "trades",
+    params(ListQuery),
+    responses(
+        (status = 200, description = "List trades with optional filters", body = [Trade]),
+        (status = 400, description = "Invalid market", body = ErrorBody),
+    )
+)]
 pub async fn list(
     State(state): State<AppState>,
     Query(query): Query<ListQuery>,
@@ -81,6 +91,17 @@ pub async fn list(
         .map(Json)
 }
 
+#[utoipa::path(
+    post,
+    path = "/api/trades",
+    tag = "trades",
+    request_body = NewTrade,
+    responses(
+        (status = 201, description = "Trade created", body = Trade),
+        (status = 400, description = "Missing or invalid fields", body = ErrorBody),
+        (status = 404, description = "Stock not found", body = ErrorBody),
+    )
+)]
 pub async fn create(
     State(state): State<AppState>,
     Json(body): Json<NewTrade>,
@@ -110,6 +131,18 @@ pub async fn create(
     Ok((StatusCode::CREATED, Json(load_one(&state.pool, id).await?)))
 }
 
+#[utoipa::path(
+    patch,
+    path = "/api/trades/{id}",
+    tag = "trades",
+    params(("id" = i64, Path, description = "Trade id")),
+    request_body = TradePatch,
+    responses(
+        (status = 200, description = "Updated trade", body = Trade),
+        (status = 400, description = "Missing or invalid fields", body = ErrorBody),
+        (status = 404, description = "Trade not found", body = ErrorBody),
+    )
+)]
 pub async fn update(
     State(state): State<AppState>,
     Path(id): Path<i64>,
@@ -179,6 +212,16 @@ pub async fn update(
     Ok(Json(load_one(&state.pool, id).await?))
 }
 
+#[utoipa::path(
+    delete,
+    path = "/api/trades/{id}",
+    tag = "trades",
+    params(("id" = i64, Path, description = "Trade id")),
+    responses(
+        (status = 204, description = "Trade deleted"),
+        (status = 404, description = "Trade not found", body = ErrorBody),
+    )
+)]
 pub async fn remove(
     State(state): State<AppState>,
     Path(id): Path<i64>,

@@ -5,7 +5,7 @@ use sqlx::SqlitePool;
 
 use super::{AppState, aia, months, mpf, now_timestamp, summary, today};
 use crate::calc::{FieldError, live_totals, trailing_averages};
-use crate::error::ApiError;
+use crate::error::{ApiError, ErrorBody};
 use crate::models::{
     IbkrBlock, IbkrPatch, ManualAsset, ManualAssetKind, OverviewAssetRow, OverviewResponse,
     SemiLiquid, TwelveMonthAverages,
@@ -58,10 +58,28 @@ pub async fn ibkr_block(pool: &SqlitePool) -> Result<IbkrBlock, ApiError> {
     })
 }
 
+#[utoipa::path(
+    get,
+    path = "/api/ibkr",
+    tag = "overview",
+    responses(
+        (status = 200, description = "IBKR account block (manual cells plus derived cross-checks)", body = IbkrBlock),
+    )
+)]
 pub async fn ibkr(State(state): State<AppState>) -> Result<Json<IbkrBlock>, ApiError> {
     ibkr_block(&state.pool).await.map(Json)
 }
 
+#[utoipa::path(
+    patch,
+    path = "/api/ibkr",
+    tag = "overview",
+    request_body = IbkrPatch,
+    responses(
+        (status = 200, description = "Updated IBKR block; 轉入 appends a dated transfer row", body = IbkrBlock),
+        (status = 400, description = "Missing or invalid fields", body = ErrorBody),
+    )
+)]
 pub async fn update_ibkr(
     State(state): State<AppState>,
     Json(patch): Json<IbkrPatch>,
@@ -127,6 +145,14 @@ pub async fn update_ibkr(
 }
 
 /// `Overview!A3:C18` plus the B1/H1/J1 headline, derived on read.
+#[utoipa::path(
+    get,
+    path = "/api/overview",
+    tag = "overview",
+    responses(
+        (status = 200, description = "Headline totals, asset table, 半流動資金, and IBKR block", body = OverviewResponse),
+    )
+)]
 pub async fn overview(State(state): State<AppState>) -> Result<Json<OverviewResponse>, ApiError> {
     let input = months::live_totals_input(&state.pool).await?;
     let totals = live_totals(&input);

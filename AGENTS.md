@@ -72,6 +72,10 @@ cd frontend && pnpm build && pnpm exec vue-tsc --noEmit
 
 The backend is the source of truth for validation, persistence, and all financial calculations. The Vue frontend collects input, renders API responses, formats values for display, and shows temporary previews before submission; previews are not treated as authoritative results.
 
+### API docs
+
+`GET /api-docs/openapi.json` serves the generated OpenAPI document and `/scalar` the interactive playground. Handlers carry `#[utoipa::path]` annotations and are registered in `api_router` via `utoipa_axum::routes!` — never `.route()`, which compiles but skips documentation. `routes::tests::openapi_documents_every_api_operation` pins the exact path+method list; update it when adding or removing endpoints.
+
 Frontend form inputs declared `type="number"` (or bound with `v-model.number`) store numbers in the model, not strings — coerce with `Number(...)`/`String(...)` instead of calling `.trim()` on them.
 
 ### Updating 現價

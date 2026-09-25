@@ -11,12 +11,12 @@ use super::{
 use crate::calc::{
     BondInput, CouponInput, ValidatedBond, ValidatedCoupon, validate_bond, validate_coupon,
 };
-use crate::error::ApiError;
+use crate::error::{ApiError, ErrorBody};
 use crate::models::{
     Bond, BondCoupon, BondCouponPatch, BondPatch, BondStatus, NewBond, NewBondCoupon,
 };
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Deserialize, utoipa::ToSchema, utoipa::IntoParams)]
 pub struct ListQuery {
     /// `active` (maturity in the future) or `matured`.
     pub status: Option<String>,
@@ -24,6 +24,15 @@ pub struct ListQuery {
     pub order: Option<String>,
 }
 
+#[utoipa::path(
+    get,
+    path = "/api/bonds",
+    tag = "bonds",
+    params(ListQuery),
+    responses(
+        (status = 200, description = "List bonds", body = [Bond]),
+    )
+)]
 pub async fn list(
     State(state): State<AppState>,
     Query(query): Query<ListQuery>,
@@ -68,6 +77,16 @@ pub async fn list(
         .map(Json)
 }
 
+#[utoipa::path(
+    post,
+    path = "/api/bonds",
+    tag = "bonds",
+    request_body = NewBond,
+    responses(
+        (status = 201, description = "Bond created", body = Bond),
+        (status = 400, description = "Missing or invalid fields", body = ErrorBody),
+    )
+)]
 pub async fn create(
     State(state): State<AppState>,
     Json(body): Json<NewBond>,
@@ -87,6 +106,18 @@ pub async fn create(
     Ok((StatusCode::CREATED, Json(load_bond(&state.pool, id).await?)))
 }
 
+#[utoipa::path(
+    patch,
+    path = "/api/bonds/{id}",
+    tag = "bonds",
+    params(("id" = i64, Path, description = "Bond id")),
+    request_body = BondPatch,
+    responses(
+        (status = 200, description = "Updated bond", body = Bond),
+        (status = 400, description = "Missing or invalid fields", body = ErrorBody),
+        (status = 404, description = "Bond not found", body = ErrorBody),
+    )
+)]
 pub async fn update(
     State(state): State<AppState>,
     Path(id): Path<i64>,
@@ -132,7 +163,7 @@ pub async fn update(
     Ok(Json(load_bond(&state.pool, id).await?))
 }
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Deserialize, utoipa::ToSchema, utoipa::IntoParams)]
 pub struct ReceiveBond {
     /// 收訖日 (`YYYY-MM-DD`); defaults to today.
     pub received_at: Option<String>,
@@ -146,6 +177,19 @@ pub struct ReceiveBond {
 /// principal to a cash manual asset, and record the maturity month's
 /// `bond-end` adjustment item. Coupons keep their own 收訖 — this is only
 /// about the principal.
+#[utoipa::path(
+    post,
+    path = "/api/bonds/{id}/receive",
+    tag = "bonds",
+    params(("id" = i64, Path, description = "Bond id")),
+    request_body = ReceiveBond,
+    responses(
+        (status = 200, description = "Matured principal marked 收訖 with optional bank-in", body = Bond),
+        (status = 400, description = "Missing or invalid fields", body = ErrorBody),
+        (status = 404, description = "Bond not found", body = ErrorBody),
+        (status = 409, description = "Bond already received", body = ErrorBody),
+    )
+)]
 pub async fn receive(
     State(state): State<AppState>,
     Path(id): Path<i64>,
@@ -228,6 +272,17 @@ pub async fn receive(
 
 /// Undo a bond 收訖: reverse the stored cash credit, drop the bond-end item,
 /// and clear the received flag.
+#[utoipa::path(
+    post,
+    path = "/api/bonds/{id}/unreceive",
+    tag = "bonds",
+    params(("id" = i64, Path, description = "Bond id")),
+    responses(
+        (status = 200, description = "收訖 cleared and bank-in reversed", body = Bond),
+        (status = 404, description = "Bond not found", body = ErrorBody),
+        (status = 409, description = "Bond is not received", body = ErrorBody),
+    )
+)]
 pub async fn unreceive(
     State(state): State<AppState>,
     Path(id): Path<i64>,
@@ -273,6 +328,16 @@ pub async fn unreceive(
 
 /// Deleting a bond removes its coupons: nothing outside the bond references
 /// them, so delete is always permitted.
+#[utoipa::path(
+    delete,
+    path = "/api/bonds/{id}",
+    tag = "bonds",
+    params(("id" = i64, Path, description = "Bond id")),
+    responses(
+        (status = 204, description = "Bond and its coupons deleted"),
+        (status = 404, description = "Bond not found", body = ErrorBody),
+    )
+)]
 pub async fn remove(
     State(state): State<AppState>,
     Path(id): Path<i64>,
@@ -293,7 +358,7 @@ pub async fn remove(
     Ok(StatusCode::NO_CONTENT)
 }
 
-#[derive(Debug, Serialize)]
+#[derive(Debug, Serialize, utoipa::ToSchema)]
 pub struct BondTotals {
     /// The sheet's `Total` cell: Σ principal over active bonds.
     pub active_principal: f64,
@@ -314,7 +379,7 @@ pub async fn active_principal(pool: &SqlitePool) -> Result<f64, ApiError> {
 }
 
 /// A bond with its coupon schedule attached.
-#[derive(Debug, Serialize)]
+#[derive(Debug, Serialize, utoipa::ToSchema)]
 pub struct BondWithCoupons {
     #[serde(flatten)]
     pub bond: Bond,
@@ -322,14 +387,14 @@ pub struct BondWithCoupons {
 }
 
 /// A coupon shown under 即將付息, carrying its bond's label.
-#[derive(Debug, Serialize)]
+#[derive(Debug, Serialize, utoipa::ToSchema)]
 pub struct UpcomingCoupon {
     pub bond_label: String,
     #[serde(flatten)]
     pub coupon: BondCoupon,
 }
 
-#[derive(Debug, Serialize)]
+#[derive(Debug, Serialize, utoipa::ToSchema)]
 pub struct BondSummaryResponse {
     /// The date `status` was derived against.
     pub today: String,
@@ -343,6 +408,14 @@ pub struct BondSummaryResponse {
 }
 
 /// Every figure here is derived from the stored rows on each read.
+#[utoipa::path(
+    get,
+    path = "/api/bonds/summary",
+    tag = "bonds",
+    responses(
+        (status = 200, description = "Active/matured bonds with totals and upcoming coupons", body = BondSummaryResponse),
+    )
+)]
 pub async fn summary(State(state): State<AppState>) -> Result<Json<BondSummaryResponse>, ApiError> {
     let today = today();
     let bonds = load_all_bonds(&state.pool).await?;
@@ -482,11 +555,20 @@ pub async fn load_bond_coupons(
         .collect::<Result<Vec<_>, _>>()
 }
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Deserialize, utoipa::ToSchema, utoipa::IntoParams)]
 pub struct CouponListQuery {
     pub bond_id: Option<i64>,
 }
 
+#[utoipa::path(
+    get,
+    path = "/api/coupons",
+    tag = "bonds",
+    params(CouponListQuery),
+    responses(
+        (status = 200, description = "List bond coupons", body = [BondCoupon]),
+    )
+)]
 pub async fn list_coupons(
     State(state): State<AppState>,
     Query(query): Query<CouponListQuery>,
@@ -509,6 +591,17 @@ pub async fn list_coupons(
         .map(Json)
 }
 
+#[utoipa::path(
+    post,
+    path = "/api/coupons",
+    tag = "bonds",
+    request_body = NewBondCoupon,
+    responses(
+        (status = 201, description = "Coupon created", body = BondCoupon),
+        (status = 400, description = "Missing or invalid fields", body = ErrorBody),
+        (status = 404, description = "Bond not found", body = ErrorBody),
+    )
+)]
 pub async fn create_coupon(
     State(state): State<AppState>,
     Json(body): Json<NewBondCoupon>,
@@ -530,6 +623,18 @@ pub async fn create_coupon(
     ))
 }
 
+#[utoipa::path(
+    patch,
+    path = "/api/coupons/{id}",
+    tag = "bonds",
+    params(("id" = i64, Path, description = "Coupon id")),
+    request_body = BondCouponPatch,
+    responses(
+        (status = 200, description = "Updated coupon", body = BondCoupon),
+        (status = 400, description = "Missing or invalid fields", body = ErrorBody),
+        (status = 404, description = "Coupon not found", body = ErrorBody),
+    )
+)]
 pub async fn update_coupon(
     State(state): State<AppState>,
     Path(id): Path<i64>,
@@ -650,6 +755,16 @@ pub async fn update_coupon(
     Ok(Json(load_coupon(&state.pool, id).await?))
 }
 
+#[utoipa::path(
+    delete,
+    path = "/api/coupons/{id}",
+    tag = "bonds",
+    params(("id" = i64, Path, description = "Coupon id")),
+    responses(
+        (status = 204, description = "Coupon deleted"),
+        (status = 404, description = "Coupon not found", body = ErrorBody),
+    )
+)]
 pub async fn remove_coupon(
     State(state): State<AppState>,
     Path(id): Path<i64>,

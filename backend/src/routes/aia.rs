@@ -11,7 +11,7 @@ use crate::calc::{
     aia_totals, apply_aia_payment, apply_aia_withdrawal, next_premium_due, undo_aia_event_amount,
     validate_aia_event, validate_aia_policy,
 };
-use crate::error::ApiError;
+use crate::error::{ApiError, ErrorBody};
 use crate::models::{
     AiaEvent, AiaEventKind, AiaPolicy, AiaPolicyPatch, AiaRatePatch, NewAiaEvent, NewAiaPolicy,
 };
@@ -112,10 +112,28 @@ pub async fn load_event(pool: &SqlitePool, id: i64) -> Result<AiaEvent, ApiError
     row_to_event(&row)
 }
 
+#[utoipa::path(
+    get,
+    path = "/api/aia/policies",
+    tag = "aia",
+    responses(
+        (status = 200, description = "List AIA policies", body = [AiaPolicy]),
+    )
+)]
 pub async fn list(State(state): State<AppState>) -> Result<Json<Vec<AiaPolicy>>, ApiError> {
     load_all_policies(&state.pool).await.map(Json)
 }
 
+#[utoipa::path(
+    post,
+    path = "/api/aia/policies",
+    tag = "aia",
+    request_body = NewAiaPolicy,
+    responses(
+        (status = 201, description = "AIA policy created", body = AiaPolicy),
+        (status = 400, description = "Missing or invalid fields", body = ErrorBody),
+    )
+)]
 pub async fn create(
     State(state): State<AppState>,
     Json(body): Json<NewAiaPolicy>,
@@ -178,6 +196,18 @@ pub async fn insert_policy(
     Ok(id)
 }
 
+#[utoipa::path(
+    patch,
+    path = "/api/aia/policies/{id}",
+    tag = "aia",
+    params(("id" = i64, Path, description = "Policy id")),
+    request_body = AiaPolicyPatch,
+    responses(
+        (status = 200, description = "Updated policy", body = AiaPolicy),
+        (status = 400, description = "Missing or invalid fields", body = ErrorBody),
+        (status = 404, description = "Policy not found", body = ErrorBody),
+    )
+)]
 pub async fn update(
     State(state): State<AppState>,
     Path(id): Path<i64>,
@@ -257,6 +287,16 @@ pub async fn update(
 
 /// Deleting a policy removes its events: nothing outside them references a
 /// policy, so delete is always permitted.
+#[utoipa::path(
+    delete,
+    path = "/api/aia/policies/{id}",
+    tag = "aia",
+    params(("id" = i64, Path, description = "Policy id")),
+    responses(
+        (status = 204, description = "Policy and its events deleted"),
+        (status = 404, description = "Policy not found", body = ErrorBody),
+    )
+)]
 pub async fn remove(
     State(state): State<AppState>,
     Path(id): Path<i64>,
@@ -278,14 +318,14 @@ pub async fn remove(
 }
 
 /// A policy with its payment/withdrawal history attached.
-#[derive(Debug, Serialize)]
+#[derive(Debug, Serialize, utoipa::ToSchema)]
 pub struct PolicyWithEvents {
     #[serde(flatten)]
     pub policy: AiaPolicy,
     pub events: Vec<AiaEvent>,
 }
 
-#[derive(Debug, Serialize)]
+#[derive(Debug, Serialize, utoipa::ToSchema)]
 pub struct AiaSummaryResponse {
     pub today: String,
     /// The manual USD→HKD rate; HKD figures are absent while it is unset.
@@ -297,6 +337,14 @@ pub struct AiaSummaryResponse {
 }
 
 /// Every figure here is derived from the stored rows on each read.
+#[utoipa::path(
+    get,
+    path = "/api/aia/summary",
+    tag = "aia",
+    responses(
+        (status = 200, description = "Policies with events, USD→HKD rate, and totals", body = AiaSummaryResponse),
+    )
+)]
 pub async fn summary(State(state): State<AppState>) -> Result<Json<AiaSummaryResponse>, ApiError> {
     let today = today();
     let policies = load_all_policies(&state.pool).await?;
@@ -330,13 +378,23 @@ pub async fn summary(State(state): State<AppState>) -> Result<Json<AiaSummaryRes
     }))
 }
 
-#[derive(Debug, Serialize)]
+#[derive(Debug, Serialize, utoipa::ToSchema)]
 pub struct RateResponse {
     pub rate: Option<f64>,
 }
 
 /// The workbook keeps a live GOOGLEFINANCE rate in `Overview!N3`; the app keeps
 /// a manual copy in `app_meta` — same facility as the MPF note.
+#[utoipa::path(
+    patch,
+    path = "/api/aia/rate",
+    tag = "aia",
+    request_body = AiaRatePatch,
+    responses(
+        (status = 200, description = "Stored USD→HKD rate (null clears it)", body = RateResponse),
+        (status = 400, description = "Rate must be positive", body = ErrorBody),
+    )
+)]
 pub async fn update_rate(
     State(state): State<AppState>,
     Json(body): Json<AiaRatePatch>,
@@ -354,11 +412,20 @@ pub async fn update_rate(
     Ok(Json(RateResponse { rate }))
 }
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Deserialize, utoipa::ToSchema, utoipa::IntoParams)]
 pub struct EventListQuery {
     pub policy_id: Option<i64>,
 }
 
+#[utoipa::path(
+    get,
+    path = "/api/aia/events",
+    tag = "aia",
+    params(EventListQuery),
+    responses(
+        (status = 200, description = "List AIA events (premium payments / withdrawals)", body = [AiaEvent]),
+    )
+)]
 pub async fn list_events(
     State(state): State<AppState>,
     Query(query): Query<EventListQuery>,
@@ -398,6 +465,17 @@ pub async fn load_policy_events(
 /// touch onto the event row, insert the row, then apply the update — a payment
 /// grows the premium, counts down a remaining year and moves the next due
 /// date; a withdrawal grows the withdrew figure.
+#[utoipa::path(
+    post,
+    path = "/api/aia/events",
+    tag = "aia",
+    request_body = NewAiaEvent,
+    responses(
+        (status = 201, description = "AIA event created", body = AiaEvent),
+        (status = 400, description = "Missing or invalid fields", body = ErrorBody),
+        (status = 404, description = "Policy not found", body = ErrorBody),
+    )
+)]
 pub async fn create_event(
     State(state): State<AppState>,
     Json(body): Json<NewAiaEvent>,
@@ -487,6 +565,16 @@ pub async fn create_event(
 
 /// Deleting an event undoes it: the amount leaves its cumulative field and the
 /// policy fields the event recorded snap back.
+#[utoipa::path(
+    delete,
+    path = "/api/aia/events/{id}",
+    tag = "aia",
+    params(("id" = i64, Path, description = "Event id")),
+    responses(
+        (status = 204, description = "Event deleted (undoes its derived effects)"),
+        (status = 404, description = "Event not found", body = ErrorBody),
+    )
+)]
 pub async fn remove_event(
     State(state): State<AppState>,
     Path(id): Path<i64>,

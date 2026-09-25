@@ -10,10 +10,10 @@ use crate::calc::{
     BondYearFacts, DepositFacts, YearReviewInputs, YearReviewRecord, YearReviewRow,
     month_year_summaries, year_review_rows,
 };
-use crate::error::ApiError;
+use crate::error::{ApiError, ErrorBody};
 use crate::models::{Market, YearReviewPatch};
 
-#[derive(Debug, Serialize)]
+#[derive(Debug, Serialize, utoipa::ToSchema)]
 pub struct YearReviewResponse {
     /// The date the response was generated.
     pub today: String,
@@ -22,6 +22,14 @@ pub struct YearReviewResponse {
 
 /// Every figure here derives from stored data on each read except the manual
 /// inputs and seeded overrides in `year_review`.
+#[utoipa::path(
+    get,
+    path = "/api/year-review",
+    tag = "year-review",
+    responses(
+        (status = 200, description = "Per-year ledger/investment/asset review rows", body = YearReviewResponse),
+    )
+)]
 pub async fn list(State(state): State<AppState>) -> Result<Json<YearReviewResponse>, ApiError> {
     Ok(Json(build(&state.pool).await?))
 }
@@ -207,6 +215,17 @@ fn validate_signed_figure(field: &str, value: Option<f64>) -> Result<Option<f64>
 /// `year_snapshots` row; the rest upsert `year_review`. A field left absent
 /// stays as-is; `null` clears it back to live derivation; clearing every
 /// stored value removes the row.
+#[utoipa::path(
+    patch,
+    path = "/api/year-review/{year}",
+    tag = "year-review",
+    params(("year" = i32, Path, description = "Review year")),
+    request_body = YearReviewPatch,
+    responses(
+        (status = 200, description = "The year's updated review row", body = YearReviewRow),
+        (status = 400, description = "Invalid year or figure", body = ErrorBody),
+    )
+)]
 pub async fn update(
     State(state): State<AppState>,
     Path(year): Path<i32>,

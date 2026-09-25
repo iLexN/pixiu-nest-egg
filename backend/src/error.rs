@@ -23,12 +23,12 @@ impl ApiError {
     }
 }
 
-#[derive(Debug, Serialize)]
-struct ErrorBody {
-    error: &'static str,
-    message: String,
+#[derive(Debug, Serialize, utoipa::ToSchema)]
+pub struct ErrorBody {
+    pub error: &'static str,
+    pub message: String,
     #[serde(skip_serializing_if = "Vec::is_empty")]
-    fields: Vec<FieldError>,
+    pub fields: Vec<FieldError>,
 }
 
 impl IntoResponse for ApiError {

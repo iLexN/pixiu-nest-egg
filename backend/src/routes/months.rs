@@ -17,7 +17,7 @@ use crate::calc::{
     month_derived_with_tail, month_item_sums, month_running_averages, month_year_summaries,
     mpf_totals, pool_balances, pool_rate_for_year, suggestions_enabled,
 };
-use crate::error::ApiError;
+use crate::error::{ApiError, ErrorBody};
 use crate::models::{
     InterestComponent, ManualAsset, ManualAssetKind, ManualAssetPatch, MonthItem,
     MonthItemCategory, MonthItemPatch, MonthSettings, MonthSettingsPatch, MonthStat,
@@ -416,12 +416,21 @@ fn live_tail(rows: &[MonthStatRow], live: Option<LiveTotals>) -> Option<LiveTota
     live.filter(|_| rows.last().is_some_and(|row| row.month == live_from()))
 }
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Deserialize, utoipa::ToSchema, utoipa::IntoParams)]
 pub struct ListQuery {
     /// Restrict to rows of this year.
     pub year: Option<i32>,
 }
 
+#[utoipa::path(
+    get,
+    path = "/api/months",
+    tag = "months",
+    params(ListQuery),
+    responses(
+        (status = 200, description = "List month-stat rows with derived columns", body = [MonthStat]),
+    )
+)]
 pub async fn list(
     State(state): State<AppState>,
     Query(query): Query<ListQuery>,
@@ -462,7 +471,7 @@ pub async fn list(
     Ok(Json(months))
 }
 
-#[derive(Debug, Serialize)]
+#[derive(Debug, Serialize, utoipa::ToSchema)]
 pub struct MonthSummaryResponse {
     /// The sheet's rows 2–4, one per year present.
     pub years: Vec<MonthYearSummary>,
@@ -475,6 +484,14 @@ pub struct MonthSummaryResponse {
     pub pool_rate_year: i32,
 }
 
+#[utoipa::path(
+    get,
+    path = "/api/months/summary",
+    tag = "months",
+    responses(
+        (status = 200, description = "Month rows, pool balance chain, and running averages", body = MonthSummaryResponse),
+    )
+)]
 pub async fn summary(
     State(state): State<AppState>,
 ) -> Result<Json<MonthSummaryResponse>, ApiError> {
@@ -512,6 +529,14 @@ pub async fn summary(
     }))
 }
 
+#[utoipa::path(
+    get,
+    path = "/api/months/settings",
+    tag = "months",
+    responses(
+        (status = 200, description = "Salary and current-year pool rate", body = MonthSettings),
+    )
+)]
 pub async fn settings(State(state): State<AppState>) -> Result<Json<MonthSettings>, ApiError> {
     let pool_rate_year = today().year();
     Ok(Json(MonthSettings {
@@ -521,6 +546,16 @@ pub async fn settings(State(state): State<AppState>) -> Result<Json<MonthSetting
     }))
 }
 
+#[utoipa::path(
+    patch,
+    path = "/api/months/settings",
+    tag = "months",
+    request_body = MonthSettingsPatch,
+    responses(
+        (status = 200, description = "Updated settings", body = MonthSettings),
+        (status = 400, description = "Missing or invalid fields", body = ErrorBody),
+    )
+)]
 pub async fn update_settings(
     State(state): State<AppState>,
     Json(patch): Json<MonthSettingsPatch>,
@@ -809,7 +844,7 @@ async fn present_month(pool: &SqlitePool, stored: &StoredMonth) -> Result<MonthS
     ))
 }
 
-#[derive(Debug, Serialize)]
+#[derive(Debug, Serialize, utoipa::ToSchema)]
 pub struct MonthDetailResponse {
     pub month: MonthStat,
     pub items: Vec<MonthItem>,
@@ -822,6 +857,16 @@ pub struct MonthDetailResponse {
     pub interest_auto: Vec<InterestComponent>,
 }
 
+#[utoipa::path(
+    get,
+    path = "/api/months/{ym}",
+    tag = "months",
+    params(("ym" = String, Path, description = "Month key YYYY-MM")),
+    responses(
+        (status = 200, description = "Month detail: derived columns, items, interest breakdown, suggestions", body = MonthDetailResponse),
+        (status = 400, description = "Invalid month key", body = ErrorBody),
+    )
+)]
 pub async fn show(
     State(state): State<AppState>,
     Path(ym): Path<String>,
@@ -882,6 +927,17 @@ fn validate_figures(patch: &MonthStatPatch) -> Result<(), ApiError> {
 /// Upsert a month row. Creating snapshots the live totals and the current
 /// salary; explicit `null` on a total keeps it live, `recapture` re-snapshots
 /// the totals plus 月初 (the live 活期 cash sum).
+#[utoipa::path(
+    patch,
+    path = "/api/months/{ym}",
+    tag = "months",
+    params(("ym" = String, Path, description = "Month key YYYY-MM")),
+    request_body = MonthStatPatch,
+    responses(
+        (status = 200, description = "Upserted month row", body = MonthStat),
+        (status = 400, description = "Invalid month key or fields", body = ErrorBody),
+    )
+)]
 pub async fn upsert(
     State(state): State<AppState>,
     Path(ym): Path<String>,
@@ -985,6 +1041,17 @@ pub async fn upsert(
 
 /// Deleting a month removes its items via the FK cascade; dismissal tombstones
 /// stay (they are per-month keys, harmless without the row).
+#[utoipa::path(
+    delete,
+    path = "/api/months/{ym}",
+    tag = "months",
+    params(("ym" = String, Path, description = "Month key YYYY-MM")),
+    responses(
+        (status = 204, description = "Month row deleted"),
+        (status = 400, description = "Invalid month key", body = ErrorBody),
+        (status = 404, description = "Month not found", body = ErrorBody),
+    )
+)]
 pub async fn remove(
     State(state): State<AppState>,
     Path(ym): Path<String>,
@@ -1000,6 +1067,19 @@ pub async fn remove(
     Ok(StatusCode::NO_CONTENT)
 }
 
+#[utoipa::path(
+    post,
+    path = "/api/months/{ym}/items",
+    tag = "months",
+    params(("ym" = String, Path, description = "Month key YYYY-MM")),
+    request_body = NewMonthItem,
+    responses(
+        (status = 201, description = "Month item created", body = MonthItem),
+        (status = 400, description = "Invalid month key or fields", body = ErrorBody),
+        (status = 404, description = "Month not found", body = ErrorBody),
+        (status = 409, description = "Auto item with this key already exists", body = ErrorBody),
+    )
+)]
 pub async fn create_item(
     State(state): State<AppState>,
     Path(ym): Path<String>,
@@ -1066,6 +1146,18 @@ pub async fn create_item(
     Ok((StatusCode::CREATED, Json(row_to_item(&row)?)))
 }
 
+#[utoipa::path(
+    patch,
+    path = "/api/month-items/{id}",
+    tag = "months",
+    params(("id" = i64, Path, description = "Month item id")),
+    request_body = MonthItemPatch,
+    responses(
+        (status = 200, description = "Updated month item", body = MonthItem),
+        (status = 400, description = "Missing or invalid fields", body = ErrorBody),
+        (status = 404, description = "Month item not found", body = ErrorBody),
+    )
+)]
 pub async fn update_item(
     State(state): State<AppState>,
     Path(id): Path<i64>,
@@ -1130,6 +1222,16 @@ pub async fn update_item(
     Ok(Json(row_to_item(&row)?))
 }
 
+#[utoipa::path(
+    delete,
+    path = "/api/month-items/{id}",
+    tag = "months",
+    params(("id" = i64, Path, description = "Month item id")),
+    responses(
+        (status = 204, description = "Month item deleted"),
+        (status = 404, description = "Month item not found", body = ErrorBody),
+    )
+)]
 pub async fn remove_item(
     State(state): State<AppState>,
     Path(id): Path<i64>,
@@ -1144,12 +1246,23 @@ pub async fn remove_item(
     Ok(StatusCode::NO_CONTENT)
 }
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Deserialize, utoipa::ToSchema, utoipa::IntoParams)]
 pub struct DismissBody {
     pub auto_key: String,
 }
 
 /// Tombstone a suggestion key so it never reappears for the month.
+#[utoipa::path(
+    post,
+    path = "/api/months/{ym}/items/dismiss",
+    tag = "months",
+    params(("ym" = String, Path, description = "Month key YYYY-MM")),
+    request_body = DismissBody,
+    responses(
+        (status = 204, description = "Suggestion dismissed (tombstone written)"),
+        (status = 400, description = "Invalid month key or empty auto_key", body = ErrorBody),
+    )
+)]
 pub async fn dismiss_item(
     State(state): State<AppState>,
     Path(ym): Path<String>,
@@ -1207,6 +1320,14 @@ pub async fn load_assets(pool: &SqlitePool) -> Result<Vec<ManualAsset>, ApiError
     rows.iter().map(row_to_asset).collect::<Result<Vec<_>, _>>()
 }
 
+#[utoipa::path(
+    get,
+    path = "/api/manual-assets",
+    tag = "months",
+    responses(
+        (status = 200, description = "List manual asset rows", body = [ManualAsset]),
+    )
+)]
 pub async fn list_assets(
     State(state): State<AppState>,
 ) -> Result<Json<Vec<ManualAsset>>, ApiError> {
@@ -1224,6 +1345,16 @@ fn validate_asset(label: &str, amount: f64) -> Result<String, ApiError> {
     Ok(label.to_string())
 }
 
+#[utoipa::path(
+    post,
+    path = "/api/manual-assets",
+    tag = "months",
+    request_body = NewManualAsset,
+    responses(
+        (status = 201, description = "Manual asset created", body = ManualAsset),
+        (status = 400, description = "Missing or invalid fields", body = ErrorBody),
+    )
+)]
 pub async fn create_asset(
     State(state): State<AppState>,
     Json(body): Json<NewManualAsset>,
@@ -1250,6 +1381,18 @@ pub async fn create_asset(
     ))
 }
 
+#[utoipa::path(
+    patch,
+    path = "/api/manual-assets/{id}",
+    tag = "months",
+    params(("id" = i64, Path, description = "Manual asset id")),
+    request_body = ManualAssetPatch,
+    responses(
+        (status = 200, description = "Updated manual asset", body = ManualAsset),
+        (status = 400, description = "Missing or invalid fields", body = ErrorBody),
+        (status = 404, description = "Manual asset not found", body = ErrorBody),
+    )
+)]
 pub async fn update_asset(
     State(state): State<AppState>,
     Path(id): Path<i64>,
@@ -1273,6 +1416,16 @@ pub async fn update_asset(
     Ok(Json(load_asset(&state.pool, id).await?))
 }
 
+#[utoipa::path(
+    delete,
+    path = "/api/manual-assets/{id}",
+    tag = "months",
+    params(("id" = i64, Path, description = "Manual asset id")),
+    responses(
+        (status = 204, description = "Manual asset deleted"),
+        (status = 404, description = "Manual asset not found", body = ErrorBody),
+    )
+)]
 pub async fn remove_asset(
     State(state): State<AppState>,
     Path(id): Path<i64>,
