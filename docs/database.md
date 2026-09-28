@@ -246,6 +246,10 @@ The manual Overview cells as rows: `label`, `kind` (`cash` = 活期 like HS/渣�
 
 One row per bank→IBKR transfer (negative amounts record a withdrawal/correction): `transfer_date`, `amount_hkd`, `created_at`. 累計轉入 (美股!B1) is the log's sum, and each year's sum joins the year review's `invested`. The import seeds it with the workbook's cumulative B1 value as one row dated to the first US trade; saving the IBKR form's 轉入 delta appends a dated row.
 
+### `forecast_items`
+
+One row per planned cash line of the Overview 預測 grid (`A20:H36`): `month` (`YYYY-MM-01` of the month the line lands in), `kind`, signed `amount`, `return_month`, `note`, `sort_order`. `hs_deposit`/`sc_deposit` are planned lockups (stored negative) that schedule a derived return at `return_month` or the default lag (+3 / +4 months); `bill` overrides the quarter-month 差餉 line (`forecast.bill_amount` in `app_meta`, default 2158); `interest`, `tax`, `stock` and `other` are plain lines. Everything else in the grid — start, salary, spend, deposit finish, returns, the locked 定期+SC chain — is derived on read, and `POST /api/forecast-items/:id/convert` turns a plan into a real `deposits` row and deletes the item in one transaction.
+
 ## Values not stored
 
 These are calculated by the backend when needed:
@@ -274,6 +278,7 @@ These are calculated by the backend when needed:
 - MPF per-account `rate` = (`balance` − `contributions`) ÷ `contributions`, and `gain` = `balance` − `contributions`
 - MPF `last month` figures (the latest `mpf_history` row in the previous calendar month)
 - MPF `max` rate and `max` gain, each independently the largest of the seed, every history row, and the current values
+- The whole forecast grid: per-month `cash`/`locked`/`semi_liquid`/`ref_check`, deposit finish/interest sums, plan `deposit_return`s, and the quarter-month `bill` line
 - MPF portfolio totals/last-month/max, via the as-of merge described in [investments.md](investments.md)
 - Bond status (`matured` once maturity_date is today or past)
 - Bond `next_pay_date` (earliest unreceived coupon pay date)

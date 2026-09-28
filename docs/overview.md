@@ -32,6 +32,38 @@ target(Y) = invested(Y-1) − interest(Y-1) − pool_spend(Y-1)×0.7
 
 The 策略 card mirrors `Overview!J3:K7`, re-partitioning 總數 into liquidity tiers: 不可動用 = `salary × 6` (the sheet's `N6`, a fixed 6-month multiplier), 可動用 = `半流動資金 − 不可動用` (negative allowed, shown red), 短期可取回 = `港股 + 債券 + IBKR + Σ manual asset rows with liquidity short`, 長期可取回 = `基金 + MPF + Σ manual asset rows with liquidity long`. 可動用/不可動用 are `—` while no salary is stored; 短期/長期可取回 are `—` while `aia.usd_hkd_rate` is unset (their IBKR and 基金 terms need the rate — a partial tier would look plausible and be wrong). While all four are present they sum to 總數 (`K4+K5 = B14`, `K6+K7 = B10`). Manual `asset` rows carry a `liquidity` flag (`short`/`long`, default `long`) editable in the Month Stat 資產 editor; `cash` rows carry the column but it has no effect.
 
+## The 預測 forecast grid (Overview!A20:H36)
+
+```text
+OverviewView loads GET /api/forecast together with GET /api/overview
+  → routes/forecast.rs derives seven month columns (current .. +6) from the
+    stored rows: nothing in the grid is persisted except forecast_items
+```
+
+The card mirrors the sheet's row order — `ref check`, `半流動`, `活期`, `定期 + SC`, `start`, `salary`, `支出`, `定期 finish`, `定期 HS`, `SC高息馬拉松`, `利息`, `Tax/基金/醫療保險`, `股票`, `繳費`, `TBC - 定期 end`, `TBC` — with months as columns and `—` for absent figures. The sheet's monthly ritual (re-anchor `B22`/`B24`/`B25`, copy `C28:H36` left, fix `H`) disappears: the window rolls by itself and every line derives:
+
+- `start` — the current month's `start_cash` (月初出糧後, entered in 月結), falling back to the live 活期 sum while unset; later columns chain from the previous column's `cash`
+- `salary`/`spend` — `overview.salary` and −`living_budget` from the averages block
+- `定期 finish` — Σ `principal` of deposits whose `end_date` falls in the month (the `2026回報率`/`定期Info` SUMIFs)
+- `利息` — deposit interest ending + HK dividends + bond coupons at their received or expected figures + `interest` items; each column also carries `interest_components` so clicking the cell lists every auto receipt (定期/債息/派息, 已收 or 預計)
+- `繳費` — −`forecast.bill_amount` (default `2158`, editable in 月結 settings) every Jan/Apr/Jul/Oct; a `bill` item in the month replaces the default
+- `TBC - 定期 end` — Σ `−amount` of deposit plans returning that month: `return_month` when set, else `hs_deposit` → +3 months, `sc_deposit` → +4 (the sheet's row-35 lags)
+- `定期 + SC` (`locked`) — chains from Σ active deposit principal: `locked(m−1) − finish − plan placements − returns`
+- `活期` (`cash`) and `半流動` (`cash + locked`); `ref check` = `半流動 − 流動資產 ÷ 4`, rendered red while negative
+
+```text
+Click a plan cell → the editor lists that (month, kind)'s items
+  → 儲存 PATCHes /api/forecast-items/:id; 刪除 DELETEs it; the add row POSTs
+    /api/forecast/:ym/items — each placement is its own row (the sheet's
+    =7000+6000 cell is two items); deposit kinds accept a return-month override
+轉為定期 on an hs_deposit/sc_deposit item → DepositForm prefilled (principal
+  = −amount, bank HS/SC from the kind, end_date = return month's last day)
+  → POST /api/forecast-items/:id/convert creates the deposit and deletes the
+    plan in one transaction, so the derived return/lock never double-counts
+```
+
+Items whose month sits outside the window stay stored: future ones slide in as the months pass; stale ones (month already past) fire nothing — matching the sheet's shifted-out cells, and preventing a real deposit created without conversion from being double-counted by its leftover plan.
+
 ## Edit the IBKR figures in 美股 → 總覽
 
 ```text

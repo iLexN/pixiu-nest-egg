@@ -38,7 +38,7 @@ When adding an endpoint, annotate the handler with `#[utoipa::path]` and registe
 | [stocks.md](stocks.md) | 股票: stock registry, 現價 (single + bulk JSON), trade CRUD, 持倉總覽 load and totals math, reorder/hide/filter, 派息 lifecycle, yearly table + freeze |
 | [deposits.md](deposits.md) | 定期: deposit CRUD, 收訖/取消收訖 with optional bank-in, summary/rollups; 家人 → 定期 (isolated record-only deposits + holder notes) |
 | [investments.md](investments.md) | MPF accounts + history + last-month/max derivation, 債券 + coupons (待定 → pending → received, principal 收訖), AIA policies + events + USD rate |
-| [overview.md](overview.md) | 總覽: asset table, 半流動資金, B1/H1/J1, averages + 投資目標 cards, IBKR block, Month Stat 月結 (items/suggestions/recapture), 年結 + year-end actions |
+| [overview.md](overview.md) | 總覽: asset table, 半流動資金, B1/H1/J1, averages + 投資目標 cards, 預測 forecast grid (items, convert to deposit, bill setting), IBKR block, Month Stat 月結 (items/suggestions/recapture), 年結 + year-end actions |
 | [import-parity.md](import-parity.md) | Workbook import (per-sheet detail, idempotency, seeding heuristics) and the parity check |
 
 Related: [MONTH_STAT_OVERVIEW.md](MONTH_STAT_OVERVIEW.md) — the workbook analysis and decisions behind the Month Stat / Overview migration.

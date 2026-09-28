@@ -3,6 +3,7 @@ pub mod bonds;
 pub mod deposits;
 pub mod dividends;
 pub mod family;
+pub mod forecast;
 pub mod months;
 pub mod mpf;
 pub mod overview;
@@ -119,6 +120,13 @@ pub fn api_router(state: AppState) -> (Router, utoipa::openapi::OpenApi) {
         ))
         .routes(utoipa_axum::routes!(overview::overview))
         .routes(utoipa_axum::routes!(overview::ibkr, overview::update_ibkr))
+        .routes(utoipa_axum::routes!(forecast::forecast))
+        .routes(utoipa_axum::routes!(forecast::create_item))
+        .routes(utoipa_axum::routes!(
+            forecast::update_item,
+            forecast::remove_item
+        ))
+        .routes(utoipa_axum::routes!(forecast::convert))
         .split_for_parts();
     (router.with_state(state), api)
 }
@@ -484,6 +492,11 @@ mod tests {
             ("/api/family/deposits/{id}/receive", "post"),
             ("/api/family/deposits/{id}/unreceive", "post"),
             ("/api/family/holders/{holder}/note", "put"),
+            ("/api/forecast", "get"),
+            ("/api/forecast-items/{id}", "delete"),
+            ("/api/forecast-items/{id}", "patch"),
+            ("/api/forecast-items/{id}/convert", "post"),
+            ("/api/forecast/{ym}/items", "post"),
             ("/api/ibkr", "get"),
             ("/api/ibkr", "patch"),
             ("/api/manual-assets", "get"),

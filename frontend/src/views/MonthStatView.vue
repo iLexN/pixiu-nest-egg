@@ -410,6 +410,7 @@ async function dismissSuggestion(suggestion: MonthSuggestion) {
 const settingsOpen = ref(false)
 const salaryDraft = ref<string | number>('')
 const rateDraft = ref<string | number>('')
+const billDraft = ref<string | number>('')
 const editingSettings = ref(false)
 
 function startSettingsEdit() {
@@ -417,6 +418,7 @@ function startSettingsEdit() {
   // Stored as a fraction; edited as a percent, same as deposit rates.
   const rate = summary.value?.pool_rate
   rateDraft.value = rate === null || rate === undefined ? '' : rate * 100
+  billDraft.value = settings.value?.bill_amount ?? ''
   editingSettings.value = true
 }
 
@@ -427,11 +429,19 @@ async function saveSettings() {
     error.value = '開心Pool 利率必須是 0–100%'
     return
   }
+  const bill = numOrNull(billDraft.value)
+  if (bill !== null && bill < 0) {
+    error.value = '繳費金額不能是負數'
+    return
+  }
   try {
     await api.updateMonthSettings({
       salary,
       pool_rate: ratePct === null ? null : ratePct / 100,
       pool_rate_year: year.value,
+      // Empty keeps the stored value? No — the forecast reads the effective
+      // amount; blank resets to the 2158 default.
+      bill_amount: bill,
     })
     editingSettings.value = false
     message.value = '已儲存設定'
@@ -924,7 +934,8 @@ onMounted(load)
 
         <p class="muted settings-line">
           薪金 {{ fmtMoney(settings?.salary) || '—' }} · 開心Pool {{ year }} 利率
-          {{ fmtPercent(year === summary?.pool_rate_year ? summary?.pool_rate : null) || '—' }}
+          {{ fmtPercent(year === summary?.pool_rate_year ? summary?.pool_rate : null) || '—' }} ·
+          繳費 {{ fmtMoney(settings?.bill_amount) || '—' }}
           <button type="button" class="link" @click="startSettingsEdit">編輯</button>
         </p>
         <form v-if="editingSettings" class="inline-form" @submit.prevent="saveSettings">
@@ -936,6 +947,10 @@ onMounted(load)
           <label>
             開心Pool 利率（{{ year }}，%）
             <input v-model="rateDraft" type="number" step="any" inputmode="decimal" placeholder="33.7" />
+          </label>
+          <label>
+            預測繳費（季繳差餉；留空回復 2158）
+            <input v-model="billDraft" type="number" step="any" inputmode="decimal" />
           </label>
           <div class="form-actions">
             <button type="submit">儲存</button>

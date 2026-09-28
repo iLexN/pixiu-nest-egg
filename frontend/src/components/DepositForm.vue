@@ -1,11 +1,13 @@
 <script setup lang="ts">
 import { computed, reactive, ref, watch } from 'vue'
-import { api, ApiError, type Deposit } from '../api'
+import { api, ApiError, type Deposit, type ForecastItem } from '../api'
 import DateInput from './DateInput.vue'
 import { fmtMoney, todayIso } from '../format'
 
 const props = defineProps<{
   editing: Deposit | null
+  /** A 預測 plan being converted — saves go to the convert endpoint. */
+  converting?: ForecastItem | null
 }>()
 
 const emit = defineEmits<{ saved: [Deposit]; cancelled: [] }>()
@@ -63,6 +65,29 @@ watch(
   { immediate: true },
 )
 
+/** `YYYY-MM-01` (or `YYYY-MM`) → the month's last day as `YYYY-MM-DD`. */
+function monthEnd(month: string): string {
+  const [year, mon] = month.slice(0, 7).split('-').map(Number)
+  return new Date(Date.UTC(year, mon, 0)).toISOString().slice(0, 10)
+}
+
+watch(
+  () => props.converting,
+  (item) => {
+    if (!item) return
+    const bank = item.kind === 'hs_deposit' ? 'HS' : item.kind === 'sc_deposit' ? 'SC' : ''
+    Object.assign(form, {
+      ...emptyForm(),
+      bank,
+      // Plans are stored negative (cash out); the deposit principal is −amount.
+      principal: String(-item.amount),
+      end_date: item.return_month ? monthEnd(item.return_month) : '',
+      note1: item.note ?? '',
+    })
+  },
+  { immediate: true },
+)
+
 function num(value: string | number | null): number | null {
   const text = String(value ?? '').trim()
   if (text === '') return null
@@ -96,8 +121,10 @@ async function submit() {
     }
     const saved = props.editing
       ? await api.updateDeposit(props.editing.id, payload)
-      : await api.createDeposit(payload)
-    if (!props.editing) Object.assign(form, emptyForm())
+      : props.converting
+        ? await api.convertForecastItem(props.converting.id, payload)
+        : await api.createDeposit(payload)
+    if (!props.editing && !props.converting) Object.assign(form, emptyForm())
     emit('saved', saved)
   } catch (err) {
     error.value =
@@ -111,7 +138,13 @@ async function submit() {
 <template>
   <form class="card deposit-form" @submit.prevent="submit">
     <h3>
-      {{ props.editing ? `編輯定期 ${props.editing.label ?? `#${props.editing.id}`}` : '新增定期' }}
+      {{
+        props.editing
+          ? `編輯定期 ${props.editing.label ?? `#${props.editing.id}`}`
+          : props.converting
+            ? '轉為定期 — 預測計劃'
+            : '新增定期'
+      }}
     </h3>
 
     <div class="grid">
@@ -192,7 +225,12 @@ async function submit() {
 
     <div class="actions">
       <button type="submit" :disabled="saving">{{ props.editing ? '儲存' : '新增' }}</button>
-      <button v-if="props.editing" type="button" class="secondary" @click="emit('cancelled')">
+      <button
+        v-if="props.editing || props.converting"
+        type="button"
+        class="secondary"
+        @click="emit('cancelled')"
+      >
         取消
       </button>
     </div>

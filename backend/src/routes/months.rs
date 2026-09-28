@@ -27,13 +27,17 @@ use crate::models::{
 /// `app_meta` keys holding the month-stat settings.
 pub const SALARY_KEY: &str = "overview.salary";
 pub const POOL_RATE_PREFIX: &str = "overview.pool_rate.";
+/// `app_meta` key for the forecast's quarterly 差餉 amount.
+pub const BILL_AMOUNT_KEY: &str = "forecast.bill_amount";
+/// The 差餉 figure the forecast falls back to while unset.
+pub const DEFAULT_BILL_AMOUNT: f64 = 2158.0;
 
 pub fn pool_rate_key(year: i32) -> String {
     format!("{POOL_RATE_PREFIX}{year}")
 }
 
 /// `:ym` accepts `YYYY-MM` or `YYYY-MM-01` and normalises to `YYYY-MM-01`.
-fn parse_ym(ym: &str) -> Result<chrono::NaiveDate, ApiError> {
+pub(crate) fn parse_ym(ym: &str) -> Result<chrono::NaiveDate, ApiError> {
     let candidate = if ym.len() == 7 {
         format!("{ym}-01")
     } else {
@@ -49,9 +53,9 @@ fn parse_ym(ym: &str) -> Result<chrono::NaiveDate, ApiError> {
 
 /// The stored `month_stats` row, before derived columns are attached.
 #[derive(Debug, Clone)]
-struct StoredMonth {
+pub(crate) struct StoredMonth {
     month: String,
-    start_cash: Option<f64>,
+    pub(crate) start_cash: Option<f64>,
     salary: Option<f64>,
     total_assets: Option<f64>,
     liquid_assets: Option<f64>,
@@ -114,7 +118,10 @@ async fn load_all_months(pool: &SqlitePool) -> Result<Vec<StoredMonth>, ApiError
     rows.iter().map(row_to_month).collect()
 }
 
-async fn load_month(pool: &SqlitePool, month: &str) -> Result<Option<StoredMonth>, ApiError> {
+pub(crate) async fn load_month(
+    pool: &SqlitePool,
+    month: &str,
+) -> Result<Option<StoredMonth>, ApiError> {
     let row = sqlx::query(sqlx::AssertSqlSafe(format!(
         "SELECT {MONTH_COLUMNS} FROM month_stats WHERE month = ?"
     )))
@@ -543,6 +550,9 @@ pub async fn settings(State(state): State<AppState>) -> Result<Json<MonthSetting
         salary: mpf::meta_f64(&state.pool, SALARY_KEY).await?,
         pool_rate: mpf::meta_f64(&state.pool, &pool_rate_key(pool_rate_year)).await?,
         pool_rate_year,
+        bill_amount: mpf::meta_f64(&state.pool, BILL_AMOUNT_KEY)
+            .await?
+            .unwrap_or(DEFAULT_BILL_AMOUNT),
     }))
 }
 
@@ -574,6 +584,14 @@ pub async fn update_settings(
             "pool rate is stored as a fraction (0.337 = 33.7%) and must be less than 1",
         ));
     }
+    if let Some(Some(amount)) = patch.bill_amount
+        && (!amount.is_finite() || amount < 0.0)
+    {
+        errors.push(FieldError::new(
+            "bill_amount",
+            "bill amount must not be negative",
+        ));
+    }
     if !errors.is_empty() {
         return Err(ApiError::Validation(errors));
     }
@@ -592,6 +610,14 @@ pub async fn update_settings(
             &state.pool,
             &pool_rate_key(year),
             rate.map(|rate| rate.to_string()).as_deref(),
+        )
+        .await?;
+    }
+    if let Some(amount) = patch.bill_amount {
+        crate::mpf::meta_put(
+            &state.pool,
+            BILL_AMOUNT_KEY,
+            amount.map(|amount| amount.to_string()).as_deref(),
         )
         .await?;
     }

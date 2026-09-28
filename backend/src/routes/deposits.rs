@@ -459,12 +459,17 @@ pub async fn summary(
     }))
 }
 
-pub async fn insert_deposit(
-    pool: &SqlitePool,
+/// `exec` may be the pool or a transaction — `POST /api/forecast-items/{id}/convert`
+/// inserts inside its own transaction.
+pub async fn insert_deposit<'e, E>(
+    exec: E,
     deposit: &ValidatedDeposit,
     sort_order: i64,
     body: &NewDeposit,
-) -> Result<i64, ApiError> {
+) -> Result<i64, ApiError>
+where
+    E: sqlx::Executor<'e, Database = sqlx::Sqlite>,
+{
     let now = now_timestamp();
     // A deposit entered already past its end date is recorded as received —
     // its interest fed 利息 all along. 收訖 only applies to future deposits.
@@ -488,7 +493,7 @@ pub async fn insert_deposit(
     .bind(sort_order)
     .bind(&now)
     .bind(&now)
-    .fetch_one(pool)
+    .fetch_one(exec)
     .await?;
     Ok(id)
 }

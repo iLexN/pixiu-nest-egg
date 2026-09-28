@@ -48,7 +48,8 @@
       "Exec(jq)",
       "Exec(git tag)",
       "Exec(WEALTH_ADDR=127.0.0.1:8788 cargo run)",
-      "Exec(WEALTH_DB=/tmp/liq-test.db cargo run)"
+      "Exec(WEALTH_DB=/tmp/liq-test.db cargo run)",
+      "Exec(touch)"
     ]
   }
 }

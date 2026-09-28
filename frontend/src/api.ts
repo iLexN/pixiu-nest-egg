@@ -895,6 +895,8 @@ export interface MonthSettings {
   salary: number | null
   pool_rate: number | null
   pool_rate_year: number
+  /** The effective quarterly 差餉 amount in the forecast 繳費 row. */
+  bill_amount: number
 }
 
 export interface MonthStatPatch {
@@ -929,6 +931,72 @@ export interface MonthSettingsPatch {
   salary?: number | null
   pool_rate?: number | null
   pool_rate_year?: number
+  /** `null` resets the 繳費 amount to the default. */
+  bill_amount?: number | null
+}
+
+/** A forecast plan kind — the 預測 row the item belongs to. */
+export type ForecastItemKind =
+  | 'hs_deposit'
+  | 'sc_deposit'
+  | 'interest'
+  | 'tax'
+  | 'stock'
+  | 'bill'
+  | 'other'
+
+/** One stored plan line of the 預測 grid. */
+export interface ForecastItem {
+  id: number
+  /** `YYYY-MM-01` — the month the line lands in. */
+  month: string
+  kind: ForecastItemKind
+  amount: number
+  /** `YYYY-MM-01` return-month override; null uses the kind's default lag. */
+  return_month: string | null
+  note: string | null
+  sort_order: number
+  created_at: string
+}
+
+export interface NewForecastItem {
+  kind: ForecastItemKind
+  amount: number
+  /** `YYYY-MM` or `YYYY-MM-01`; deposit kinds only. */
+  return_month?: string | null
+  note?: string | null
+}
+
+export interface ForecastItemPatch {
+  kind?: ForecastItemKind
+  amount?: number
+  return_month?: string | null
+  note?: string | null
+}
+
+/** One month column of the 預測 grid (sheet columns B:H). */
+export interface ForecastMonth {
+  month: string
+  start: number | null
+  salary: number | null
+  spend: number | null
+  deposit_finish: number
+  interest: number
+  /** The auto receipts inside `interest` — pending ones count at their
+   * expected figure; `received` marks confirmed ones. */
+  interest_components: InterestComponent[]
+  bill: number | null
+  plan_items: ForecastItem[]
+  deposit_return: number
+  cash: number | null
+  locked: number | null
+  semi_liquid: number | null
+  ref_check: number | null
+}
+
+export interface ForecastResponse {
+  bill_amount: number
+  months: ForecastMonth[]
 }
 
 export interface ManualAsset {
@@ -1367,6 +1435,25 @@ export const api = {
   },
   overview(): Promise<OverviewResponse> {
     return request('/overview')
+  },
+  forecast(): Promise<ForecastResponse> {
+    return request('/forecast')
+  },
+  createForecastItem(ym: string, item: NewForecastItem): Promise<ForecastItem> {
+    return request(`/forecast/${ym}/items`, { method: 'POST', body: JSON.stringify(item) })
+  },
+  updateForecastItem(id: number, patch: ForecastItemPatch): Promise<ForecastItem> {
+    return request(`/forecast-items/${id}`, { method: 'PATCH', body: JSON.stringify(patch) })
+  },
+  deleteForecastItem(id: number): Promise<void> {
+    return request(`/forecast-items/${id}`, { method: 'DELETE' })
+  },
+  /** 轉為定期: create the deposit and consume the plan in one transaction. */
+  convertForecastItem(id: number, deposit: NewDeposit): Promise<Deposit> {
+    return request(`/forecast-items/${id}/convert`, {
+      method: 'POST',
+      body: JSON.stringify(deposit),
+    })
   },
   ibkr(): Promise<IbkrBlock> {
     return request('/ibkr')
