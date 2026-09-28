@@ -5,6 +5,7 @@ import {
   ApiError,
   type ManualAsset,
   type ManualAssetKind,
+  type ManualAssetLiquidity,
   type MonthDetail,
   type MonthItem,
   type MonthItemCategory,
@@ -442,9 +443,15 @@ async function saveSettings() {
 }
 
 const editingAsset = ref<ManualAsset | 'new' | null>(null)
-const assetDraft = ref<{ label: string; kind: ManualAssetKind; amount: string | number }>({
+const assetDraft = ref<{
+  label: string
+  kind: ManualAssetKind
+  liquidity: ManualAssetLiquidity
+  amount: string | number
+}>({
   label: '',
   kind: 'cash',
+  liquidity: 'long',
   amount: '',
 })
 
@@ -452,8 +459,13 @@ function startAssetEdit(asset: ManualAsset | 'new') {
   editingAsset.value = asset
   assetDraft.value =
     asset === 'new'
-      ? { label: '', kind: 'cash', amount: '' }
-      : { label: asset.label, kind: asset.kind, amount: asset.amount }
+      ? { label: '', kind: 'cash', liquidity: 'long', amount: '' }
+      : {
+          label: asset.label,
+          kind: asset.kind,
+          liquidity: asset.liquidity,
+          amount: asset.amount,
+        }
 }
 
 async function saveAsset() {
@@ -466,6 +478,7 @@ async function saveAsset() {
     const body: NewManualAsset = {
       label: assetDraft.value.label.trim(),
       kind: assetDraft.value.kind,
+      liquidity: assetDraft.value.liquidity,
       amount,
     }
     if (editingAsset.value === 'new') {
@@ -854,6 +867,7 @@ onMounted(load)
             <tr>
               <th>名稱</th>
               <th>類別</th>
+              <th>流動性</th>
               <th class="num">金額</th>
               <th></th>
             </tr>
@@ -862,6 +876,9 @@ onMounted(load)
             <tr v-for="asset in assets" :key="asset.id">
               <td>{{ asset.label }}</td>
               <td>{{ asset.kind === 'cash' ? '活期' : '資產' }}</td>
+              <td>
+                {{ asset.kind === 'asset' ? (asset.liquidity === 'short' ? '短期' : '長期') : '' }}
+              </td>
               <td class="num">{{ fmtMoney(asset.amount) }}</td>
               <td class="row-actions">
                 <button type="button" class="link" @click="startAssetEdit(asset)">編輯</button>
@@ -869,7 +886,7 @@ onMounted(load)
               </td>
             </tr>
             <tr v-if="assets.length === 0">
-              <td colspan="4" class="muted">沒有手動結餘</td>
+              <td colspan="5" class="muted">沒有手動結餘</td>
             </tr>
           </tbody>
         </table>
@@ -886,6 +903,13 @@ onMounted(load)
             <select v-model="assetDraft.kind">
               <option value="cash">活期</option>
               <option value="asset">資產</option>
+            </select>
+          </label>
+          <label v-if="assetDraft.kind === 'asset'">
+            流動性
+            <select v-model="assetDraft.liquidity">
+              <option value="short">短期</option>
+              <option value="long">長期</option>
             </select>
           </label>
           <label>

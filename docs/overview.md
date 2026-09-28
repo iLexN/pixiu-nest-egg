@@ -30,6 +30,8 @@ target(Y) = invested(Y-1) − interest(Y-1) − pool_spend(Y-1)×0.7
 
 — the two entertainment terms net to 70% of the *year-over-year increase* in fun spending, so a steady level adds nothing new. `月薪增幅` comes from the stored month salaries (`last salary of the year − last of the prior year`, floored at 0) unless a `year_review.salary_raise` override is set; every other input already derives on the 回顧 rows.
 
+The 策略 card mirrors `Overview!J3:K7`, re-partitioning 總數 into liquidity tiers: 不可動用 = `salary × 6` (the sheet's `N6`, a fixed 6-month multiplier), 可動用 = `半流動資金 − 不可動用` (negative allowed, shown red), 短期可取回 = `港股 + 債券 + IBKR + Σ manual asset rows with liquidity short`, 長期可取回 = `基金 + MPF + Σ manual asset rows with liquidity long`. 可動用/不可動用 are `—` while no salary is stored; 短期/長期可取回 are `—` while `aia.usd_hkd_rate` is unset (their IBKR and 基金 terms need the rate — a partial tier would look plausible and be wrong). While all four are present they sum to 總數 (`K4+K5 = B14`, `K6+K7 = B10`). Manual `asset` rows carry a `liquidity` flag (`short`/`long`, default `long`) editable in the Month Stat 資產 editor; `cash` rows carry the column but it has no effect.
+
 ## Edit the IBKR figures in 美股 → 總覽
 
 ```text

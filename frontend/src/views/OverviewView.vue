@@ -249,6 +249,35 @@ onMounted(load)
     </div>
 
     <div class="card">
+      <h3>策略</h3>
+      <table>
+        <tbody>
+          <tr>
+            <td>可動用</td>
+            <td
+              class="num"
+              :class="{ negative: (data.liquidity_tiers.can_use ?? 0) < 0 }"
+            >
+              {{ fmtMoney(data.liquidity_tiers.can_use) || '—' }}
+            </td>
+          </tr>
+          <tr>
+            <td>不可動用（6個月薪金）</td>
+            <td class="num">{{ fmtMoney(data.liquidity_tiers.cannot_use) || '—' }}</td>
+          </tr>
+          <tr>
+            <td>短期可取回</td>
+            <td class="num">{{ fmtMoney(data.liquidity_tiers.short_term) || '—' }}</td>
+          </tr>
+          <tr>
+            <td>長期可取回</td>
+            <td class="num">{{ fmtMoney(data.liquidity_tiers.long_term) || '—' }}</td>
+          </tr>
+        </tbody>
+      </table>
+    </div>
+
+    <div class="card">
       <h3>IBKR</h3>
       <table>
         <tbody>

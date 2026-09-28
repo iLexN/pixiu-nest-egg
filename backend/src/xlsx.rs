@@ -10,7 +10,7 @@ use std::path::Path;
 use anyhow::{Context, anyhow};
 use calamine::{Data, Reader, open_workbook_auto};
 
-use crate::models::{InputMode, ManualAssetKind, Market, MonthItemCategory};
+use crate::models::{InputMode, ManualAssetKind, ManualAssetLiquidity, Market, MonthItemCategory};
 
 pub const HK_TRADE_SHEET: &str = "港股Trade";
 pub const HK_SUMMARY_SHEET: &str = "港股";
@@ -1319,11 +1319,13 @@ pub struct MonthStatCached {
 }
 
 /// A manual asset/cash cell from `Overview` (B7/B8 assets, B16/B17 cash),
-/// labelled from the row's A cell.
+/// labelled from the row's A cell. `liquidity` is the sheet's hard-wired
+/// placement in the 策略 block (B7 in K6, B8 in K7).
 #[derive(Debug, Clone)]
 pub struct SheetManualAsset {
     pub label: String,
     pub kind: ManualAssetKind,
+    pub liquidity: ManualAssetLiquidity,
     pub amount: f64,
 }
 
@@ -1385,6 +1387,12 @@ pub struct OverviewCached {
     /// years' invested, and the J23:N26 year rows.
     pub invest_target_avg: Option<f64>,
     pub invest_targets: Vec<SheetInvestTarget>,
+    /// The J3:K7 策略 block: K4 可動用, K5 不可動用, K6 短期可取回,
+    /// K7 長期可取回.
+    pub tier_can_use: Option<f64>,
+    pub tier_cannot_use: Option<f64>,
+    pub tier_short_term: Option<f64>,
+    pub tier_long_term: Option<f64>,
 }
 
 /// The 美股 sheet's IBKR account header block (A1:B5 + B7): all manual inputs
@@ -1656,16 +1664,32 @@ fn parse_overview(rows: Option<&Rows>) -> OverviewCached {
             .and_then(|row| text(row, c))
     };
     let mut manual_assets = Vec::new();
-    for (r, kind, fallback) in [
-        (6usize, ManualAssetKind::Asset, "Irene"),
-        (7, ManualAssetKind::Asset, "HS人壽"),
-        (15, ManualAssetKind::Cash, "HS"),
-        (16, ManualAssetKind::Cash, "渣打"),
+    for (r, kind, liquidity, fallback) in [
+        (
+            6usize,
+            ManualAssetKind::Asset,
+            ManualAssetLiquidity::Short,
+            "Irene",
+        ),
+        (
+            7,
+            ManualAssetKind::Asset,
+            ManualAssetLiquidity::Long,
+            "HS人壽",
+        ),
+        (15, ManualAssetKind::Cash, ManualAssetLiquidity::Long, "HS"),
+        (
+            16,
+            ManualAssetKind::Cash,
+            ManualAssetLiquidity::Long,
+            "渣打",
+        ),
     ] {
         if let Some(amount) = cell_num(r, 1) {
             manual_assets.push(SheetManualAsset {
                 label: cell_text(r, 0).unwrap_or_else(|| fallback.to_string()),
                 kind,
+                liquidity,
                 amount,
             });
         }
@@ -1714,6 +1738,10 @@ fn parse_overview(rows: Option<&Rows>) -> OverviewCached {
         pool_balance: cell_num(9, 6),
         invest_target_avg: cell_num(21, 9),
         invest_targets,
+        tier_can_use: cell_num(3, 10),
+        tier_cannot_use: cell_num(4, 10),
+        tier_short_term: cell_num(5, 10),
+        tier_long_term: cell_num(6, 10),
     }
 }
 
@@ -2316,6 +2344,24 @@ mod tests {
         assert!(near(target(2025).target, 378447.9));
         assert!(near(target(2026).remain, 274607.62));
         assert!(near(target(2026).growth, 0.067441));
+
+        // The J3:K7 策略 block: K5 is salary × 6; the K column sits beside J.
+        assert!(near(data.overview.tier_can_use, 160823.67));
+        assert!(near(data.overview.tier_cannot_use, 316200.0));
+        assert!(near(data.overview.tier_short_term, 1504503.87));
+        assert!(near(data.overview.tier_long_term, 1605802.91));
+
+        // The seeded liquidity follows the sheet's K6/K7 wiring: B7 Irene is
+        // short-term, B8 HS人壽 long-term (cash rows carry `long`).
+        for asset in &data.overview.manual_assets {
+            let expected = if asset.kind == ManualAssetKind::Asset && asset.label.trim() == "Irene"
+            {
+                ManualAssetLiquidity::Short
+            } else {
+                ManualAssetLiquidity::Long
+            };
+            assert_eq!(asset.liquidity, expected, "{}", asset.label);
+        }
     }
 
     #[test]

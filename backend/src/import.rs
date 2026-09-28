@@ -16,8 +16,8 @@ use crate::calc::{
 };
 use crate::models::Market;
 use crate::xlsx::{
-    MarketSheets, SheetAiaPolicy, SheetBond, SheetDeposit, SheetStock, SheetYearFigure,
-    SheetYearReview, WorkbookData,
+    MarketSheets, SheetAiaPolicy, SheetBond, SheetDeposit, SheetManualAsset, SheetStock,
+    SheetYearFigure, SheetYearReview, WorkbookData,
 };
 
 #[derive(Debug, Default, Clone, PartialEq, Eq)]
@@ -1272,25 +1272,7 @@ async fn import_months(pool: &SqlitePool, data: &WorkbookData) -> anyhow::Result
 
     // The four manual Overview cells seed manual_assets only while the table
     // is untouched.
-    let stored_assets: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM manual_assets")
-        .fetch_one(pool)
-        .await?;
-    if stored_assets == 0 {
-        for (index, asset) in data.overview.manual_assets.iter().enumerate() {
-            sqlx::query(
-                "INSERT INTO manual_assets (label, kind, amount, sort_order, updated_at) \
-                 VALUES (?, ?, ?, ?, ?)",
-            )
-            .bind(&asset.label)
-            .bind(asset.kind.as_str())
-            .bind(asset.amount)
-            .bind((index + 1) as i64)
-            .bind(&now)
-            .execute(pool)
-            .await?;
-            report.settings_seeded += 1;
-        }
-    }
+    report.settings_seeded += seed_manual_assets(pool, &data.overview.manual_assets, &now).await?;
 
     // The 美股 sheet's IBKR account cells seed `app_meta` once, like the salary.
     for (key, value) in [
@@ -1347,6 +1329,40 @@ async fn import_months(pool: &SqlitePool, data: &WorkbookData) -> anyhow::Result
     }
 
     Ok(report)
+}
+
+/// The four manual Overview cells seed `manual_assets` — with the sheet's
+/// 策略 liquidity (B7 Irene `short`, B8 HS人壽 `long`) — only while the table
+/// is untouched; a user reclassification survives re-import. Returns the
+/// number of rows seeded.
+async fn seed_manual_assets(
+    pool: &SqlitePool,
+    assets: &[SheetManualAsset],
+    now: &str,
+) -> anyhow::Result<usize> {
+    let stored_assets: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM manual_assets")
+        .fetch_one(pool)
+        .await?;
+    if stored_assets != 0 {
+        return Ok(0);
+    }
+    let mut seeded = 0;
+    for (index, asset) in assets.iter().enumerate() {
+        sqlx::query(
+            "INSERT INTO manual_assets (label, kind, liquidity, amount, sort_order, updated_at) \
+             VALUES (?, ?, ?, ?, ?, ?)",
+        )
+        .bind(&asset.label)
+        .bind(asset.kind.as_str())
+        .bind(asset.liquidity.as_str())
+        .bind(asset.amount)
+        .bind((index + 1) as i64)
+        .bind(now)
+        .execute(pool)
+        .await?;
+        seeded += 1;
+    }
+    Ok(seeded)
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
@@ -1711,4 +1727,78 @@ async fn existing_coupon_keys(
         keys.insert((row.try_get("bond_id")?, row.try_get("pay_date")?));
     }
     Ok(keys)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::db::connect_memory;
+    use crate::models::{ManualAssetKind, ManualAssetLiquidity};
+
+    fn seed_rows() -> Vec<SheetManualAsset> {
+        vec![
+            SheetManualAsset {
+                label: "Irene".to_string(),
+                kind: ManualAssetKind::Asset,
+                liquidity: ManualAssetLiquidity::Short,
+                amount: 20000.0,
+            },
+            SheetManualAsset {
+                label: "HS人壽".to_string(),
+                kind: ManualAssetKind::Asset,
+                liquidity: ManualAssetLiquidity::Long,
+                amount: 69440.47,
+            },
+            SheetManualAsset {
+                label: "HS".to_string(),
+                kind: ManualAssetKind::Cash,
+                liquidity: ManualAssetLiquidity::Long,
+                amount: 30538.78,
+            },
+        ]
+    }
+
+    #[tokio::test]
+    async fn manual_assets_seed_liquidity_once() {
+        let pool = connect_memory().await.expect("memory db");
+        let seeded = seed_manual_assets(&pool, &seed_rows(), "2026-09-01T00:00:00")
+            .await
+            .expect("seed");
+        assert_eq!(seeded, 3);
+
+        let stored = crate::routes::months::load_assets(&pool)
+            .await
+            .expect("load");
+        let by_label = |label: &str| {
+            stored
+                .iter()
+                .find(|asset| asset.label == label)
+                .expect(label)
+        };
+        assert_eq!(by_label("Irene").liquidity, ManualAssetLiquidity::Short);
+        assert_eq!(by_label("HS人壽").liquidity, ManualAssetLiquidity::Long);
+        assert_eq!(by_label("HS").liquidity, ManualAssetLiquidity::Long);
+
+        // A reclassification survives re-import: the seed only runs on an
+        // empty table.
+        sqlx::query("UPDATE manual_assets SET liquidity = 'long' WHERE label = 'Irene'")
+            .execute(&pool)
+            .await
+            .unwrap();
+        let seeded = seed_manual_assets(&pool, &seed_rows(), "2026-10-01T00:00:00")
+            .await
+            .expect("re-seed");
+        assert_eq!(seeded, 0);
+        let stored = crate::routes::months::load_assets(&pool)
+            .await
+            .expect("load");
+        assert_eq!(
+            stored
+                .iter()
+                .find(|asset| asset.label == "Irene")
+                .unwrap()
+                .liquidity,
+            ManualAssetLiquidity::Long
+        );
+    }
 }

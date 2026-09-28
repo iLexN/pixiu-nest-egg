@@ -4,11 +4,11 @@ use chrono::Datelike;
 use sqlx::SqlitePool;
 
 use super::{AppState, aia, months, mpf, now_timestamp, summary, today};
-use crate::calc::{FieldError, live_totals, trailing_averages};
+use crate::calc::{FieldError, liquidity_tiers, live_totals, trailing_averages};
 use crate::error::{ApiError, ErrorBody};
 use crate::models::{
-    IbkrBlock, IbkrPatch, ManualAsset, ManualAssetKind, OverviewAssetRow, OverviewResponse,
-    SemiLiquid, TwelveMonthAverages,
+    IbkrBlock, IbkrPatch, ManualAsset, ManualAssetKind, ManualAssetLiquidity, OverviewAssetRow,
+    OverviewResponse, SemiLiquid, TwelveMonthAverages,
 };
 
 /// `app_meta` keys holding the 美股 sheet's IBKR account block (A1:B5); the
@@ -168,10 +168,17 @@ pub async fn overview(State(state): State<AppState>) -> Result<Json<OverviewResp
         asset_row("aia", "基金", aia_hkd),
         asset_row("mpf", "MPF", Some(input.mpf_balance)),
     ];
+    // Manual `asset` rows also feed the 策略 tiers by their liquidity.
+    let mut manual_short = 0.0;
+    let mut manual_long = 0.0;
     for asset in manual
         .iter()
         .filter(|asset| asset.kind == ManualAssetKind::Asset)
     {
+        match asset.liquidity {
+            ManualAssetLiquidity::Short => manual_short += asset.amount,
+            ManualAssetLiquidity::Long => manual_long += asset.amount,
+        }
         assets.push(OverviewAssetRow {
             key: "manual".to_string(),
             label: asset.label.clone(),
@@ -235,6 +242,19 @@ pub async fn overview(State(state): State<AppState>) -> Result<Json<OverviewResp
     let review = super::year_review::build(&state.pool).await?;
     let invest_targets = crate::calc::invest_targets(&review.years, today().year());
 
+    // J3:K7 策略 — 總數 re-partitioned into liquidity tiers.
+    let liquidity_tiers = liquidity_tiers(
+        salary,
+        semi_total,
+        input.hk_market_value,
+        input.bonds_active_principal,
+        ibkr.computed_total_hkd,
+        aia_hkd,
+        input.mpf_balance,
+        manual_short,
+        manual_long,
+    );
+
     Ok(Json(OverviewResponse {
         today: today().to_string(),
         rate: input.usd_hkd_rate,
@@ -248,6 +268,7 @@ pub async fn overview(State(state): State<AppState>) -> Result<Json<OverviewResp
         ibkr,
         averages,
         invest_targets,
+        liquidity_tiers,
     }))
 }
 

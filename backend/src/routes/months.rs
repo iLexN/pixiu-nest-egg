@@ -19,8 +19,8 @@ use crate::calc::{
 };
 use crate::error::{ApiError, ErrorBody};
 use crate::models::{
-    InterestComponent, ManualAsset, ManualAssetKind, ManualAssetPatch, MonthItem,
-    MonthItemCategory, MonthItemPatch, MonthSettings, MonthSettingsPatch, MonthStat,
+    InterestComponent, ManualAsset, ManualAssetKind, ManualAssetLiquidity, ManualAssetPatch,
+    MonthItem, MonthItemCategory, MonthItemPatch, MonthSettings, MonthSettingsPatch, MonthStat,
     MonthStatPatch, MonthSuggestion, NewManualAsset, NewMonthItem, TradeType,
 };
 
@@ -1287,18 +1287,22 @@ pub async fn dismiss_item(
 
 fn row_to_asset(row: &SqliteRow) -> Result<ManualAsset, ApiError> {
     let kind: String = row.try_get("kind")?;
+    let liquidity: String = row.try_get("liquidity")?;
     Ok(ManualAsset {
         id: row.try_get("id")?,
         label: row.try_get("label")?,
         kind: ManualAssetKind::parse(&kind)
             .ok_or_else(|| ApiError::Conflict(format!("stored kind {kind} is not valid")))?,
+        liquidity: ManualAssetLiquidity::parse(&liquidity).ok_or_else(|| {
+            ApiError::Conflict(format!("stored liquidity {liquidity} is not valid"))
+        })?,
         amount: row.try_get("amount")?,
         sort_order: row.try_get("sort_order")?,
         updated_at: row.try_get("updated_at")?,
     })
 }
 
-const ASSET_COLUMNS: &str = "id, label, kind, amount, sort_order, updated_at";
+const ASSET_COLUMNS: &str = "id, label, kind, liquidity, amount, sort_order, updated_at";
 
 async fn load_asset(pool: &SqlitePool, id: i64) -> Result<ManualAsset, ApiError> {
     let row = sqlx::query(sqlx::AssertSqlSafe(format!(
@@ -1364,12 +1368,14 @@ pub async fn create_asset(
         sqlx::query_scalar("SELECT COALESCE(MAX(sort_order), 0) + 1 FROM manual_assets")
             .fetch_one(&state.pool)
             .await?;
+    let liquidity = body.liquidity.unwrap_or_default();
     let id: i64 = sqlx::query_scalar(
-        "INSERT INTO manual_assets (label, kind, amount, sort_order, updated_at) \
-         VALUES (?, ?, ?, ?, ?) RETURNING id",
+        "INSERT INTO manual_assets (label, kind, liquidity, amount, sort_order, updated_at) \
+         VALUES (?, ?, ?, ?, ?, ?) RETURNING id",
     )
     .bind(&label)
     .bind(body.kind.as_str())
+    .bind(liquidity.as_str())
     .bind(body.amount)
     .bind(sort_order)
     .bind(now_timestamp())
@@ -1401,13 +1407,16 @@ pub async fn update_asset(
     let existing = load_asset(&state.pool, id).await?;
     let label = patch.label.unwrap_or(existing.label);
     let kind = patch.kind.unwrap_or(existing.kind);
+    let liquidity = patch.liquidity.unwrap_or(existing.liquidity);
     let amount = patch.amount.unwrap_or(existing.amount);
     let label = validate_asset(&label, amount)?;
     sqlx::query(
-        "UPDATE manual_assets SET label = ?, kind = ?, amount = ?, updated_at = ? WHERE id = ?",
+        "UPDATE manual_assets SET label = ?, kind = ?, liquidity = ?, amount = ?, updated_at = ? \
+         WHERE id = ?",
     )
     .bind(&label)
     .bind(kind.as_str())
+    .bind(liquidity.as_str())
     .bind(amount)
     .bind(now_timestamp())
     .bind(id)
@@ -1438,4 +1447,86 @@ pub async fn remove_asset(
         return Err(ApiError::NotFound(format!("manual asset {id} not found")));
     }
     Ok(StatusCode::NO_CONTENT)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::db::connect_memory;
+
+    #[tokio::test]
+    async fn create_asset_defaults_liquidity_to_long() {
+        let pool = connect_memory().await.expect("memory db");
+        let created = create_asset(
+            State(AppState { pool: pool.clone() }),
+            Json(NewManualAsset {
+                label: "HS人壽".to_string(),
+                kind: ManualAssetKind::Asset,
+                liquidity: None,
+                amount: 69440.47,
+            }),
+        )
+        .await
+        .expect("created")
+        .1;
+        assert_eq!(created.liquidity, ManualAssetLiquidity::Long);
+    }
+
+    #[tokio::test]
+    async fn patch_asset_reclassifies_liquidity() {
+        let pool = connect_memory().await.expect("memory db");
+        let state = AppState { pool: pool.clone() };
+        let created = create_asset(
+            State(state.clone()),
+            Json(NewManualAsset {
+                label: "Irene".to_string(),
+                kind: ManualAssetKind::Asset,
+                liquidity: None,
+                amount: 20000.0,
+            }),
+        )
+        .await
+        .expect("created")
+        .1;
+
+        let updated = update_asset(
+            State(state),
+            Path(created.id),
+            Json(ManualAssetPatch {
+                liquidity: Some(ManualAssetLiquidity::Short),
+                ..Default::default()
+            }),
+        )
+        .await
+        .expect("patched")
+        .0;
+        assert_eq!(updated.liquidity, ManualAssetLiquidity::Short);
+
+        let stored = load_asset(&pool, created.id).await.expect("stored");
+        assert_eq!(stored.liquidity, ManualAssetLiquidity::Short);
+    }
+
+    #[tokio::test]
+    async fn unknown_liquidity_is_rejected_with_a_client_error() {
+        let pool = connect_memory().await.expect("memory db");
+        let (router, _api) = crate::routes::api_router(AppState { pool });
+        let response = tower::ServiceExt::oneshot(
+            router,
+            axum::http::Request::builder()
+                .method("POST")
+                .uri("/api/manual-assets")
+                .header("content-type", "application/json")
+                .body(axum::body::Body::from(
+                    r#"{"label":"X","kind":"asset","amount":1,"liquidity":"medium"}"#,
+                ))
+                .unwrap(),
+        )
+        .await
+        .expect("response");
+        assert!(
+            response.status().is_client_error(),
+            "expected 4xx, got {}",
+            response.status()
+        );
+    }
 }

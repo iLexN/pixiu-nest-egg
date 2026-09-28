@@ -7,6 +7,8 @@ Analysis of the last two unmigrated core sheets in `財富分析報告.xlsx`, ca
 > **Implemented in app (add-overview, 2026-09):** the `Overview` A3:C18 block is now migrated — the asset table, its Sum and shares, A13, the 半流動資金 block (deposits at **principal only**), the B1/H1/J1 headline, and the 美股 IBKR account cells (`ibkr.*` meta, `now_value` stays manual since its implied FX differs from `aia.usd_hkd_rate`). Live 總數/流動資產 now count deposit principal only and include IBKR cash, matching the workbook. See `docs/DATA_FLOW.md` → "Load the 總覽 view".
 >
 > **Also implemented (add-overview-averages, 2026-09):** the `F3:G10` averages block (+`H6` 生活預算 with its 預測 threshold `流動資產 × 0.0001 × 30 + 9000` — green below it, red above) — trailing averages over the 12 months before the current one. Overview's remaining blocks (J–M strategy, targets, 預測 forecast grid) remain spreadsheet-side.
+>
+> **Also implemented (add-overview-liquidity-tiers, 2026-09):** the `J3:K7` 策略 block — `manual_assets` rows gained a `liquidity` flag (`short`/`long`) placing them in K6 短期可取回 or K7 長期可取回, and the four K cells derive on `GET /api/overview`. Still spreadsheet-side: the `M3:N8` rates block display, 投資目標's sheet-side formulas (the app uses a unified one), and the 預測 forecast grid.
 
 ## Scope decision (confirmed with user)
 

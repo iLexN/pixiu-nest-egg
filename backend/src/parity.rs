@@ -1625,6 +1625,37 @@ async fn check_overview(
         false,
     );
 
+    // J3:K7 策略 — informational like the headline cells: the tiers inherit
+    // manual-balance and live-price drift, and salary is a seeded setting.
+    for (name, field, computed, sheet) in [
+        (
+            "Overview 可動用",
+            "K4",
+            response.liquidity_tiers.can_use,
+            cached.tier_can_use,
+        ),
+        (
+            "Overview 不可動用",
+            "K5",
+            response.liquidity_tiers.cannot_use,
+            cached.tier_cannot_use,
+        ),
+        (
+            "Overview 短期可取回",
+            "K6",
+            response.liquidity_tiers.short_term,
+            cached.tier_short_term,
+        ),
+        (
+            "Overview 長期可取回",
+            "K7",
+            response.liquidity_tiers.long_term,
+            cached.tier_long_term,
+        ),
+    ] {
+        overview_compare(report, name, field, computed, sheet, false);
+    }
+
     // The cached cash rows (B16/B17) are manual cells — informational.
     let manual = crate::routes::months::load_assets(pool).await?;
     for asset in &cached.manual_assets {

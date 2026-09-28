@@ -240,7 +240,7 @@ One row per year, keyed by `year`, holding the YearInReview figures that cannot 
 
 ### `manual_assets`
 
-The manual Overview cells as rows: `label`, `kind` (`cash` = 活期 like HS/渣打, `asset` = 資產 like Irene/HS人壽), `amount`, `sort_order`. They feed the live 總數/流動資產 derivation and are editable inline on the 總覽 tab.
+The manual Overview cells as rows: `label`, `kind` (`cash` = 活期 like HS/渣打, `asset` = 資產 like Irene/HS人壽), `liquidity` (`short`/`long`, default `long`), `amount`, `sort_order`. They feed the live 總數/流動資產 derivation and are editable inline on the 總覽 tab. `liquidity` places `asset` rows in the Overview 策略 block's 短期可取回 or 長期可取回; `cash` rows carry it (the column is NOT NULL) but it has no effect on them.
 
 ### `ibkr_transfers`
 

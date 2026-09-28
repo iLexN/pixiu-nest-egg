@@ -789,6 +789,7 @@ export type MonthItemCategory =
   | 'entertainment'
   | 'interest'
 export type ManualAssetKind = 'cash' | 'asset'
+export type ManualAssetLiquidity = 'short' | 'long'
 
 export interface MonthStat {
   month: string
@@ -934,6 +935,7 @@ export interface ManualAsset {
   id: number
   label: string
   kind: ManualAssetKind
+  liquidity: ManualAssetLiquidity
   amount: number
   sort_order: number
   updated_at: string
@@ -942,12 +944,14 @@ export interface ManualAsset {
 export interface NewManualAsset {
   label: string
   kind: ManualAssetKind
+  liquidity?: ManualAssetLiquidity
   amount: number
 }
 
 export interface ManualAssetPatch {
   label?: string
   kind?: ManualAssetKind
+  liquidity?: ManualAssetLiquidity
   amount?: number
 }
 
@@ -1020,6 +1024,14 @@ export interface InvestTargets {
   rows: InvestTargetRow[]
 }
 
+/** The 策略 block (Overview!J3:K7): 總數 re-partitioned into liquidity tiers. */
+export interface LiquidityTiers {
+  can_use: number | null
+  cannot_use: number | null
+  short_term: number | null
+  long_term: number | null
+}
+
 export interface OverviewResponse {
   today: string
   rate: number | null
@@ -1033,6 +1045,7 @@ export interface OverviewResponse {
   ibkr: IbkrBlock
   averages: TwelveMonthAverages
   invest_targets: InvestTargets
+  liquidity_tiers: LiquidityTiers
 }
 
 /** Carries the server's field-level messages so forms can show them inline. */

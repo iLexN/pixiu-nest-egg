@@ -1048,12 +1048,41 @@ impl ManualAssetKind {
     }
 }
 
+/// How quickly a manual `asset` row can be recovered: `short` rows count in
+/// the Overview 策略 block's K6 短期可取回, `long` rows in K7 長期可取回.
+/// `cash` rows carry the column but it has no effect on them.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize, ToSchema)]
+#[serde(rename_all = "snake_case")]
+pub enum ManualAssetLiquidity {
+    Short,
+    #[default]
+    Long,
+}
+
+impl ManualAssetLiquidity {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            ManualAssetLiquidity::Short => "short",
+            ManualAssetLiquidity::Long => "long",
+        }
+    }
+
+    pub fn parse(value: &str) -> Option<Self> {
+        match value {
+            "short" => Some(ManualAssetLiquidity::Short),
+            "long" => Some(ManualAssetLiquidity::Long),
+            _ => None,
+        }
+    }
+}
+
 /// A named manual balance (the Overview cells B7/B8/B16/B17).
 #[derive(Debug, Clone, Serialize, ToSchema)]
 pub struct ManualAsset {
     pub id: i64,
     pub label: String,
     pub kind: ManualAssetKind,
+    pub liquidity: ManualAssetLiquidity,
     pub amount: f64,
     pub sort_order: i64,
     pub updated_at: String,
@@ -1063,6 +1092,9 @@ pub struct ManualAsset {
 pub struct NewManualAsset {
     pub label: String,
     pub kind: ManualAssetKind,
+    /// Absent defaults to `long`.
+    #[serde(default)]
+    pub liquidity: Option<ManualAssetLiquidity>,
     pub amount: f64,
 }
 
@@ -1071,6 +1103,7 @@ pub struct NewManualAsset {
 pub struct ManualAssetPatch {
     pub label: Option<String>,
     pub kind: Option<ManualAssetKind>,
+    pub liquidity: Option<ManualAssetLiquidity>,
     pub amount: Option<f64>,
 }
 
@@ -1250,6 +1283,21 @@ pub struct InvestTargetRow {
     pub growth: Option<f64>,
 }
 
+/// The Overview `J3:K7` 策略 block: 總數 re-partitioned into liquidity tiers.
+#[derive(Debug, Clone, Default, Serialize, ToSchema)]
+pub struct LiquidityTiers {
+    /// K4 可動用 = 半流動資金 − `cannot_use`; absent without a stored salary.
+    pub can_use: Option<f64>,
+    /// K5 不可動用 = salary × 6 (the sheet's `N6`); absent without a salary.
+    pub cannot_use: Option<f64>,
+    /// K6 短期可取回 = 港股 + 債券 + IBKR + `short` manual asset rows;
+    /// absent while `aia.usd_hkd_rate` is unset.
+    pub short_term: Option<f64>,
+    /// K7 長期可取回 = 基金 + MPF + `long` manual asset rows; absent while
+    /// `aia.usd_hkd_rate` is unset.
+    pub long_term: Option<f64>,
+}
+
 /// `GET /api/overview`: the sheet's A3:C18 block plus the B1/H1/J1 headline.
 #[derive(Debug, Clone, Serialize, ToSchema)]
 pub struct OverviewResponse {
@@ -1273,4 +1321,6 @@ pub struct OverviewResponse {
     pub averages: TwelveMonthAverages,
     /// J22:N27.
     pub invest_targets: InvestTargets,
+    /// J3:K7.
+    pub liquidity_tiers: LiquidityTiers,
 }

@@ -2865,6 +2865,36 @@ pub fn live_totals(input: &LiveTotalsInput) -> LiveTotals {
     }
 }
 
+/// The Overview `J3:K7` 策略 block: 總數 re-partitioned into liquidity tiers.
+///
+/// `cannot_use = salary × 6` (the sheet's `N6`); `can_use = semi_total −
+/// cannot_use`, negative allowed — both absent without a stored salary.
+/// `short_term` (K6 = 港股 + 債券 + IBKR + `manual_short`) hinges on `ibkr`
+/// and `long_term` (K7 = 基金 + MPF + `manual_long`) on `aia`: both are
+/// absent while the USD→HKD rate is unset rather than reporting partial
+/// sums, matching the module's rule for rate-dependent figures. While every
+/// figure is present the four tiers sum to `total_assets`.
+#[allow(clippy::too_many_arguments)]
+pub fn liquidity_tiers(
+    salary: Option<f64>,
+    semi_total: f64,
+    hk: f64,
+    bonds: f64,
+    ibkr: Option<f64>,
+    aia: Option<f64>,
+    mpf: f64,
+    manual_short: f64,
+    manual_long: f64,
+) -> crate::models::LiquidityTiers {
+    let cannot_use = salary.map(|salary| salary * 6.0);
+    crate::models::LiquidityTiers {
+        can_use: cannot_use.map(|cannot_use| semi_total - cannot_use),
+        cannot_use,
+        short_term: ibkr.map(|ibkr| hk + bonds + ibkr + manual_short),
+        long_term: aia.map(|aia| aia + mpf + manual_long),
+    }
+}
+
 /// A deposit as a suggestion source: 定期 start/end events.
 #[derive(Debug, Clone)]
 pub struct SuggestionDeposit {
@@ -5545,5 +5575,87 @@ mod tests {
         // auto_interest sums received components only.
         assert!(approx_eq(auto_interest(ym("2026-10-01"), &events), 4100.0));
         assert!(interest_components("2026-11-01", &events).is_empty());
+    }
+
+    // --- 策略 liquidity tiers (Overview J3:K7) ---
+
+    #[test]
+    fn liquidity_tiers_reproduce_the_sheet_cells() {
+        // The workbook's cached K4:K7 figures.
+        let tiers = liquidity_tiers(
+            Some(52700.0),
+            477023.67,
+            1_000_000.0,
+            300_000.0,
+            Some(184_503.865),
+            Some(1_400_000.0),
+            136_362.444,
+            20_000.0,
+            69_440.47,
+        );
+        assert!(approx_eq(tiers.cannot_use.unwrap(), 316200.0));
+        assert!(approx_eq(tiers.can_use.unwrap(), 160823.67));
+        assert!(approx_eq(tiers.short_term.unwrap(), 1504503.87));
+        assert!(approx_eq(tiers.long_term.unwrap(), 1605802.91));
+
+        // K4+K5 = B14 and K6+K7 = B10, so ΣK4:K7 = B1.
+        let total_assets = 477023.67 + 1504503.865 + 1605802.914;
+        let tiers_sum = tiers.can_use.unwrap()
+            + tiers.cannot_use.unwrap()
+            + tiers.short_term.unwrap()
+            + tiers.long_term.unwrap();
+        assert!(approx_eq(tiers_sum, total_assets));
+    }
+
+    #[test]
+    fn liquidity_tiers_absences() {
+        let tiers = liquidity_tiers(
+            None,
+            477023.67,
+            1_000_000.0,
+            300_000.0,
+            Some(184_503.865),
+            Some(1_400_000.0),
+            136_362.444,
+            20_000.0,
+            69_440.47,
+        );
+        assert_eq!(tiers.can_use, None);
+        assert_eq!(tiers.cannot_use, None);
+        assert!(tiers.short_term.is_some());
+        assert!(tiers.long_term.is_some());
+
+        // No rate: the recoverable tiers stay absent rather than partial.
+        let tiers = liquidity_tiers(
+            Some(52700.0),
+            477023.67,
+            1_000_000.0,
+            300_000.0,
+            None,
+            None,
+            136_362.444,
+            20_000.0,
+            69_440.47,
+        );
+        assert!(tiers.can_use.is_some());
+        assert!(tiers.cannot_use.is_some());
+        assert_eq!(tiers.short_term, None);
+        assert_eq!(tiers.long_term, None);
+    }
+
+    #[test]
+    fn liquidity_tiers_can_use_goes_negative() {
+        let tiers = liquidity_tiers(
+            Some(52700.0),
+            300_000.0,
+            0.0,
+            0.0,
+            Some(0.0),
+            Some(0.0),
+            0.0,
+            0.0,
+            0.0,
+        );
+        assert!(approx_eq(tiers.can_use.unwrap(), -16200.0));
     }
 }
