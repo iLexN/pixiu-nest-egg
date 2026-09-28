@@ -1632,6 +1632,14 @@ pub fn validate_aia_policy(
             "next pay date must be a calendar date in YYYY-MM-DD form",
         ));
     }
+    if let Some(link) = input.link.map(str::trim).filter(|link| !link.is_empty())
+        && !(link.starts_with("http://") || link.starts_with("https://"))
+    {
+        errors.push(FieldError::new(
+            "link",
+            "link must start with http:// or https://",
+        ));
+    }
 
     if !errors.is_empty() {
         return Err(errors);
@@ -4458,6 +4466,20 @@ mod tests {
         assert!(
             validate_aia_policy(AiaPolicyInput {
                 next_pay_date: Some("not-a-date"),
+                ..base.clone()
+            })
+            .is_err()
+        );
+        assert!(
+            validate_aia_policy(AiaPolicyInput {
+                link: Some("https://example.com/policy.pdf"),
+                ..base.clone()
+            })
+            .is_ok()
+        );
+        assert!(
+            validate_aia_policy(AiaPolicyInput {
+                link: Some("javascript:alert(1)"),
                 ..base
             })
             .is_err()

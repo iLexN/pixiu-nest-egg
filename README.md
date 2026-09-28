@@ -2,7 +2,7 @@
 
 A local, single-user web app that replaces the hand-maintained sections of `財富分析報告.xlsx` — a personal wealth-tracking workbook — with a Rust + SQLite backend and a Vue frontend. It imports the existing workbook once, keeps the same calculation rules the spreadsheet used, and lets you verify the two agree.
 
-Everything runs on your machine. The backend binds to loopback only and makes no outbound network calls.
+Everything runs on your machine. The backend binds to loopback only, accepts cross-origin requests only from the Vite dev server, and makes no outbound network calls (the optional `/scalar` API playground loads its UI from a CDN, version-pinned and integrity-checked).
 
 ## What it covers
 
