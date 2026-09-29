@@ -720,8 +720,8 @@ async fn deposit_summary_reports_upcoming_rollups_and_year_tables() {
         .expect("2026 table");
     let jan = &y2026["months"][0];
     approx(&jan["interest"], 362.96);
-    approx(&jan["payout"], 60362.96);
-    approx(&jan["total"], 60725.92);
+    approx(&jan["payout"], 60000.0);
+    approx(&jan["total"], 60362.96);
     let apr = &y2026["months"][3];
     approx(&apr["interest"], 15.27);
 

@@ -2172,7 +2172,7 @@ mod tests {
             .expect("SC bank row");
         assert_eq!(sc.principal, 365000.0);
 
-        // 表_2027定期 1月: Total 81614 / 利息 807 / 定期 80807.
+        // 表_2027定期 1月: Total 80807 / 利息 807 / 定期 80000.
         let y2027 = data
             .deposit_cached
             .years
@@ -2185,8 +2185,8 @@ mod tests {
             .find(|(month, _)| *month == 1)
             .expect("1月");
         assert_eq!(jan.interest, 807.0);
-        assert_eq!(jan.payout, 80807.0);
-        assert_eq!(jan.total, 81614.0);
+        assert_eq!(jan.payout, 80000.0);
+        assert_eq!(jan.total, 80807.0);
     }
 
     #[test]
@@ -2367,7 +2367,7 @@ mod tests {
         assert_eq!(data.overview.living_budget, Some(14900.0));
         assert!(near(data.overview.avg_saved, 30013.27));
         assert!(near(data.overview.avg_interest, 5731.46));
-        assert!(near(data.overview.pool_balance, 21415.04));
+        assert!(near(data.overview.pool_balance, 21722.0173));
 
         // The J22:N27 投資目標 block: the average plus the four year rows,
         // stopping before the J27 note.
@@ -2383,28 +2383,28 @@ mod tests {
         assert!(near(target(2023).invested, 206523.15));
         assert_eq!(target(2023).target, None);
         assert!(near(target(2025).target, 378447.9));
-        assert!(near(target(2026).remain, 274607.62));
-        assert!(near(target(2026).growth, 0.067441));
+        assert!(near(target(2026).remain, 275518.53));
+        assert!(near(target(2026).growth, 0.0695661378));
 
         // The J29:N35 Money Master block: K/L inputs plus the derived cells.
         let mm = &data.overview.money_master;
-        assert!(near(mm.month_now, 35.0));
-        assert!(near(mm.saved, 1042052.93));
-        assert!(near(mm.avg_per_month, 29772.94));
-        assert!(near(mm.yearly_rate, 357275.29));
+        assert!(near(mm.month_now, 36.0));
+        assert!(near(mm.saved, 1094405.06));
+        assert!(near(mm.avg_per_month, 30400.14056));
+        assert!(near(mm.yearly_rate, 364801.6867));
         assert!(near(mm.target_months, 36.0));
         assert!(near(mm.target_amount, 1000000.0));
-        assert!(near(mm.time_progress, 0.972222));
-        assert!(near(mm.saved_progress, 1.042053));
-        assert!(near(mm.progress_gap, 0.069831));
-        assert!(near(mm.coming_save, 2726.57));
-        assert!(near(mm.can_use, 49973.43));
+        assert!(near(mm.time_progress, 1.0));
+        assert!(near(mm.saved_progress, 1.09440506));
+        assert!(near(mm.progress_gap, 0.09440506));
+        assert!(near(mm.coming_save, -41705.06));
+        assert!(near(mm.can_use, 94405.06));
 
         // The J3:K7 策略 block: K5 is salary × 6; the K column sits beside J.
-        assert!(near(data.overview.tier_can_use, 160823.67));
+        assert!(near(data.overview.tier_can_use, 161734.62));
         assert!(near(data.overview.tier_cannot_use, 316200.0));
-        assert!(near(data.overview.tier_short_term, 1504503.87));
-        assert!(near(data.overview.tier_long_term, 1605802.91));
+        assert!(near(data.overview.tier_short_term, 1495563.431));
+        assert!(near(data.overview.tier_long_term, 1605823.024));
 
         // The seeded liquidity follows the sheet's K6/K7 wiring: B7 Irene is
         // short-term, B8 HS人壽 long-term (cash rows carry `long`).

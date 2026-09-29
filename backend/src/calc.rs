@@ -631,9 +631,10 @@ pub struct YearMonthRow {
     pub month: u32,
     /// 利息 column: Σ interest.
     pub interest: f64,
-    /// 定期 column: Σ deposit total (principal + interest).
+    /// 定期 column: Σ principal (the sheet sums its `input` column here, not
+    /// principal + interest).
     pub payout: f64,
-    /// The sheet's Total column: 利息 + 定期.
+    /// The sheet's Total column: 利息 + 定期 = principal + interest.
     pub total: f64,
 }
 
@@ -765,7 +766,7 @@ pub fn year_rollups(deposits: &[DepositFacts<'_>]) -> Vec<YearRollup> {
         };
         let month = &mut rollup.months[(deposit.end_date.month() - 1) as usize];
         month.interest += deposit.interest.unwrap_or(0.0);
-        month.payout += deposit_total(deposit.principal, deposit.interest);
+        month.payout += deposit.principal.unwrap_or(0.0);
         month.total = month.interest + month.payout;
     }
     years.sort_by_key(|rollup| rollup.year);
@@ -3976,14 +3977,15 @@ mod tests {
         let y2026 = &years[0];
         assert_eq!(y2026.year, 2026);
         assert_eq!(y2026.months.len(), 12);
-        // August 2026 holds the unlabeled 2097 interest-only row.
+        // August 2026 holds the unlabeled 2097 interest-only row — no
+        // principal, so the 定期 column sums to zero like the sheet's.
         assert!(approx_eq(y2026.months[7].interest, 2097.0));
-        assert!(approx_eq(y2026.months[7].payout, 2097.0));
+        assert!(approx_eq(y2026.months[7].payout, 0.0));
         let y2027 = &years[1];
-        // 表_2027定期 1月: 利息 807, 定期 80807, Total 81614.
+        // 表_2027定期 1月: 利息 807, 定期 80000, Total 80807.
         assert!(approx_eq(y2027.months[0].interest, 807.0));
-        assert!(approx_eq(y2027.months[0].payout, 80807.0));
-        assert!(approx_eq(y2027.months[0].total, 81614.0));
+        assert!(approx_eq(y2027.months[0].payout, 80000.0));
+        assert!(approx_eq(y2027.months[0].total, 80807.0));
     }
 
     // --- 3.6 validation ---
