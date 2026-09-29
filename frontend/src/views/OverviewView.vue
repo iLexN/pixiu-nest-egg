@@ -740,6 +740,65 @@ onMounted(load)
         </tbody>
       </table>
     </div>
+
+    <div class="card money-master">
+      <h3>Money Master</h3>
+      <table>
+        <thead>
+          <tr>
+            <th></th>
+            <th class="num">月</th>
+            <th class="num">已儲</th>
+            <th class="num">平均</th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr>
+            <td>現在</td>
+            <td class="num">{{ data.money_master.month_now ?? '—' }}</td>
+            <td class="num">{{ fmtMoney(data.money_master.saved) || '—' }}</td>
+            <td class="num">
+              {{ fmtMoney(data.money_master.avg_per_month) || '—'
+              }}{{ data.money_master.avg_per_month != null ? '/mo' : '' }}
+            </td>
+          </tr>
+          <tr>
+            <td>目標</td>
+            <td class="num">{{ data.money_master.target_months ?? '—' }}</td>
+            <td class="num">{{ fmtMoney(data.money_master.target_amount) || '—' }}</td>
+            <td class="num">
+              {{ fmtMoney(data.money_master.yearly_rate) || '—'
+              }}{{ data.money_master.yearly_rate != null ? '/yr' : '' }}
+            </td>
+          </tr>
+          <tr>
+            <td>進度</td>
+            <td class="num">{{ fmtPercent(data.money_master.time_progress) || '—' }}</td>
+            <td class="num">{{ fmtPercent(data.money_master.saved_progress) || '—' }}</td>
+            <td class="num" :class="signClass(data.money_master.progress_gap)">
+              {{ fmtPercent(data.money_master.progress_gap) || '—' }}
+            </td>
+          </tr>
+        </tbody>
+        <tfoot>
+          <tr>
+            <td>每月需儲</td>
+            <td class="num" :class="signClass(data.money_master.coming_save)">
+              {{ fmtMoney(data.money_master.coming_save) || '—' }}
+            </td>
+            <td colspan="2"></td>
+          </tr>
+          <tr>
+            <td>可動用</td>
+            <td class="num" :class="signClass(data.money_master.can_use)">
+              {{ fmtMoney(data.money_master.can_use) || '—' }}
+            </td>
+            <td colspan="2"></td>
+          </tr>
+        </tfoot>
+      </table>
+      <p class="muted">於 總覽 → 月結 → 設定 更新 Money Master 數字</p>
+    </div>
     </div>
   </template>
 </template>
@@ -758,6 +817,15 @@ onMounted(load)
 }
 .overview-grid .card.invest-targets {
   grid-column: span 2;
+}
+/* A strong rule separates the derived avg pace from the challenge inputs. */
+.money-master td:nth-child(4),
+.money-master th:nth-child(4) {
+  border-left: 3px double var(--border-strong);
+}
+/* Same strong separator between the inputs (現在/目標) and the 進度 row. */
+.money-master tbody tr:nth-child(3) td {
+  border-top: 3px double var(--border-strong);
 }
 .overview-grid tfoot td.muted {
   white-space: normal;

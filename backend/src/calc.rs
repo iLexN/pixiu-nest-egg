@@ -2895,6 +2895,99 @@ pub fn liquidity_tiers(
     }
 }
 
+/// The Money Master challenge inputs (Overview!J29:N35): the stored
+/// `money_master.*` settings plus the salary and the day `month_now` is
+/// computed for.
+#[derive(Debug, Clone)]
+pub struct MoneyMasterInput {
+    /// `money_master.start_date`; `month_now` derives from it.
+    pub start_date: Option<chrono::NaiveDate>,
+    /// `money_master.month_now` override — wins while set.
+    pub month_now_override: Option<f64>,
+    /// `money_master.saved` — the bank app's figure (L31).
+    pub saved: Option<f64>,
+    /// `money_master.coming_save` override — wins while set.
+    pub coming_save_override: Option<f64>,
+    /// `money_master.target_months`/`target_amount` (K32/L32).
+    pub target_months: Option<f64>,
+    pub target_amount: Option<f64>,
+    /// `overview.salary` — feeds K34's derivation and K35.
+    pub salary: Option<f64>,
+    /// The day `month_now` is computed for.
+    pub today: chrono::NaiveDate,
+}
+
+/// The derived Money Master block, each figure absent while its inputs are
+/// missing. `month_now` is the bank's 1-indexed challenge month — override or
+/// `full months elapsed since start_date + 1`. `months_left` counts the
+/// current month and floors at 1 so a completed challenge still divides the
+/// whole gap. `coming_save` is the bank's `salary + (target − saved) ÷
+/// months_left` — negative while ahead of target — or its override; `can_use`
+/// = `salary − coming_save` then equals the over-target excess.
+pub fn money_master(input: &MoneyMasterInput) -> crate::models::MoneyMaster {
+    let month_now = input.month_now_override.or_else(|| {
+        input
+            .start_date
+            .map(|start| full_months_since(start, input.today) as f64 + 1.0)
+    });
+    let months_left = match (input.target_months, month_now) {
+        (Some(target), Some(now)) => Some((target - now + 1.0).max(1.0)),
+        _ => None,
+    };
+    let coming_save = input.coming_save_override.or_else(|| {
+        match (input.salary, input.target_amount, input.saved, months_left) {
+            (Some(salary), Some(target), Some(saved), Some(left)) => {
+                Some(salary + (target - saved) / left)
+            }
+            _ => None,
+        }
+    });
+    let avg_per_month = match (input.saved, month_now) {
+        (Some(saved), Some(now)) if now != 0.0 => Some(saved / now),
+        _ => None,
+    };
+    let time_progress = match (month_now, input.target_months) {
+        (Some(now), Some(target)) if target != 0.0 => Some(now / target),
+        _ => None,
+    };
+    let saved_progress = match (input.saved, input.target_amount) {
+        (Some(saved), Some(target)) if target != 0.0 => Some(saved / target),
+        _ => None,
+    };
+    crate::models::MoneyMaster {
+        start_date: input.start_date.map(|date| date.to_string()),
+        month_now,
+        months_left,
+        saved: input.saved,
+        target_months: input.target_months,
+        target_amount: input.target_amount,
+        coming_save,
+        avg_per_month,
+        yearly_rate: avg_per_month.map(|avg| avg * 12.0),
+        time_progress,
+        saved_progress,
+        progress_gap: match (saved_progress, time_progress) {
+            (Some(saved), Some(time)) => Some(saved - time),
+            _ => None,
+        },
+        can_use: match (input.salary, coming_save) {
+            (Some(salary), Some(coming)) => Some(salary - coming),
+            _ => None,
+        },
+    }
+}
+
+/// Whole months from `start` to `end` by the monthly anniversary — negative
+/// while `end` precedes `start` (a challenge configured before it begins).
+fn full_months_since(start: chrono::NaiveDate, end: chrono::NaiveDate) -> i64 {
+    let mut months =
+        (end.year() - start.year()) as i64 * 12 + (end.month() as i64 - start.month() as i64);
+    if end.day() < start.day() {
+        months -= 1;
+    }
+    months
+}
+
 /// A deposit as a suggestion source: 定期 start/end events.
 #[derive(Debug, Clone)]
 pub struct SuggestionDeposit {
@@ -6113,5 +6206,94 @@ mod tests {
             months[0].ref_check.unwrap(),
             semi - 0.3 * 1_200_000.0
         ));
+    }
+
+    // --- Money Master (Overview!J29:N35) ---
+
+    fn mm_input() -> MoneyMasterInput {
+        MoneyMasterInput {
+            start_date: Some(chrono::NaiveDate::from_ymd_opt(2023, 10, 27).unwrap()),
+            month_now_override: None,
+            saved: Some(1_094_405.06),
+            coming_save_override: None,
+            target_months: Some(36.0),
+            target_amount: Some(1_000_000.0),
+            salary: Some(52_700.0),
+            today: chrono::NaiveDate::from_ymd_opt(2026, 9, 29).unwrap(),
+        }
+    }
+
+    #[test]
+    fn money_master_matches_the_bank_display() {
+        // The bank app's live figures on 2026-09-29: month 36, saved
+        // 1,094,405.06, coming save −41,705.06, can use 94,405.06.
+        let mm = money_master(&mm_input());
+        assert_eq!(mm.month_now, Some(36.0));
+        assert_eq!(mm.months_left, Some(1.0));
+        assert!(approx_eq(mm.coming_save.unwrap(), -41_705.06));
+        assert!(approx_eq(mm.can_use.unwrap(), 94_405.06));
+        assert!(approx_eq(mm.avg_per_month.unwrap(), 30_400.14));
+        assert!(approx_eq(mm.saved_progress.unwrap(), 1.09440506));
+        assert_eq!(mm.time_progress, Some(1.0));
+        assert!(approx_eq(mm.progress_gap.unwrap(), 0.09440506));
+    }
+
+    #[test]
+    fn money_master_month_counts_anniversaries_one_indexed() {
+        let mut input = mm_input();
+        // The anniversary day itself begins a new month.
+        input.today = chrono::NaiveDate::from_ymd_opt(2026, 9, 26).unwrap();
+        assert_eq!(money_master(&input).month_now, Some(35.0));
+        input.today = chrono::NaiveDate::from_ymd_opt(2026, 9, 27).unwrap();
+        assert_eq!(money_master(&input).month_now, Some(36.0));
+        // The start day is month 1; before the start it counts down to 0.
+        input.today = chrono::NaiveDate::from_ymd_opt(2023, 10, 27).unwrap();
+        assert_eq!(money_master(&input).month_now, Some(1.0));
+        input.today = chrono::NaiveDate::from_ymd_opt(2023, 10, 26).unwrap();
+        assert_eq!(money_master(&input).month_now, Some(0.0));
+    }
+
+    #[test]
+    fn money_master_overrides_pin_their_figures() {
+        let mut input = mm_input();
+        input.month_now_override = Some(35.0);
+        input.coming_save_override = Some(2_726.57);
+        let mm = money_master(&input);
+        assert_eq!(mm.month_now, Some(35.0));
+        assert_eq!(mm.months_left, Some(2.0));
+        assert_eq!(mm.coming_save, Some(2_726.57));
+        // Downstream derivations follow the overrides.
+        assert!(approx_eq(mm.avg_per_month.unwrap(), 1_094_405.06 / 35.0));
+        assert!(approx_eq(mm.can_use.unwrap(), 52_700.0 - 2_726.57));
+    }
+
+    #[test]
+    fn money_master_months_left_floors_at_one_past_the_target() {
+        let mut input = mm_input();
+        input.today = chrono::NaiveDate::from_ymd_opt(2027, 3, 10).unwrap();
+        let mm = money_master(&input);
+        // Month 41: five months past the target, still dividing the gap by 1.
+        assert_eq!(mm.month_now, Some(41.0));
+        assert_eq!(mm.months_left, Some(1.0));
+        assert!(mm.coming_save.unwrap() < 0.0);
+    }
+
+    #[test]
+    fn money_master_figures_absent_without_inputs() {
+        let mm = money_master(&MoneyMasterInput {
+            start_date: None,
+            month_now_override: None,
+            saved: None,
+            coming_save_override: None,
+            target_months: None,
+            target_amount: None,
+            salary: None,
+            today: chrono::NaiveDate::from_ymd_opt(2026, 9, 29).unwrap(),
+        });
+        assert!(mm.month_now.is_none());
+        assert!(mm.coming_save.is_none());
+        assert!(mm.can_use.is_none());
+        assert!(mm.avg_per_month.is_none());
+        assert!(mm.progress_gap.is_none());
     }
 }

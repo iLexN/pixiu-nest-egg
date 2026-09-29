@@ -243,6 +243,21 @@ pub async fn overview(State(state): State<AppState>) -> Result<Json<OverviewResp
     let review = super::year_review::build(&state.pool).await?;
     let invest_targets = crate::calc::invest_targets(&review.years, today().year());
 
+    // J29:N35 Money Master — the bank challenge's stored figures plus the
+    // derived month/coming-save (each with an optional meta override).
+    let money_master = crate::calc::money_master(&crate::calc::MoneyMasterInput {
+        start_date: crate::mpf::meta_get(&state.pool, months::MM_START_DATE_KEY)
+            .await?
+            .and_then(|date| chrono::NaiveDate::parse_from_str(&date, "%Y-%m-%d").ok()),
+        month_now_override: mpf::meta_f64(&state.pool, months::MM_MONTH_NOW_KEY).await?,
+        saved: mpf::meta_f64(&state.pool, months::MM_SAVED_KEY).await?,
+        coming_save_override: mpf::meta_f64(&state.pool, months::MM_COMING_SAVE_KEY).await?,
+        target_months: mpf::meta_f64(&state.pool, months::MM_TARGET_MONTHS_KEY).await?,
+        target_amount: mpf::meta_f64(&state.pool, months::MM_TARGET_AMOUNT_KEY).await?,
+        salary,
+        today: today(),
+    });
+
     // J3:K7 策略 — 總數 re-partitioned into liquidity tiers.
     let liquidity_tiers = liquidity_tiers(
         salary,
@@ -271,6 +286,7 @@ pub async fn overview(State(state): State<AppState>) -> Result<Json<OverviewResp
         averages,
         invest_targets,
         liquidity_tiers,
+        money_master,
     }))
 }
 

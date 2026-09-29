@@ -35,6 +35,14 @@ pub const DEFAULT_BILL_AMOUNT: f64 = 2158.0;
 pub const SEMI_LIQUID_TARGET_KEY: &str = "overview.semi_liquid_target";
 /// The buffer ratio the sheet hardcodes (`C14`/`N7`), used while unset.
 pub const DEFAULT_SEMI_LIQUID_TARGET: f64 = 0.25;
+/// `app_meta` keys for the Money Master challenge (Overview!J29:N35); the
+/// `month_now`/`coming_save` keys are optional overrides — unset derives.
+pub const MM_START_DATE_KEY: &str = "money_master.start_date";
+pub const MM_SAVED_KEY: &str = "money_master.saved";
+pub const MM_TARGET_MONTHS_KEY: &str = "money_master.target_months";
+pub const MM_TARGET_AMOUNT_KEY: &str = "money_master.target_amount";
+pub const MM_MONTH_NOW_KEY: &str = "money_master.month_now";
+pub const MM_COMING_SAVE_KEY: &str = "money_master.coming_save";
 
 pub fn pool_rate_key(year: i32) -> String {
     format!("{POOL_RATE_PREFIX}{year}")
@@ -565,6 +573,12 @@ pub async fn settings(State(state): State<AppState>) -> Result<Json<MonthSetting
             .await?
             .unwrap_or(DEFAULT_BILL_AMOUNT),
         semi_liquid_target: semi_liquid_target(&state.pool).await?,
+        money_master_start_date: crate::mpf::meta_get(&state.pool, MM_START_DATE_KEY).await?,
+        money_master_saved: mpf::meta_f64(&state.pool, MM_SAVED_KEY).await?,
+        money_master_target_months: mpf::meta_f64(&state.pool, MM_TARGET_MONTHS_KEY).await?,
+        money_master_target_amount: mpf::meta_f64(&state.pool, MM_TARGET_AMOUNT_KEY).await?,
+        money_master_month_now: mpf::meta_f64(&state.pool, MM_MONTH_NOW_KEY).await?,
+        money_master_coming_save: mpf::meta_f64(&state.pool, MM_COMING_SAVE_KEY).await?,
     }))
 }
 
@@ -612,6 +626,47 @@ pub async fn update_settings(
             "semi-liquid target is stored as a fraction (0.25 = 25%) and must be less than 1",
         ));
     }
+    if let Some(Some(date)) = &patch.money_master_start_date
+        && chrono::NaiveDate::parse_from_str(date, "%Y-%m-%d").is_err()
+    {
+        errors.push(FieldError::new(
+            "money_master_start_date",
+            "date must be YYYY-MM-DD",
+        ));
+    }
+    for (field, value) in [
+        ("money_master_month_now", patch.money_master_month_now),
+        (
+            "money_master_target_months",
+            patch.money_master_target_months,
+        ),
+    ] {
+        if let Some(Some(value)) = value
+            && (!value.is_finite() || value <= 0.0 || value.fract() != 0.0)
+        {
+            errors.push(FieldError::new(field, "must be a positive whole number"));
+        }
+    }
+    if let Some(Some(amount)) = patch.money_master_target_amount
+        && (!amount.is_finite() || amount <= 0.0)
+    {
+        errors.push(FieldError::new(
+            "money_master_target_amount",
+            "must be positive",
+        ));
+    }
+    // The bank's saved figure and coming-save are sign-free — coming save
+    // legitimately goes negative while the challenge runs ahead of target.
+    for (field, value) in [
+        ("money_master_saved", patch.money_master_saved),
+        ("money_master_coming_save", patch.money_master_coming_save),
+    ] {
+        if let Some(Some(value)) = value
+            && !value.is_finite()
+        {
+            errors.push(FieldError::new(field, "must be a number"));
+        }
+    }
     if !errors.is_empty() {
         return Err(ApiError::Validation(errors));
     }
@@ -648,6 +703,25 @@ pub async fn update_settings(
             ratio.map(|ratio| ratio.to_string()).as_deref(),
         )
         .await?;
+    }
+    if let Some(date) = &patch.money_master_start_date {
+        crate::mpf::meta_put(&state.pool, MM_START_DATE_KEY, date.as_deref()).await?;
+    }
+    for (key, value) in [
+        (MM_SAVED_KEY, patch.money_master_saved),
+        (MM_TARGET_MONTHS_KEY, patch.money_master_target_months),
+        (MM_TARGET_AMOUNT_KEY, patch.money_master_target_amount),
+        (MM_MONTH_NOW_KEY, patch.money_master_month_now),
+        (MM_COMING_SAVE_KEY, patch.money_master_coming_save),
+    ] {
+        if let Some(value) = value {
+            crate::mpf::meta_put(
+                &state.pool,
+                key,
+                value.map(|value| value.to_string()).as_deref(),
+            )
+            .await?;
+        }
     }
     settings(State(state)).await
 }

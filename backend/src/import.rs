@@ -1297,6 +1297,22 @@ async fn import_months(pool: &SqlitePool, data: &WorkbookData) -> anyhow::Result
         }
     }
 
+    // The Money Master challenge (Overview!J29:N35) seeds from the user's
+    // bank-app figures — the sheet's K31/L31/K34 literals are stale — once,
+    // like the other settings; the month_now/coming_save overrides stay unset
+    // so the derived figures apply.
+    for (key, value) in [
+        (crate::routes::months::MM_START_DATE_KEY, "2023-10-27"),
+        (crate::routes::months::MM_SAVED_KEY, "1094405.06"),
+        (crate::routes::months::MM_TARGET_MONTHS_KEY, "36"),
+        (crate::routes::months::MM_TARGET_AMOUNT_KEY, "1000000"),
+    ] {
+        if crate::mpf::meta_get(pool, key).await?.is_none() {
+            crate::mpf::meta_put(pool, key, Some(value)).await?;
+            report.settings_seeded += 1;
+        }
+    }
+
     // The cumulative B1 becomes the transfer log's first entry, dated to the
     // first US trade — funding precedes the first buy — so each year's 轉入
     // derives from the log.

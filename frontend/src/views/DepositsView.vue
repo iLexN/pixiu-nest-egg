@@ -257,8 +257,8 @@ onMounted(load)
         </div>
       </div>
       <p class="muted">
-        收訖後定期才離開未到期清單並計入月結利息；money master、回報率、Overview 預測
-        仍是試算表手動步驟。
+        收訖後定期才離開未到期清單並計入月結利息；money master 在月結設定更新，回報率、Overview
+        預測 仍是試算表手動步驟。
       </p>
     </div>
 

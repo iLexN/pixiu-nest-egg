@@ -412,6 +412,12 @@ const salaryDraft = ref<string | number>('')
 const rateDraft = ref<string | number>('')
 const billDraft = ref<string | number>('')
 const targetDraft = ref<string | number>('')
+const mmStartDateDraft = ref('')
+const mmSavedDraft = ref<string | number>('')
+const mmTargetMonthsDraft = ref<string | number>('')
+const mmTargetAmountDraft = ref<string | number>('')
+const mmMonthNowDraft = ref<string | number>('')
+const mmComingSaveDraft = ref<string | number>('')
 const editingSettings = ref(false)
 
 function startSettingsEdit() {
@@ -422,6 +428,12 @@ function startSettingsEdit() {
   billDraft.value = settings.value?.bill_amount ?? ''
   const target = settings.value?.semi_liquid_target
   targetDraft.value = target === null || target === undefined ? '' : target * 100
+  mmStartDateDraft.value = settings.value?.money_master_start_date ?? ''
+  mmSavedDraft.value = settings.value?.money_master_saved ?? ''
+  mmTargetMonthsDraft.value = settings.value?.money_master_target_months ?? ''
+  mmTargetAmountDraft.value = settings.value?.money_master_target_amount ?? ''
+  mmMonthNowDraft.value = settings.value?.money_master_month_now ?? ''
+  mmComingSaveDraft.value = settings.value?.money_master_coming_save ?? ''
   editingSettings.value = true
 }
 
@@ -442,6 +454,19 @@ async function saveSettings() {
     error.value = '半流動資金目標必須是 0–100%'
     return
   }
+  const mmTargetMonths = numOrNull(mmTargetMonthsDraft.value)
+  const mmMonthNow = numOrNull(mmMonthNowDraft.value)
+  for (const value of [mmTargetMonths, mmMonthNow]) {
+    if (value !== null && (value <= 0 || !Number.isInteger(value))) {
+      error.value = 'Money Master 月數必須是正整數'
+      return
+    }
+  }
+  const mmTargetAmount = numOrNull(mmTargetAmountDraft.value)
+  if (mmTargetAmount !== null && mmTargetAmount <= 0) {
+    error.value = 'Money Master 目標金額必須是正數'
+    return
+  }
   try {
     await api.updateMonthSettings({
       salary,
@@ -452,6 +477,13 @@ async function saveSettings() {
       bill_amount: bill,
       // Same: blank resets to the 25% sheet literal.
       semi_liquid_target: targetPct === null ? null : targetPct / 100,
+      // Money Master: blank clears; the two overrides derive while unset.
+      money_master_start_date: mmStartDateDraft.value || null,
+      money_master_saved: numOrNull(mmSavedDraft.value),
+      money_master_target_months: mmTargetMonths,
+      money_master_target_amount: mmTargetAmount,
+      money_master_month_now: mmMonthNow,
+      money_master_coming_save: numOrNull(mmComingSaveDraft.value),
     })
     editingSettings.value = false
     message.value = '已儲存設定'
@@ -949,6 +981,23 @@ onMounted(load)
           {{ fmtPercentShort(settings?.semi_liquid_target) || '—' }}
           <button type="button" class="link" @click="startSettingsEdit">編輯</button>
         </p>
+        <p class="muted settings-line">
+          Money Master 開始 {{ settings?.money_master_start_date || '—' }} · 已儲
+          {{ fmtMoney(settings?.money_master_saved) || '—' }} · 目標
+          {{ settings?.money_master_target_months ?? '—' }}月/{{
+            fmtMoney(settings?.money_master_target_amount) || '—'
+          }}
+          <template
+            v-if="
+              settings?.money_master_month_now != null ||
+              settings?.money_master_coming_save != null
+            "
+          >
+            · 覆寫 {{ settings?.money_master_month_now ?? '—' }}月/{{
+              fmtMoney(settings?.money_master_coming_save) || '—'
+            }}
+          </template>
+        </p>
         <form v-if="editingSettings" class="inline-form" @submit.prevent="saveSettings">
           <h4>設定</h4>
           <label>
@@ -966,6 +1015,31 @@ onMounted(load)
           <label>
             半流動資金目標（流動資產 %；留空回復 25%）
             <input v-model="targetDraft" type="number" step="any" inputmode="decimal" placeholder="25" />
+          </label>
+          <h4>Money Master</h4>
+          <label>
+            挑戰開始日
+            <input v-model="mmStartDateDraft" type="date" />
+          </label>
+          <label>
+            已儲（銀行 App 數字）
+            <input v-model="mmSavedDraft" type="number" step="any" inputmode="decimal" />
+          </label>
+          <label>
+            目標月數
+            <input v-model="mmTargetMonthsDraft" type="number" step="1" inputmode="numeric" />
+          </label>
+          <label>
+            目標金額
+            <input v-model="mmTargetAmountDraft" type="number" step="any" inputmode="decimal" />
+          </label>
+          <label>
+            月份覆寫（留空按開始日推算）
+            <input v-model="mmMonthNowDraft" type="number" step="1" inputmode="numeric" />
+          </label>
+          <label>
+            每月需儲覆寫（留空自動推算）
+            <input v-model="mmComingSaveDraft" type="number" step="any" inputmode="decimal" />
           </label>
           <div class="form-actions">
             <button type="submit">儲存</button>

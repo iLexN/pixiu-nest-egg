@@ -105,11 +105,11 @@ The system SHALL present a year filter defaulting to the current year, listing t
 - **THEN** the 2027 table shows January with that month's Σ interest and Σ total, and the remaining months with zero
 
 ### Requirement: Reminder checklists
-The deposits view SHALL display the workbook's "定期 start step" and "定期 end step" checklists as static reminder text, since the steps they describe (Month Stat, money master, 回報率, Overview 預測) still require manual workbook edits until those sections are migrated.
+The deposits view SHALL display the workbook's "定期 start step" and "定期 end step" checklists as static reminder text; the checklist still lists "money master" as a step — the user performs it in the app's settings — while 回報率 and Overview 預測 still require manual workbook edits until those sections are migrated.
 
 #### Scenario: Checklist visible
 - **WHEN** the user opens the deposits view
-- **THEN** the start-step and end-step reminders are visible without editing capability
+- **THEN** the start-step and end-step reminders are visible without editing capability, and the muted note no longer lists money master among the workbook-manual steps
 
 ### Requirement: Display formatting
 Deposit display SHALL follow the app's conventions: money to 2 decimal places and rates shown as percentages; stored values are never rounded.

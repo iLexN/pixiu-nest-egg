@@ -11,6 +11,8 @@ Analysis of the last two unmigrated core sheets in `財富分析報告.xlsx`, ca
 > **Also implemented (add-overview-liquidity-tiers, 2026-09):** the `J3:K7` 策略 block — `manual_assets` rows gained a `liquidity` flag (`short`/`long`) placing them in K6 短期可取回 or K7 長期可取回, and the four K cells derive on `GET /api/overview`. Still spreadsheet-side: the `M3:N8` rates block display, 投資目標's sheet-side formulas (the app uses a unified one).
 >
 > **Also implemented (add-cash-forecast, 2026-09):** the `A20:H36` 預測 grid — `GET /api/forecast` derives the seven-month projection (start/salary/spend/finish/interest/bill/returns → 活期, 定期+SC locked chain, 半流動, ref check); only `forecast_items` plans are stored, and `POST /api/forecast-items/:id/convert` turns a plan into a real deposit. The sheet's B22/B24/B25 anchors and the block-copy ritual are gone. See `docs/overview.md` → "The 預測 forecast grid".
+>
+> **Also implemented (add-money-master, 2026-09):** the `J29:N35` Money Master block — `saved` + challenge params are `app_meta` settings edited in 月結 settings; `month now` derives from `start_date` and `comming save per month` derives from salary + remaining gap, each with an optional override. See `docs/overview.md` → the Money Master paragraph.
 
 ## Scope decision (confirmed with user)
 

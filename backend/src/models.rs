@@ -1121,11 +1121,25 @@ pub struct MonthSettings {
     /// `overview.semi_liquid_target` — the share of 流動資產 the 半流動資金
     /// buffer targets; the effective value (0.25 while unset).
     pub semi_liquid_target: f64,
+    /// `money_master.start_date` — the bank challenge's start `YYYY-MM-DD`;
+    /// `month_now` derives from it.
+    pub money_master_start_date: Option<String>,
+    /// `money_master.saved` — the bank app's saved figure (L31).
+    pub money_master_saved: Option<f64>,
+    /// `money_master.target_months`/`target_amount` — the challenge params
+    /// (K32/L32).
+    pub money_master_target_months: Option<f64>,
+    pub money_master_target_amount: Option<f64>,
+    /// `money_master.month_now`/`coming_save` — optional overrides pinning
+    /// the derived figures while set.
+    pub money_master_month_now: Option<f64>,
+    pub money_master_coming_save: Option<f64>,
 }
 
 /// Absent fields are left untouched; `null` clears `salary`/`pool_rate`/
 /// `bill_amount`/`semi_liquid_target` (a cleared bill amount or target falls
-/// back to the default).
+/// back to the default) and every `money_master_*` field — clearing
+/// `month_now`/`coming_save` returns that figure to its derivation.
 #[derive(Debug, Clone, Default, Deserialize, ToSchema)]
 pub struct MonthSettingsPatch {
     #[serde(default, deserialize_with = "nullable")]
@@ -1139,6 +1153,20 @@ pub struct MonthSettingsPatch {
     /// `null` resets the buffer target to the 25% default.
     #[serde(default, deserialize_with = "nullable")]
     pub semi_liquid_target: Option<Option<f64>>,
+    #[serde(default, deserialize_with = "nullable")]
+    pub money_master_start_date: Option<Option<String>>,
+    #[serde(default, deserialize_with = "nullable")]
+    pub money_master_saved: Option<Option<f64>>,
+    #[serde(default, deserialize_with = "nullable")]
+    pub money_master_target_months: Option<Option<f64>>,
+    #[serde(default, deserialize_with = "nullable")]
+    pub money_master_target_amount: Option<Option<f64>>,
+    /// `null` clears the override so `month_now` derives from `start_date`.
+    #[serde(default, deserialize_with = "nullable")]
+    pub money_master_month_now: Option<Option<f64>>,
+    /// `null` clears the override so `coming_save` derives again.
+    #[serde(default, deserialize_with = "nullable")]
+    pub money_master_coming_save: Option<Option<f64>>,
 }
 
 /// A computed candidate item for a month, never stored until accepted.
@@ -1312,6 +1340,40 @@ pub struct LiquidityTiers {
     pub long_term: Option<f64>,
 }
 
+/// The `Overview!J29:N35` Money Master challenge block: the bank app's
+/// stored figures, the effective month/coming-save (override or derived),
+/// and the sheet's progress/pace derivations.
+#[derive(Debug, Clone, Default, Serialize, ToSchema)]
+pub struct MoneyMaster {
+    /// `money_master.start_date` — the challenge start `YYYY-MM-DD`.
+    pub start_date: Option<String>,
+    /// K31: override or `full months elapsed since start_date + 1` (the
+    /// bank's 1-indexed month counter).
+    pub month_now: Option<f64>,
+    /// Months left counting the current challenge month, floored at 1.
+    pub months_left: Option<f64>,
+    /// L31: the bank app's saved figure.
+    pub saved: Option<f64>,
+    /// K32/L32: the challenge parameters.
+    pub target_months: Option<f64>,
+    pub target_amount: Option<f64>,
+    /// K34: override or `salary + (target_amount − saved) ÷ months_left`;
+    /// negative while ahead of target.
+    pub coming_save: Option<f64>,
+    /// M31 = saved ÷ month_now.
+    pub avg_per_month: Option<f64>,
+    /// N31 = avg_per_month × 12.
+    pub yearly_rate: Option<f64>,
+    /// K33 = month_now ÷ target_months.
+    pub time_progress: Option<f64>,
+    /// L33 = saved ÷ target_amount.
+    pub saved_progress: Option<f64>,
+    /// M33 = saved_progress − time_progress.
+    pub progress_gap: Option<f64>,
+    /// K35 = salary − coming_save; may exceed salary while coming_save < 0.
+    pub can_use: Option<f64>,
+}
+
 /// `GET /api/overview`: the sheet's A3:C18 block plus the B1/H1/J1 headline.
 #[derive(Debug, Clone, Serialize, ToSchema)]
 pub struct OverviewResponse {
@@ -1340,6 +1402,8 @@ pub struct OverviewResponse {
     pub invest_targets: InvestTargets,
     /// J3:K7.
     pub liquidity_tiers: LiquidityTiers,
+    /// J29:N35.
+    pub money_master: MoneyMaster,
 }
 
 /// Which 預測 row a forecast item belongs to. `hs_deposit`/`sc_deposit` are

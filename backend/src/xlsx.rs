@@ -1350,6 +1350,30 @@ pub struct SheetInvestTarget {
     pub growth: Option<f64>,
 }
 
+/// The `J29:N35` Money Master block: the K/L input cells plus the sheet's
+/// derived M/N and process cells. Parsed for traceability and parity; the
+/// app seeds its own (newer) bank figures, not these cells.
+#[derive(Debug, Clone, Default)]
+pub struct SheetMoneyMaster {
+    /// K31/L31: months elapsed and the saved figure.
+    pub month_now: Option<f64>,
+    pub saved: Option<f64>,
+    /// M31/N31: avg per month and ×12.
+    pub avg_per_month: Option<f64>,
+    pub yearly_rate: Option<f64>,
+    /// K32/L32: the challenge parameters.
+    pub target_months: Option<f64>,
+    pub target_amount: Option<f64>,
+    /// K33/L33/M33: time vs saved progress and the gap.
+    pub time_progress: Option<f64>,
+    pub saved_progress: Option<f64>,
+    pub progress_gap: Option<f64>,
+    /// K34: the 每月需儲 figure (may be negative while ahead).
+    pub coming_save: Option<f64>,
+    /// K35: E1 − K34.
+    pub can_use: Option<f64>,
+}
+
 /// The `Overview` cells the app seeds from or parity-checks against.
 #[derive(Debug, Clone, Default)]
 pub struct OverviewCached {
@@ -1393,6 +1417,8 @@ pub struct OverviewCached {
     pub tier_cannot_use: Option<f64>,
     pub tier_short_term: Option<f64>,
     pub tier_long_term: Option<f64>,
+    /// The J29:N35 Money Master block.
+    pub money_master: SheetMoneyMaster,
 }
 
 /// The 美股 sheet's IBKR account header block (A1:B5 + B7): all manual inputs
@@ -1742,6 +1768,21 @@ fn parse_overview(rows: Option<&Rows>) -> OverviewCached {
         tier_cannot_use: cell_num(4, 10),
         tier_short_term: cell_num(5, 10),
         tier_long_term: cell_num(6, 10),
+        // J29:N35 Money Master: row 31 K/L/M/N, row 32 K/L, row 33 K/L/M,
+        // row 34 K, row 35 K.
+        money_master: SheetMoneyMaster {
+            month_now: cell_num(30, 10),
+            saved: cell_num(30, 11),
+            avg_per_month: cell_num(30, 12),
+            yearly_rate: cell_num(30, 13),
+            target_months: cell_num(31, 10),
+            target_amount: cell_num(31, 11),
+            time_progress: cell_num(32, 10),
+            saved_progress: cell_num(32, 11),
+            progress_gap: cell_num(32, 12),
+            coming_save: cell_num(33, 10),
+            can_use: cell_num(34, 10),
+        },
     }
 }
 
@@ -2344,6 +2385,20 @@ mod tests {
         assert!(near(target(2025).target, 378447.9));
         assert!(near(target(2026).remain, 274607.62));
         assert!(near(target(2026).growth, 0.067441));
+
+        // The J29:N35 Money Master block: K/L inputs plus the derived cells.
+        let mm = &data.overview.money_master;
+        assert!(near(mm.month_now, 35.0));
+        assert!(near(mm.saved, 1042052.93));
+        assert!(near(mm.avg_per_month, 29772.94));
+        assert!(near(mm.yearly_rate, 357275.29));
+        assert!(near(mm.target_months, 36.0));
+        assert!(near(mm.target_amount, 1000000.0));
+        assert!(near(mm.time_progress, 0.972222));
+        assert!(near(mm.saved_progress, 1.042053));
+        assert!(near(mm.progress_gap, 0.069831));
+        assert!(near(mm.coming_save, 2726.57));
+        assert!(near(mm.can_use, 49973.43));
 
         // The J3:K7 策略 block: K5 is salary × 6; the K column sits beside J.
         assert!(near(data.overview.tier_can_use, 160823.67));

@@ -1819,6 +1819,67 @@ async fn check_overview(
             sheet_row.year < current_year,
         );
     }
+
+    // J29:N35 Money Master — all informational: the app carries the live
+    // bank figures (seeded from newer data, updated monthly in settings)
+    // while the workbook's cells freeze at their last hand-update.
+    let mm = &response.money_master;
+    let sheet_mm = &cached.money_master;
+    for (name, field, computed, sheet) in [
+        ("Overview MM month", "K31", mm.month_now, sheet_mm.month_now),
+        ("Overview MM saved", "L31", mm.saved, sheet_mm.saved),
+        (
+            "Overview MM avg",
+            "M31",
+            mm.avg_per_month,
+            sheet_mm.avg_per_month,
+        ),
+        (
+            "Overview MM yearly",
+            "N31",
+            mm.yearly_rate,
+            sheet_mm.yearly_rate,
+        ),
+        (
+            "Overview MM target months",
+            "K32",
+            mm.target_months,
+            sheet_mm.target_months,
+        ),
+        (
+            "Overview MM target",
+            "L32",
+            mm.target_amount,
+            sheet_mm.target_amount,
+        ),
+        (
+            "Overview MM time %",
+            "K33",
+            mm.time_progress,
+            sheet_mm.time_progress,
+        ),
+        (
+            "Overview MM saved %",
+            "L33",
+            mm.saved_progress,
+            sheet_mm.saved_progress,
+        ),
+        (
+            "Overview MM gap",
+            "M33",
+            mm.progress_gap,
+            sheet_mm.progress_gap,
+        ),
+        (
+            "Overview MM coming save",
+            "K34",
+            mm.coming_save,
+            sheet_mm.coming_save,
+        ),
+        ("Overview MM can use", "K35", mm.can_use, sheet_mm.can_use),
+    ] {
+        overview_compare(report, name, field, computed, sheet, false);
+    }
     Ok(())
 }
 

@@ -431,7 +431,7 @@ The import SHALL seed, each only when unset, the `app_meta` keys `ibkr.now_value
 
 ### Requirement: Overview parity report
 
-The parity command SHALL also compare the app's derived Overview figures against the workbook's cached cells — asset rows `B3:B9` and `Sum` `B10`, the `C3:C9` shares, the `A13` ratio, 半流動資金 `B14`/`B15`/`B18`, `C14`, headline `B1`/`H1`/`J1`, the 美股 account cells `B1`/`B2`/`B4`/`B5`/`B7`, the averages block `G4:G8`/`H6`/`G10`, the 投資目標 block (`J22`, `K23:K26`, `L24:L26`, `M26`, `N24:N26`), and the 策略 block `K4:K7` — and report any difference beyond a small floating-point tolerance. Figures whose inputs the user has edited since import (e.g. manual balances, IBKR cells, stale GOOGLEFINANCE prices), the hand-maintained OFFSET averages window, the live pool balance, and the 投資目標 `L`/`M` cells plus the current-year `N` cell SHALL be reported as informational differences rather than failures — the sheet's per-year target formulas legitimately differ from the app's unified one. The `K4:K7` comparisons SHALL follow the same informational treatment as the headline cells they derive from, since they inherit the manual-balance and live-price drift.
+The parity command SHALL also compare the app's derived Overview figures against the workbook's cached cells — asset rows `B3:B9` and `Sum` `B10`, the `C3:C9` shares, the `A13` ratio, 半流動資金 `B14`/`B15`/`B18`, `C14`, headline `B1`/`H1`/`J1`, the 美股 account cells `B1`/`B2`/`B4`/`B5`/`B7`, the averages block `G4:G8`/`H6`/`G10`, the 投資目標 block (`J22`, `K23:K26`, `L24:L26`, `M26`, `N24:N26`), and the 策略 block `K4:K7` — and report any difference beyond a small floating-point tolerance. The `C14` comparison SHALL check the sheet's own literal formula — `semi_liquid.total − 25% × liquid_assets` recomputed from the response's other fields — rather than the response's `vs_quarter_liquid`, which follows the configured `overview.semi_liquid_target` ratio. Figures whose inputs the user has edited since import (e.g. manual balances, IBKR cells, stale GOOGLEFINANCE prices), the hand-maintained OFFSET averages window, the live pool balance, and the 投資目標 `L`/`M` cells plus the current-year `N` cell SHALL be reported as informational differences rather than failures — the sheet's per-year target formulas legitimately differ from the app's unified one. The `K4:K7` comparisons SHALL follow the same informational treatment as the headline cells they derive from, since they inherit the manual-balance and live-price drift.
 
 #### Scenario: Block matches
 
@@ -447,3 +447,31 @@ The parity command SHALL also compare the app's derived Overview figures against
 
 - **WHEN** the sheet caches `K5` `316200` and the app stores salary `52700`
 - **THEN** the `K5` comparison reports a match, and `K4`/`K6`/`K7` are compared against the app's `can_use`/`short_term`/`long_term`
+
+#### Scenario: Configured ratio does not disturb the `C14` check
+
+- **WHEN** `overview.semi_liquid_target` is set to `0.3` and the parity command is run
+- **THEN** the `C14` comparison still checks `semi_liquid.total − 0.25 × liquid_assets` against the workbook's cached `C14` and reports a match while the sheet's formula holds
+
+### Requirement: Money Master seeding
+
+Import SHALL seed the Money Master settings once — `money_master.start_date` `2023-10-27`, `money_master.saved` `1094405.06`, `money_master.target_months` `36`, `money_master.target_amount` `1000000` — from the user's bank-app figures (the workbook's `K31`/`L31`/`K34` literals are stale and SHALL NOT be seeded), leaving the `month_now`/`coming_save` overrides unset so derivation applies. Re-import SHALL NOT overwrite values the user has since changed.
+
+#### Scenario: Fresh import seeds the challenge
+
+- **WHEN** import runs against a database with no `money_master.*` keys
+- **THEN** the overview block derives `month_now` from `2023-10-27`, `saved_progress` from `1094405.06 ÷ 1000000`, and `coming_save` from the seeded targets
+
+#### Scenario: Re-import preserves edits
+
+- **WHEN** the user has patched `money_master.saved` and import runs again
+- **THEN** the stored `saved` keeps the user's value
+
+### Requirement: Money Master parity comparisons
+
+The parity command SHALL read the workbook's `J29:N35` cells — `K31`/`L31`/`K32`/`L32`/`K34` inputs and `M31`/`N31`/`K33`/`L33`/`M33`/`K35` derived cells — and compare them against the app's block as informational rows only: the app legitimately carries newer bank figures than the frozen workbook, so differences are expected rather than failures.
+
+#### Scenario: Stale workbook reported as informational
+
+- **WHEN** the workbook caches `month` `35`/`saved` `1042052.93` while the app derives `month_now` `36`/`saved` `1094405.06`
+- **THEN** the parity report lists the mismatches as informational, not failures

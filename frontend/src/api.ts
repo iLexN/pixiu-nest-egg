@@ -899,6 +899,15 @@ export interface MonthSettings {
   bill_amount: number
   /** The effective 半流動資金 buffer share of 流動資產 (0.25 while unset). */
   semi_liquid_target: number
+  /** `money_master.start_date` (YYYY-MM-DD) — the challenge start. */
+  money_master_start_date: string | null
+  /** `money_master.saved` — the bank app's saved figure. */
+  money_master_saved: number | null
+  money_master_target_months: number | null
+  money_master_target_amount: number | null
+  /** Optional overrides pinning the derived month/coming-save while set. */
+  money_master_month_now: number | null
+  money_master_coming_save: number | null
 }
 
 export interface MonthStatPatch {
@@ -937,6 +946,14 @@ export interface MonthSettingsPatch {
   bill_amount?: number | null
   /** `null` resets the 半流動資金 buffer ratio to the 25% default. */
   semi_liquid_target?: number | null
+  money_master_start_date?: string | null
+  money_master_saved?: number | null
+  money_master_target_months?: number | null
+  money_master_target_amount?: number | null
+  /** `null` clears the override so `month_now` derives from `start_date`. */
+  money_master_month_now?: number | null
+  /** `null` clears the override so `coming_save` derives again. */
+  money_master_coming_save?: number | null
 }
 
 /** A forecast plan kind — the 預測 row the item belongs to. */
@@ -1104,6 +1121,27 @@ export interface LiquidityTiers {
   long_term: number | null
 }
 
+/** The Money Master challenge block (Overview!J29:N35): the bank app's
+ * stored figures plus the derived month, coming-save, and progress cells. */
+export interface MoneyMaster {
+  start_date: string | null
+  /** Effective challenge month — override or full months since start + 1. */
+  month_now: number | null
+  months_left: number | null
+  saved: number | null
+  target_months: number | null
+  target_amount: number | null
+  /** Effective 每月需儲 — override or derived; negative while ahead. */
+  coming_save: number | null
+  avg_per_month: number | null
+  yearly_rate: number | null
+  time_progress: number | null
+  saved_progress: number | null
+  progress_gap: number | null
+  /** salary − coming_save; may exceed salary while coming_save < 0. */
+  can_use: number | null
+}
+
 export interface OverviewResponse {
   today: string
   rate: number | null
@@ -1120,6 +1158,7 @@ export interface OverviewResponse {
   averages: TwelveMonthAverages
   invest_targets: InvestTargets
   liquidity_tiers: LiquidityTiers
+  money_master: MoneyMaster
 }
 
 /** Carries the server's field-level messages so forms can show them inline. */
