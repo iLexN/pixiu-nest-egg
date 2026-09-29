@@ -69,6 +69,8 @@ Backend tests are inline `#[cfg(test)]` modules next to the code they cover. The
 
 ## Working rules
 
+- When asking the user questions, ask one focused question at a time and wait for the answer — never batch a list of questions.
+- When a task changes backend or frontend-built code, restart the running backend afterwards so http://127.0.0.1:8787/ reflects it: kill the `wealth-backend` process (`lsof -ti :8787 | xargs kill`), then `cargo run -p wealth-backend --bin wealth-backend` in the background, and confirm the API answers. The user verifies against the live `data/wealth.db` — this restart is expected, not an "experiment" on the live DB.
 - The backend is the source of truth for validation, persistence, and all financial calculations. The frontend collects input, renders API responses, and formats values for display; temporary previews are never authoritative.
 - Handlers carry `#[utoipa::path]` annotations and are registered in `api_router` via `utoipa_axum::routes!` — never `.route()`, which compiles but skips documentation. `routes::tests::openapi_documents_every_api_operation` pins the exact path+method list; update it when adding or removing endpoints.
 - Schema changes are a new `backend/migrations/NNNN_name.sql`. Never edit an existing migration — every local database has already applied it. Update `docs/database.md` in the same change.
