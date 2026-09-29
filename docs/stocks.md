@@ -297,13 +297,15 @@ The snapshots are stored, not recomputed: buying more of the same stock later do
 收訖 on a pending row → DividendReceiveForm
   → PATCH /api/dividends/:id { received_amount, received_price?, bank_in? }
   → status becomes received; both rates now use the received amount
+  → received_price omitted or null → the stock's current 現價 is stored
+    as the receipt snapshot (NULL when the stock has no 現價)
   → banks the amount — HK → HS cash row (also records the div:<id>
     adjustment month_item for the pay month); US → the ibkr.usd_cash
     meta value (no month item — the money never touches 活期)
   → 同時更新現價 checked → a separate PATCH /api/stocks/:id sets manual_price
 ```
 
-The 現價 entered at receipt is stored on the dividend record only. It does not update the stock's 現價 unless 同時更新現價 is checked, because the receipt price may be recorded on a different day than the price update. Clearing `received_amount` reverses the bank-in credit and deletes the `div:<id>` item.
+The 現價 entered at receipt is stored on the dividend record only — and a blank 當時現價 snapshots the stock's current 現價 onto the record (a read, not a write). It does not update the stock's 現價 unless 同時更新現價 is checked, because the receipt price may be recorded on a different day than the price update. Clearing `received_price` on an already-received record stays cleared; clearing `received_amount` reverses the bank-in credit and deletes the `div:<id>` item.
 
 ## Load the 股票 → 派息 view
 

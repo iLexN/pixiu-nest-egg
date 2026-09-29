@@ -20,6 +20,11 @@ const percent = new Intl.NumberFormat('en-US', {
   maximumFractionDigits: 3,
 })
 
+const percentShort = new Intl.NumberFormat('en-US', {
+  style: 'percent',
+  maximumFractionDigits: 3,
+})
+
 /** Empty cells stay empty rather than showing a misleading 0. */
 export function fmtMoney(value: number | null | undefined): string {
   return value === null || value === undefined ? '' : money.format(value)
@@ -35,6 +40,11 @@ export function fmtShares(value: number | null | undefined): string {
 
 export function fmtPercent(value: number | null | undefined): string {
   return value === null || value === undefined ? '' : percent.format(value)
+}
+
+/** Like `fmtPercent` but drops trailing zeros — 0.25 → "25%", 0.325 → "32.5%". */
+export function fmtPercentShort(value: number | null | undefined): string {
+  return value === null || value === undefined ? '' : percentShort.format(value)
 }
 
 export function fmtDateTime(value: string | null | undefined): string {

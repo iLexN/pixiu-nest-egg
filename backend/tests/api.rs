@@ -1006,6 +1006,84 @@ async fn dividend_lifecycle_freezes_its_snapshots() {
 }
 
 #[tokio::test]
+async fn dividend_receipt_defaults_price_to_current_stock_price() {
+    let app = app().await;
+    let stock = create_stock(&app, "HK", "新華保險", None).await;
+    create_buy(&app, stock, "2024-01-10", 1000.0, 5000.0).await;
+
+    let (status, _) = send(
+        &app,
+        "PATCH",
+        &format!("/api/stocks/{stock}"),
+        Some(json!({ "manual_price": 5.41 })),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+
+    let (status, body) = send(
+        &app,
+        "POST",
+        "/api/dividends",
+        Some(json!({ "stock_id": stock, "pay_date": "2025-03-05", "estimated_amount": 900.0 })),
+    )
+    .await;
+    assert_eq!(status, StatusCode::CREATED, "body = {body}");
+    let id = body["id"].as_i64().expect("id");
+
+    // Blank 當時現價 (null) snapshots the stock's current 現價.
+    let (status, body) = send(
+        &app,
+        "PATCH",
+        &format!("/api/dividends/{id}"),
+        Some(json!({ "received_amount": 900.0, "received_price": null, "bank_in": false })),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "body = {body}");
+    approx(&body["received_price"], 5.41);
+    approx(&body["yield_on_price"], 900.0 / (5.41 * 1000.0));
+
+    // Clearing the price on an already-received record stays cleared:
+    // the default applies only to the pending → received transition.
+    let (status, body) = send(
+        &app,
+        "PATCH",
+        &format!("/api/dividends/{id}"),
+        Some(json!({ "received_price": null })),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "body = {body}");
+    assert!(body["received_price"].is_null());
+}
+
+#[tokio::test]
+async fn dividend_receipt_without_stock_price_stores_null() {
+    let app = app().await;
+    let stock = create_stock(&app, "HK", "無現價", None).await;
+    create_buy(&app, stock, "2024-01-10", 1000.0, 5000.0).await;
+
+    let (status, body) = send(
+        &app,
+        "POST",
+        "/api/dividends",
+        Some(json!({ "stock_id": stock, "pay_date": "2025-03-05", "estimated_amount": 900.0 })),
+    )
+    .await;
+    assert_eq!(status, StatusCode::CREATED, "body = {body}");
+    let id = body["id"].as_i64().expect("id");
+
+    let (status, body) = send(
+        &app,
+        "PATCH",
+        &format!("/api/dividends/{id}"),
+        Some(json!({ "received_amount": 900.0, "bank_in": false })),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "body = {body}");
+    assert!(body["received_price"].is_null());
+    assert!(body["yield_on_price"].is_null());
+}
+
+#[tokio::test]
 async fn coupon_and_dividend_receive_banks_in_and_records_the_item() {
     let app = app().await;
 

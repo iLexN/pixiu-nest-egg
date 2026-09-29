@@ -144,7 +144,7 @@ When a contributions/balance update arrives in a later month and whole calendar 
 
 ### `app_meta`
 
-A generic key-value table for section-level state that no account row can hold. Currently: `mpf.note` (the MPF page's free-text note), the portfolio-level seeded maxima `mpf.seed_max_rate` / `mpf.seed_max_gain`, the Overview settings `overview.salary` / `overview.pool_rate.<year>`, the manual USD→HKD rate `aia.usd_hkd_rate`, and the 美股 sheet's IBKR account cells `ibkr.now_value` / `ibkr.hkd_cash` / `ibkr.usd_cash`.
+A generic key-value table for section-level state that no account row can hold. Currently: `mpf.note` (the MPF page's free-text note), the portfolio-level seeded maxima `mpf.seed_max_rate` / `mpf.seed_max_gain`, the Overview settings `overview.salary` / `overview.pool_rate.<year>` / `overview.semi_liquid_target` (the 半流動資金 buffer's target share of 流動資產, `0.25` while unset), the forecast's 差餉 charge `forecast.bill_amount` (2158 while unset), the manual USD→HKD rate `aia.usd_hkd_rate`, and the 美股 sheet's IBKR account cells `ibkr.now_value` / `ibkr.hkd_cash` / `ibkr.usd_cash`.
 
 | Column | Meaning |
 |---|---|

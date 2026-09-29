@@ -31,9 +31,20 @@ pub const POOL_RATE_PREFIX: &str = "overview.pool_rate.";
 pub const BILL_AMOUNT_KEY: &str = "forecast.bill_amount";
 /// The 差餉 figure the forecast falls back to while unset.
 pub const DEFAULT_BILL_AMOUNT: f64 = 2158.0;
+/// `app_meta` key for the 半流動資金 buffer's target share of 流動資產.
+pub const SEMI_LIQUID_TARGET_KEY: &str = "overview.semi_liquid_target";
+/// The buffer ratio the sheet hardcodes (`C14`/`N7`), used while unset.
+pub const DEFAULT_SEMI_LIQUID_TARGET: f64 = 0.25;
 
 pub fn pool_rate_key(year: i32) -> String {
     format!("{POOL_RATE_PREFIX}{year}")
+}
+
+/// The configured 半流動資金 target share of 流動資產 — `0.25` while unset.
+pub async fn semi_liquid_target(pool: &SqlitePool) -> Result<f64, ApiError> {
+    Ok(mpf::meta_f64(pool, SEMI_LIQUID_TARGET_KEY)
+        .await?
+        .unwrap_or(DEFAULT_SEMI_LIQUID_TARGET))
 }
 
 /// `:ym` accepts `YYYY-MM` or `YYYY-MM-01` and normalises to `YYYY-MM-01`.
@@ -553,6 +564,7 @@ pub async fn settings(State(state): State<AppState>) -> Result<Json<MonthSetting
         bill_amount: mpf::meta_f64(&state.pool, BILL_AMOUNT_KEY)
             .await?
             .unwrap_or(DEFAULT_BILL_AMOUNT),
+        semi_liquid_target: semi_liquid_target(&state.pool).await?,
     }))
 }
 
@@ -592,6 +604,14 @@ pub async fn update_settings(
             "bill amount must not be negative",
         ));
     }
+    if let Some(Some(ratio)) = patch.semi_liquid_target
+        && (!ratio.is_finite() || !(0.0..1.0).contains(&ratio))
+    {
+        errors.push(FieldError::new(
+            "semi_liquid_target",
+            "semi-liquid target is stored as a fraction (0.25 = 25%) and must be less than 1",
+        ));
+    }
     if !errors.is_empty() {
         return Err(ApiError::Validation(errors));
     }
@@ -618,6 +638,14 @@ pub async fn update_settings(
             &state.pool,
             BILL_AMOUNT_KEY,
             amount.map(|amount| amount.to_string()).as_deref(),
+        )
+        .await?;
+    }
+    if let Some(ratio) = patch.semi_liquid_target {
+        crate::mpf::meta_put(
+            &state.pool,
+            SEMI_LIQUID_TARGET_KEY,
+            ratio.map(|ratio| ratio.to_string()).as_deref(),
         )
         .await?;
     }
@@ -1530,6 +1558,54 @@ mod tests {
 
         let stored = load_asset(&pool, created.id).await.expect("stored");
         assert_eq!(stored.liquidity, ManualAssetLiquidity::Short);
+    }
+
+    #[tokio::test]
+    async fn update_settings_round_trips_the_semi_liquid_target() {
+        let pool = connect_memory().await.expect("memory db");
+        let state = AppState { pool: pool.clone() };
+
+        // While unset the effective ratio is the sheet's 25% literal.
+        let current = settings(State(state.clone())).await.expect("settings").0;
+        assert_eq!(current.semi_liquid_target, 0.25);
+
+        let updated = update_settings(
+            State(state.clone()),
+            Json(MonthSettingsPatch {
+                semi_liquid_target: Some(Some(0.3)),
+                ..Default::default()
+            }),
+        )
+        .await
+        .expect("patched")
+        .0;
+        assert_eq!(updated.semi_liquid_target, 0.3);
+        assert_eq!(semi_liquid_target(&pool).await.unwrap(), 0.3);
+
+        // `null` clears the stored value — back to the default.
+        let reset = update_settings(
+            State(state.clone()),
+            Json(MonthSettingsPatch {
+                semi_liquid_target: Some(None),
+                ..Default::default()
+            }),
+        )
+        .await
+        .expect("reset")
+        .0;
+        assert_eq!(reset.semi_liquid_target, 0.25);
+
+        // A share of 100%+ is meaningless for the buffer and rejected.
+        let err = update_settings(
+            State(state),
+            Json(MonthSettingsPatch {
+                semi_liquid_target: Some(Some(1.5)),
+                ..Default::default()
+            }),
+        )
+        .await
+        .expect_err("rejected");
+        assert!(matches!(err, ApiError::Validation(_)));
     }
 
     #[tokio::test]

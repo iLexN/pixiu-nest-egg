@@ -249,7 +249,15 @@ pub async fn update(
     };
 
     let received_amount = merge_num(patch.received_amount, existing.received_amount);
-    let received_price = merge_num(patch.received_price, existing.received_price);
+    let mut received_price = merge_num(patch.received_price, existing.received_price);
+    // 收訖 with no price supplied snapshots the stock's current 現價;
+    // clearing the price on an already-received record stays cleared.
+    if existing.received_amount.is_none() && received_amount.is_some() && received_price.is_none() {
+        received_price = sqlx::query_scalar("SELECT manual_price FROM stocks WHERE id = ?")
+            .bind(stock_id)
+            .fetch_one(&state.pool)
+            .await?;
+    }
     let note = merge_text(patch.note, existing.note.clone());
 
     let validated = validate_dividend(DividendInput {

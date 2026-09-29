@@ -1118,10 +1118,14 @@ pub struct MonthSettings {
     /// `forecast.bill_amount` — the quarterly 差餉 charge in the forecast's
     /// 繳費 row; the effective value (2158 while unset).
     pub bill_amount: f64,
+    /// `overview.semi_liquid_target` — the share of 流動資產 the 半流動資金
+    /// buffer targets; the effective value (0.25 while unset).
+    pub semi_liquid_target: f64,
 }
 
 /// Absent fields are left untouched; `null` clears `salary`/`pool_rate`/
-/// `bill_amount` (a cleared bill amount falls back to the default).
+/// `bill_amount`/`semi_liquid_target` (a cleared bill amount or target falls
+/// back to the default).
 #[derive(Debug, Clone, Default, Deserialize, ToSchema)]
 pub struct MonthSettingsPatch {
     #[serde(default, deserialize_with = "nullable")]
@@ -1132,6 +1136,9 @@ pub struct MonthSettingsPatch {
     pub pool_rate_year: Option<i32>,
     #[serde(default, deserialize_with = "nullable")]
     pub bill_amount: Option<Option<f64>>,
+    /// `null` resets the buffer target to the 25% default.
+    #[serde(default, deserialize_with = "nullable")]
+    pub semi_liquid_target: Option<Option<f64>>,
 }
 
 /// A computed candidate item for a month, never stored until accepted.
@@ -1227,7 +1234,8 @@ pub struct SemiLiquid {
     pub cash_sum: f64,
     /// 半流動資金 (B14) = deposits + cash_sum.
     pub total: f64,
-    /// C14 = total − 25% × liquid_assets.
+    /// C14 = total − `overview.semi_liquid_target` × liquid_assets (25%
+    /// while unset).
     pub vs_quarter_liquid: f64,
     /// A13 = total ÷ (港股 + 債券 + total + IBKR); absent while a term is missing.
     pub share: Option<f64>,
@@ -1322,6 +1330,9 @@ pub struct OverviewResponse {
     /// B10 Sum = Σ present asset rows.
     pub assets_sum: f64,
     pub semi_liquid: SemiLiquid,
+    /// `overview.semi_liquid_target` — the effective buffer ratio (0.25 while
+    /// unset), so the view can label the C14 percent.
+    pub semi_liquid_target: f64,
     pub ibkr: IbkrBlock,
     /// F3:G10 + H6.
     pub averages: TwelveMonthAverages,

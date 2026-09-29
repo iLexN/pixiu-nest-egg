@@ -11,7 +11,7 @@ import {
   type OverviewResponse,
 } from '../api'
 import DepositForm from '../components/DepositForm.vue'
-import { fmtMoney, fmtPercent, fmtPrice, signClass } from '../format'
+import { fmtMoney, fmtPercent, fmtPercentShort, fmtPrice, signClass } from '../format'
 
 const data = ref<OverviewResponse | null>(null)
 const forecast = ref<ForecastResponse | null>(null)
@@ -409,7 +409,8 @@ onMounted(load)
           </tr>
           <tr>
             <td colspan="3" class="num muted">
-              {{ fmtPercent(data.semi_liquid.share) || '—' }} · 與25%流動相差
+              {{ fmtPercent(data.semi_liquid.share) || '—' }} ·
+              與{{ fmtPercentShort(data.semi_liquid_target) }}流動相差
               <span :class="signClass(data.semi_liquid.vs_quarter_liquid)">
                 {{ fmtMoney(data.semi_liquid.vs_quarter_liquid) || '—' }}
               </span>

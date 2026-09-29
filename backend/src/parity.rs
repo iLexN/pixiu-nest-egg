@@ -1592,11 +1592,14 @@ async fn check_overview(
         cached.cash_total,
         false,
     );
+    // The sheet's C14 literal stays 25% regardless of the configured
+    // `overview.semi_liquid_target`, so the check recomputes it from the
+    // block's other figures rather than trusting `vs_quarter_liquid`.
     overview_compare(
         report,
         "Overview 半流動 vs 25%流動",
         "C14",
-        Some(response.semi_liquid.vs_quarter_liquid),
+        Some(response.semi_liquid.total - 0.25 * response.liquid_assets),
         cached.semi_liquid_vs_quarter,
         false,
     );

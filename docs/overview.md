@@ -13,7 +13,7 @@ OverviewView loads GET /api/overview
     row's share of the Sum, the 半流動資金 block, and the IBKR block
 ```
 
-The asset table mirrors `Overview!A3:C10` — 港股 / 債券 / 基金 / MPF / manual `asset` rows / IBKR — with the C column as each row's share of the Sum. The 半流動資金 block mirrors `A14:C18`: 已定期 (Σ active deposit **principal**, matching `定期!B1`), the manual `cash` rows, 活期, the total, `total ÷ (港股 + 債券 + total + IBKR)` (A13), and `total − 25% × 流動資產` (C14). Manual rows expose their `manual_assets` id so the amount edits inline via `PATCH /api/manual-assets/:id`.
+The asset table mirrors `Overview!A3:C10` — 港股 / 債券 / 基金 / MPF / manual `asset` rows / IBKR — with the C column as each row's share of the Sum. The 半流動資金 block mirrors `A14:C18`: 已定期 (Σ active deposit **principal**, matching `定期!B1`), the manual `cash` rows, 活期, the total, `total ÷ (港股 + 債券 + total + IBKR)` (A13), and `total − semi_liquid_target × 流動資產` (C14 — the sheet's `25%` literal promoted to the `overview.semi_liquid_target` setting, `0.25` while unset). Manual rows expose their `manual_assets` id so the amount edits inline via `PATCH /api/manual-assets/:id`.
 
 `總數` = Sum + 半流動資金 (equivalently 港股 + IBKR + 定期 + 債券 + 基金 + MPF + manual assets + 活期). `流動資產` = 港股 + 半流動資金 + 債券 + IBKR − 開心Pool. J1 = `流動資產 ÷ (薪金 × 100)`. The headline strip shows a fourth tile with the live 開心Pool balance (the sheet's `G10` figure — a live balance, not an average) beside them, since 流動資產 subtracts it. USD-denominated figures (US stocks, AIA, IBKR USD cash) convert at the stored `aia.usd_hkd_rate`; rows are absent while no rate is set.
 
@@ -49,7 +49,7 @@ The card mirrors the sheet's row order — `ref check`, `半流動`, `活期`, `
 - `繳費` — −`forecast.bill_amount` (default `2158`, editable in 月結 settings) every Jan/Apr/Jul/Oct; a `bill` item in the month replaces the default
 - `TBC - 定期 end` — Σ `−amount` of deposit plans returning that month: `return_month` when set, else `hs_deposit` → +3 months, `sc_deposit` → +4 (the sheet's row-35 lags)
 - `定期 + SC` (`locked`) — chains from Σ active deposit principal: `locked(m−1) − finish − plan placements − returns`
-- `活期` (`cash`) and `半流動` (`cash + locked`); `ref check` = `半流動 − 流動資產 ÷ 4`, rendered red while negative
+- `活期` (`cash`) and `半流動` (`cash + locked`); `ref check` = `半流動 − semi_liquid_target × 流動資產` (the sheet's `H1 ÷ 4` literal, same `overview.semi_liquid_target` setting as `C14`), rendered red while negative
 
 ```text
 Click a plan cell → the editor lists that (month, kind)'s items
@@ -95,7 +95,7 @@ MonthStatView loads GET /api/months/summary + /api/months?year=YYYY
 
 **Frozen vs live**: `改為即時` patches both totals to `null` (live); `重新擷取` (`recapture: true`) re-snapshots the totals and `start_cash` (月初 = the live 活期 sum, Σ `cash` manual assets — an explicit `start_cash` in the same patch still wins). The pool balance chains per year: `balance(y) = balance(y−1) + Σinterest×rate(y) − Σentertainment + Σpool_input`, where `rate(y)` is the exact year's `overview.pool_rate.<y>` else the latest earlier year; years with no rate contribute zero pool income.
 
-**Settings**: `PATCH /api/months/settings` writes `overview.salary` and `overview.pool_rate.<pool_rate_year>` to `app_meta`; the manual Overview cells live in `manual_assets`. Deposits carry `start_date` (optional, `YYYY-MM-DD`) which enables `dep-start` suggestions. Settings and `deposits.start_date` are seeded once by import and never overwritten afterward.
+**Settings**: `PATCH /api/months/settings` writes `overview.salary`, `overview.pool_rate.<pool_rate_year>`, `forecast.bill_amount`, and `overview.semi_liquid_target` to `app_meta`; the manual Overview cells live in `manual_assets`. Deposits carry `start_date` (optional, `YYYY-MM-DD`) which enables `dep-start` suggestions. Settings and `deposits.start_date` are seeded once by import and never overwritten afterward.
 
 ## Load the 總覽 → 年結 view
 

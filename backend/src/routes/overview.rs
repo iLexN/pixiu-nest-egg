@@ -158,6 +158,7 @@ pub async fn overview(State(state): State<AppState>) -> Result<Json<OverviewResp
     let totals = live_totals(&input);
     let ibkr = ibkr_block(&state.pool).await?;
     let salary = mpf::meta_f64(&state.pool, months::SALARY_KEY).await?;
+    let semi_target = months::semi_liquid_target(&state.pool).await?;
     let manual = months::load_assets(&state.pool).await?;
     let items = months::load_all_items(&state.pool).await?;
 
@@ -207,7 +208,7 @@ pub async fn overview(State(state): State<AppState>) -> Result<Json<OverviewResp
         cash_rows,
         cash_sum: input.cash_sum,
         total: semi_total,
-        vs_quarter_liquid: semi_total - 0.25 * totals.liquid_assets,
+        vs_quarter_liquid: semi_total - semi_target * totals.liquid_assets,
         // A13 = B14 ÷ (港股 + 債券 + 半流動資金 + IBKR).
         share: ibkr.computed_total_hkd.and_then(|ibkr_total| {
             let divisor =
@@ -265,6 +266,7 @@ pub async fn overview(State(state): State<AppState>) -> Result<Json<OverviewResp
         assets,
         assets_sum,
         semi_liquid,
+        semi_liquid_target: semi_target,
         ibkr,
         averages,
         invest_targets,
@@ -286,6 +288,22 @@ fn asset_row(key: &str, label: &str, amount: Option<f64>) -> OverviewAssetRow {
 mod tests {
     use super::*;
     use crate::db::connect_memory;
+
+    #[tokio::test]
+    async fn overview_uses_the_configured_semi_liquid_target() {
+        let pool = connect_memory().await.expect("memory db");
+        crate::mpf::meta_put(&pool, months::SEMI_LIQUID_TARGET_KEY, Some("0.3"))
+            .await
+            .unwrap();
+
+        let response = overview(State(AppState { pool }))
+            .await
+            .expect("overview")
+            .0;
+        assert_eq!(response.semi_liquid_target, 0.3);
+        let expected = response.semi_liquid.total - 0.3 * response.liquid_assets;
+        assert!((response.semi_liquid.vs_quarter_liquid - expected).abs() < 1e-9);
+    }
 
     #[tokio::test]
     async fn ibkr_block_derives_the_cross_checks() {

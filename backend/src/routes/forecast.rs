@@ -106,6 +106,7 @@ pub async fn forecast(State(state): State<AppState>) -> Result<Json<ForecastResp
     let bill_amount = mpf::meta_f64(pool, months::BILL_AMOUNT_KEY)
         .await?
         .unwrap_or(months::DEFAULT_BILL_AMOUNT);
+    let semi_liquid_target = months::semi_liquid_target(pool).await?;
     let first = months::live_from();
     // The first column anchors on the current month's 月初(出糧後); while it is
     // unset the live 活期 sum stands in.
@@ -141,6 +142,7 @@ pub async fn forecast(State(state): State<AppState>) -> Result<Json<ForecastResp
         salary,
         spend,
         liquid_assets: totals.liquid_assets,
+        semi_liquid_target,
         locked_base: input.deposits_active_principal,
         bill_amount,
         deposits: &events.deposits,

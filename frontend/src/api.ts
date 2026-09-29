@@ -897,6 +897,8 @@ export interface MonthSettings {
   pool_rate_year: number
   /** The effective quarterly 差餉 amount in the forecast 繳費 row. */
   bill_amount: number
+  /** The effective 半流動資金 buffer share of 流動資產 (0.25 while unset). */
+  semi_liquid_target: number
 }
 
 export interface MonthStatPatch {
@@ -933,6 +935,8 @@ export interface MonthSettingsPatch {
   pool_rate_year?: number
   /** `null` resets the 繳費 amount to the default. */
   bill_amount?: number | null
+  /** `null` resets the 半流動資金 buffer ratio to the 25% default. */
+  semi_liquid_target?: number | null
 }
 
 /** A forecast plan kind — the 預測 row the item belongs to. */
@@ -1110,6 +1114,8 @@ export interface OverviewResponse {
   assets: OverviewAssetRow[]
   assets_sum: number
   semi_liquid: SemiLiquid
+  /** The effective buffer ratio the `C14` difference uses (0.25 while unset). */
+  semi_liquid_target: number
   ibkr: IbkrBlock
   averages: TwelveMonthAverages
   invest_targets: InvestTargets

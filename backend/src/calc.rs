@@ -3167,8 +3167,12 @@ pub struct ForecastInput<'a> {
     pub salary: Option<f64>,
     /// −生活預算; absent while the trailing window is empty.
     pub spend: Option<f64>,
-    /// Live 流動資產 — the ref-check baseline (`Overview!N7` ≈ H1 ÷ 4).
+    /// Live 流動資產 — the ref-check baseline (`Overview!N7`).
     pub liquid_assets: f64,
+    /// The configured 半流動資金 target share of 流動資產
+    /// (`overview.semi_liquid_target`, 0.25 while unset) — the ref-check ratio;
+    /// the sheet's `N7` hardcodes ÷ 4.
+    pub semi_liquid_target: f64,
     /// Σ active deposit principal (`定期!B1`): the locked anchor.
     pub locked_base: f64,
     /// The effective quarterly 差餉 amount.
@@ -3212,7 +3216,7 @@ pub struct ForecastMonthDerived {
     pub locked: Option<f64>,
     /// `cash` + `locked`.
     pub semi_liquid: Option<f64>,
-    /// `semi_liquid` − `liquid_assets` ÷ 4.
+    /// `semi_liquid` − `semi_liquid_target` × `liquid_assets`.
     pub ref_check: Option<f64>,
 }
 
@@ -3342,7 +3346,8 @@ pub fn forecast_months(input: &ForecastInput) -> Vec<ForecastMonthDerived> {
             cash,
             locked,
             semi_liquid,
-            ref_check: semi_liquid.map(|semi| semi - input.liquid_assets / 4.0),
+            ref_check: semi_liquid
+                .map(|semi| semi - input.semi_liquid_target * input.liquid_assets),
         });
     }
     derived
@@ -5882,6 +5887,7 @@ mod tests {
             salary: Some(52_700.0),
             spend: Some(-8_500.0),
             liquid_assets: 1_200_000.0,
+            semi_liquid_target: 0.25,
             locked_base: 445_000.0,
             bill_amount: 2_158.0,
             deposits,
@@ -6093,6 +6099,19 @@ mod tests {
         assert!(approx_eq(
             months[0].ref_check.unwrap(),
             semi - 1_200_000.0 / 4.0
+        ));
+    }
+
+    #[test]
+    fn forecast_ref_check_uses_the_configured_ratio() {
+        let events = SuggestionEvents::default();
+        let mut input = forecast_input(&[], &events, &[]);
+        input.semi_liquid_target = 0.3;
+        let months = forecast_months(&input);
+        let semi = months[0].semi_liquid.unwrap();
+        assert!(approx_eq(
+            months[0].ref_check.unwrap(),
+            semi - 0.3 * 1_200_000.0
         ));
     }
 }

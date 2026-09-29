@@ -99,7 +99,7 @@ No. The 股數 and 總買入成本 on a dividend row are snapshots stored when t
 
 ### Does recording the receipt price update the stock's 現價?
 
-No. `received_price` is stored on the dividend only. The 同時更新現價 checkbox issues a separate stock update, so recording a receipt on a different day than the price change is safe.
+No. `received_price` is stored on the dividend only — leaving 當時現價 blank snapshots the stock's current 現價 onto the dividend, which is a read of `manual_price`, not a write. The 同時更新現價 checkbox issues a separate stock update, so recording a receipt on a different day than the price change is safe.
 
 ### Does reordering stocks change calculations?
 

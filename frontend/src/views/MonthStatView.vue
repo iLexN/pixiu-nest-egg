@@ -16,7 +16,7 @@ import {
   type MonthSummary,
   type NewManualAsset,
 } from '../api'
-import { fmtMoney, fmtPercent, signClass, todayIso } from '../format'
+import { fmtMoney, fmtPercent, fmtPercentShort, signClass, todayIso } from '../format'
 
 const summary = ref<MonthSummary | null>(null)
 const months = ref<MonthStat[]>([])
@@ -411,6 +411,7 @@ const settingsOpen = ref(false)
 const salaryDraft = ref<string | number>('')
 const rateDraft = ref<string | number>('')
 const billDraft = ref<string | number>('')
+const targetDraft = ref<string | number>('')
 const editingSettings = ref(false)
 
 function startSettingsEdit() {
@@ -419,6 +420,8 @@ function startSettingsEdit() {
   const rate = summary.value?.pool_rate
   rateDraft.value = rate === null || rate === undefined ? '' : rate * 100
   billDraft.value = settings.value?.bill_amount ?? ''
+  const target = settings.value?.semi_liquid_target
+  targetDraft.value = target === null || target === undefined ? '' : target * 100
   editingSettings.value = true
 }
 
@@ -434,6 +437,11 @@ async function saveSettings() {
     error.value = '繳費金額不能是負數'
     return
   }
+  const targetPct = numOrNull(targetDraft.value)
+  if (targetPct !== null && (targetPct < 0 || targetPct >= 100)) {
+    error.value = '半流動資金目標必須是 0–100%'
+    return
+  }
   try {
     await api.updateMonthSettings({
       salary,
@@ -442,6 +450,8 @@ async function saveSettings() {
       // Empty keeps the stored value? No — the forecast reads the effective
       // amount; blank resets to the 2158 default.
       bill_amount: bill,
+      // Same: blank resets to the 25% sheet literal.
+      semi_liquid_target: targetPct === null ? null : targetPct / 100,
     })
     editingSettings.value = false
     message.value = '已儲存設定'
@@ -935,7 +945,8 @@ onMounted(load)
         <p class="muted settings-line">
           薪金 {{ fmtMoney(settings?.salary) || '—' }} · 開心Pool {{ year }} 利率
           {{ fmtPercent(year === summary?.pool_rate_year ? summary?.pool_rate : null) || '—' }} ·
-          繳費 {{ fmtMoney(settings?.bill_amount) || '—' }}
+          繳費 {{ fmtMoney(settings?.bill_amount) || '—' }} · 流動目標
+          {{ fmtPercentShort(settings?.semi_liquid_target) || '—' }}
           <button type="button" class="link" @click="startSettingsEdit">編輯</button>
         </p>
         <form v-if="editingSettings" class="inline-form" @submit.prevent="saveSettings">
@@ -951,6 +962,10 @@ onMounted(load)
           <label>
             預測繳費（季繳差餉；留空回復 2158）
             <input v-model="billDraft" type="number" step="any" inputmode="decimal" />
+          </label>
+          <label>
+            半流動資金目標（流動資產 %；留空回復 25%）
+            <input v-model="targetDraft" type="number" step="any" inputmode="decimal" placeholder="25" />
           </label>
           <div class="form-actions">
             <button type="submit">儲存</button>
