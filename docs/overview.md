@@ -54,7 +54,7 @@ The card mirrors the sheet's row order — `ref check`, `半流動`, `活期`, `
 - `TBC - 定期 end` — Σ `−amount` of deposit plans returning that month: `return_month` when set, else `hs_deposit` → +3 months, `sc_deposit` → +4 (the sheet's row-35 lags)
 - `定期 + SC` (`locked`) — anchors on the deposits held on the window's first day (`start_date` absent or before the 1st, `end_date` on or after it — not the live "end date not passed" total), then `locked(m) = locked(m−1) − finish − plan placements + real placements − returns`
 - real deposit placements — a deposit whose `start_date` falls in the month is a flow in it: 活期 −`principal`, 定期+SC +`principal`, and the deposit appears as a read-only `已定期` line in its bank's row (`bank` `HS` → 定期 HS, anything else → SC高息馬拉松). `start_date` means "the day the money left 活期" — money that left before the month's 月初 figure is dated in the prior month, so it sits in the anchor instead of subtracting twice
-- `活期` (`cash`) and `半流動` (`cash + locked`); `ref check` = `半流動 − semi_liquid_target × 流動資產` (the sheet's `H1 ÷ 4` literal, same `overview.semi_liquid_target` setting as `C14`), rendered red while negative
+- `活期` (`cash`, rendered red while below `20000`) and `半流動` (`cash + locked`); `ref check` = `半流動 − semi_liquid_target × 流動資產` (the sheet's `H1 ÷ 4` literal, same `overview.semi_liquid_target` setting as `C14`), rendered red while negative
 
 ```text
 Click a plan cell → the editor lists that (month, kind)'s items

@@ -561,7 +561,12 @@ onMounted(load)
             </tr>
             <tr>
               <td class="row-label">活期</td>
-              <td v-for="month in forecast.months" :key="month.month" class="num">
+              <td
+                v-for="month in forecast.months"
+                :key="month.month"
+                class="num"
+                :class="{ negative: month.cash !== null && month.cash < 20000 }"
+              >
                 {{ fmtMoney(month.cash) || '—' }}
               </td>
             </tr>
