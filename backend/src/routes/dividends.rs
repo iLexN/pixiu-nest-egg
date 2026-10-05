@@ -10,7 +10,7 @@ use super::{
 };
 use crate::calc::{
     DividendFacts, DividendInput, DividendYearRollup, TradeFacts, ValidatedDividend,
-    dividend_year_rollups, holdings_snapshot, validate_dividend,
+    dividend_year_rollups, holdings_snapshot, net_from_gross, validate_dividend,
 };
 use crate::error::{ApiError, ErrorBody};
 use crate::models::{Dividend, DividendPatch, Market, NewDividend, TradeType};
@@ -191,6 +191,8 @@ pub async fn create(
         estimated_amount: body.estimated_amount,
         received_amount: None,
         received_price: None,
+        withholding_tax: None,
+        gross_amount: None,
     })
     .map_err(ApiError::Validation)?;
 
@@ -248,7 +250,24 @@ pub async fn update(
         )
     };
 
-    let received_amount = merge_num(patch.received_amount, existing.received_amount);
+    if patch.gross_amount.is_some() && patch.received_amount.is_some() {
+        return Err(ApiError::field(
+            "gross_amount",
+            "supply 派息 or 實收派息, not both",
+        ));
+    }
+
+    // Gross input resolves to the net amount before the merge/validate/transition
+    // logic; the stored tax wins over a request that omits it.
+    let mut withholding_tax = merge_num(patch.withholding_tax, existing.withholding_tax);
+    let received_amount = match patch.gross_amount {
+        Some(gross) => Some(net_from_gross(gross, withholding_tax)),
+        None => merge_num(patch.received_amount, existing.received_amount),
+    };
+    // Un-receive clears the tax too, so a re-receive starts clean.
+    if existing.received_amount.is_some() && received_amount.is_none() {
+        withholding_tax = None;
+    }
     let mut received_price = merge_num(patch.received_price, existing.received_price);
     // 收訖 with no price supplied snapshots the stock's current 現價;
     // clearing the price on an already-received record stays cleared.
@@ -268,6 +287,8 @@ pub async fn update(
         estimated_amount: merge_num(patch.estimated_amount, existing.estimated_amount),
         received_amount,
         received_price,
+        withholding_tax,
+        gross_amount: patch.gross_amount,
     })
     .map_err(ApiError::Validation)?;
 
@@ -276,7 +297,7 @@ pub async fn update(
     sqlx::query(
         "UPDATE dividends SET stock_id = ?, pay_date = ?, per_share = ?, shares_held = ?, \
          buy_cost = ?, estimated_amount = ?, received_amount = ?, \
-         received_price = ?, note = ?, updated_at = ? WHERE id = ?",
+         received_price = ?, withholding_tax = ?, note = ?, updated_at = ? WHERE id = ?",
     )
     .bind(stock_id)
     .bind(&validated.pay_date)
@@ -286,6 +307,7 @@ pub async fn update(
     .bind(validated.estimated_amount)
     .bind(validated.received_amount)
     .bind(validated.received_price)
+    .bind(validated.withholding_tax)
     .bind(note)
     .bind(&now)
     .bind(id)

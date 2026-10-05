@@ -264,7 +264,7 @@ pub const DEPOSIT_COLUMNS: &str = "id, label, bank, principal, rate, interest, s
 
 pub const DIVIDEND_SELECT: &str = "SELECT d.id, d.stock_id, s.market, s.code, d.pay_date, \
      d.per_share, d.shares_held, d.buy_cost, d.estimated_amount, d.received_amount, \
-     d.received_price, d.note \
+     d.received_price, d.withholding_tax, d.note \
      FROM dividends d JOIN stocks s ON s.id = d.stock_id";
 
 pub fn row_to_dividend(row: &SqliteRow) -> Result<Dividend, ApiError> {
@@ -274,7 +274,12 @@ pub fn row_to_dividend(row: &SqliteRow) -> Result<Dividend, ApiError> {
     let estimated_amount: Option<f64> = row.try_get("estimated_amount")?;
     let received_amount: Option<f64> = row.try_get("received_amount")?;
     let received_price: Option<f64> = row.try_get("received_price")?;
+    let withholding_tax: Option<f64> = row.try_get("withholding_tax")?;
     let amount = dividend_amount(received_amount, estimated_amount);
+    let gross_amount = match (received_amount, withholding_tax) {
+        (Some(received), Some(tax)) => Some(received + tax),
+        _ => None,
+    };
     Ok(Dividend {
         id: row.try_get("id")?,
         stock_id: row.try_get("stock_id")?,
@@ -288,6 +293,8 @@ pub fn row_to_dividend(row: &SqliteRow) -> Result<Dividend, ApiError> {
         estimated_amount,
         received_amount,
         received_price,
+        withholding_tax,
+        gross_amount,
         note: row.try_get("note")?,
         status: if received_amount.is_some() {
             DividendStatus::Received

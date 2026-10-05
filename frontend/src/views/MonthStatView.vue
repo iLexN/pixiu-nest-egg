@@ -164,7 +164,8 @@ function defaultNewMonth(): string {
 async function addMonth() {
   const ym = newMonth.value || defaultNewMonth()
   try {
-    await api.patchMonth(ym, {})
+    // New months start live (即時); 重新擷取 freezes them at month close.
+    await api.patchMonth(ym, { total_assets: null, liquid_assets: null })
     message.value = `已新增 ${ym}`
     error.value = ''
     newMonth.value = ''
@@ -418,6 +419,11 @@ const mmTargetMonthsDraft = ref<string | number>('')
 const mmTargetAmountDraft = ref<string | number>('')
 const mmMonthNowDraft = ref<string | number>('')
 const mmComingSaveDraft = ref<string | number>('')
+const goal1Draft = ref<string | number>('')
+const goal2Draft = ref<string | number>('')
+const goal3InflationDraft = ref<string | number>('')
+const goal3YearsDraft = ref<string | number>('')
+const finalReplacementDraft = ref<string | number>('')
 const editingSettings = ref(false)
 
 function startSettingsEdit() {
@@ -434,6 +440,11 @@ function startSettingsEdit() {
   mmTargetAmountDraft.value = settings.value?.money_master_target_amount ?? ''
   mmMonthNowDraft.value = settings.value?.money_master_month_now ?? ''
   mmComingSaveDraft.value = settings.value?.money_master_coming_save ?? ''
+  goal1Draft.value = settings.value?.goal1_amount ?? ''
+  goal2Draft.value = settings.value?.goal2_amount ?? ''
+  goal3InflationDraft.value = settings.value?.goal3_inflation ?? ''
+  goal3YearsDraft.value = settings.value?.goal3_years ?? ''
+  finalReplacementDraft.value = settings.value?.final_replacement ?? ''
   editingSettings.value = true
 }
 
@@ -467,6 +478,23 @@ async function saveSettings() {
     error.value = 'Money Master 目標金額必須是正數'
     return
   }
+  const goal1 = numOrNull(goal1Draft.value)
+  const goal2 = numOrNull(goal2Draft.value)
+  for (const amount of [goal1, goal2]) {
+    if (amount !== null && amount < 0) {
+      error.value = '目標金額不能是負數'
+      return
+    }
+  }
+  const goal3Inflation = numOrNull(goal3InflationDraft.value)
+  const goal3Years = numOrNull(goal3YearsDraft.value)
+  const finalReplacement = numOrNull(finalReplacementDraft.value)
+  for (const value of [goal3Inflation, goal3Years, finalReplacement]) {
+    if (value !== null && value <= 0) {
+      error.value = '目標常數必須是正數'
+      return
+    }
+  }
   try {
     await api.updateMonthSettings({
       salary,
@@ -484,6 +512,13 @@ async function saveSettings() {
       money_master_target_amount: mmTargetAmount,
       money_master_month_now: mmMonthNow,
       money_master_coming_save: numOrNull(mmComingSaveDraft.value),
+      // 目標: blank clears the amounts and resets the constants to the
+      // sheet literals (1.07 / 30 / 0.7).
+      goal1_amount: goal1,
+      goal2_amount: goal2,
+      goal3_inflation: goal3Inflation,
+      goal3_years: goal3Years,
+      final_replacement: finalReplacement,
     })
     editingSettings.value = false
     message.value = '已儲存設定'
@@ -998,6 +1033,13 @@ onMounted(load)
             }}
           </template>
         </p>
+        <p class="muted settings-line">
+          目標 1st {{ fmtMoney(settings?.goal1_amount) || '—' }} · 2nd
+          {{ fmtMoney(settings?.goal2_amount) || '—' }} · 3rd ×{{
+            settings?.goal3_inflation ?? '—'
+          }}/{{ settings?.goal3_years ?? '—' }}年 · Final
+          {{ fmtPercentShort(settings?.final_replacement) || '—' }}
+        </p>
         <form v-if="editingSettings" class="inline-form" @submit.prevent="saveSettings">
           <h4>設定</h4>
           <label>
@@ -1040,6 +1082,32 @@ onMounted(load)
           <label>
             每月需儲覆寫（留空自動推算）
             <input v-model="mmComingSaveDraft" type="number" step="any" inputmode="decimal" />
+          </label>
+          <h4>目標</h4>
+          <label>
+            1st 目標金額（留空清除）
+            <input v-model="goal1Draft" type="number" step="any" inputmode="decimal" />
+          </label>
+          <label>
+            2nd 目標金額（留空清除）
+            <input v-model="goal2Draft" type="number" step="any" inputmode="decimal" />
+          </label>
+          <label>
+            3rd 通脹倍數（留空回復 1.07）
+            <input v-model="goal3InflationDraft" type="number" step="any" inputmode="decimal" />
+          </label>
+          <label>
+            3rd 年數（留空回復 30）
+            <input v-model="goal3YearsDraft" type="number" step="1" inputmode="numeric" />
+          </label>
+          <label>
+            Final 薪金替代率（留空回復 0.7）
+            <input
+              v-model="finalReplacementDraft"
+              type="number"
+              step="any"
+              inputmode="decimal"
+            />
           </label>
           <div class="form-actions">
             <button type="submit">儲存</button>

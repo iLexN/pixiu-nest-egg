@@ -786,6 +786,9 @@ pub struct DividendInput<'a> {
     pub estimated_amount: Option<f64>,
     pub received_amount: Option<f64>,
     pub received_price: Option<f64>,
+    pub withholding_tax: Option<f64>,
+    /// Input-only gross 派息, checked against the tax during validation.
+    pub gross_amount: Option<f64>,
 }
 
 /// A validated dividend. When only `per_share` was given, `estimated_amount`
@@ -800,6 +803,12 @@ pub struct ValidatedDividend {
     pub estimated_amount: Option<f64>,
     pub received_amount: Option<f64>,
     pub received_price: Option<f64>,
+    pub withholding_tax: Option<f64>,
+}
+
+/// Net 實收派息 from the gross 派息 and the withheld tax.
+pub fn net_from_gross(gross: f64, tax: Option<f64>) -> f64 {
+    gross - tax.unwrap_or(0.0)
 }
 
 /// Validate user input for a dividend record.
@@ -819,6 +828,8 @@ pub fn validate_dividend(input: DividendInput<'_>) -> Result<ValidatedDividend, 
         ("estimated_amount", input.estimated_amount, "預期派息"),
         ("received_amount", input.received_amount, "實收派息"),
         ("received_price", input.received_price, "現價"),
+        ("withholding_tax", input.withholding_tax, "Tax"),
+        ("gross_amount", input.gross_amount, "派息"),
     ] {
         if let Some(value) = value
             && (!value.is_finite() || value < 0.0)
@@ -837,6 +848,21 @@ pub fn validate_dividend(input: DividendInput<'_>) -> Result<ValidatedDividend, 
         errors.push(FieldError::new(
             "estimated_amount",
             "at least one of 每股派息, 預期派息 or 實收派息 is required",
+        ));
+    }
+
+    if let (Some(gross), Some(tax)) = (input.gross_amount, input.withholding_tax)
+        && tax > gross
+    {
+        errors.push(FieldError::new(
+            "withholding_tax",
+            "Tax must not exceed 派息",
+        ));
+    }
+    if input.withholding_tax.is_some() && input.received_amount.is_none() {
+        errors.push(FieldError::new(
+            "withholding_tax",
+            "Tax requires a received 實收派息",
         ));
     }
 
@@ -870,6 +896,7 @@ pub fn validate_dividend(input: DividendInput<'_>) -> Result<ValidatedDividend, 
         estimated_amount,
         received_amount: input.received_amount,
         received_price: input.received_price,
+        withholding_tax: input.withholding_tax,
     })
 }
 
@@ -2989,6 +3016,166 @@ fn full_months_since(start: chrono::NaiveDate, end: chrono::NaiveDate) -> i64 {
     months
 }
 
+/// The `Overview!J10:M20` + `N13:P16` goals inputs, resolved by the caller:
+/// the stored settings, derived totals and averages, and the N4 rate with
+/// the year it belongs to.
+#[derive(Debug, Clone)]
+pub struct OverviewGoalsInput {
+    /// K13 = 港股 + 債券 + IBKR — absent while the IBKR HKD figure is missing.
+    pub current_invest: Option<f64>,
+    /// G7: the trailing 12-month 存 average (monthly); an L12 term ×12.
+    pub avg_saved: Option<f64>,
+    /// J22: `invest_targets.avg_invested` (already yearly).
+    pub avg_invested: Option<f64>,
+    /// M31: `money_master.avg_per_month` (monthly); an L12 term ×12.
+    pub mm_avg_per_month: Option<f64>,
+    /// 'Month Stat'!L8/N8/C8 running averages (monthly).
+    pub saved_avg: Option<f64>,
+    pub interest_avg: Option<f64>,
+    pub total_change_avg: Option<f64>,
+    /// N4 = (year, `income_value_rate`) of the latest completed year.
+    pub n4: Option<(i32, f64)>,
+    /// H1 流動資產 (O15) and B1 總數 (P15).
+    pub liquid_assets: f64,
+    pub total_assets: f64,
+    /// H6 生活預算 (monthly): O14's base.
+    pub living_budget: Option<f64>,
+    /// E1 salary: P14's base.
+    pub salary: Option<f64>,
+    /// `overview.goal1_amount`/`overview.goal2_amount` — K12/K18.
+    pub goal1_amount: Option<f64>,
+    pub goal2_amount: Option<f64>,
+    /// The effective formula constants (`1.07`/`30`/`0.7` while unset).
+    pub goal3_inflation: f64,
+    pub goal3_years: f64,
+    pub final_replacement: f64,
+    /// The day the ETAs are computed for.
+    pub today: chrono::NaiveDate,
+}
+
+/// A goal's projected date: `today + round(365 × years)` days, `YYYY-MM-DD`;
+/// absent while `years` is absent (missing inputs, zero divisor, reached).
+fn goal_eta(today: chrono::NaiveDate, years: Option<f64>) -> Option<String> {
+    let days = chrono::TimeDelta::try_days((365.0 * years?).round() as i64)?;
+    today.checked_add_signed(days).map(|date| date.to_string())
+}
+
+/// A formula goal's remain/years/eta: `target − assets`, then `remain ÷ pace`.
+/// `years` stays absent while `target`/`pace` is missing or `pace` is zero,
+/// and once `remain ≤ 0` — the goal is reached (已達成), where the sheet
+/// would show a negative year count.
+fn formula_goal(
+    target: Option<f64>,
+    assets: f64,
+    pace: Option<f64>,
+    today: chrono::NaiveDate,
+) -> crate::models::FormulaGoal {
+    let remain = target.map(|target| target - assets);
+    let years = match (remain, pace) {
+        (Some(remain), Some(pace)) if pace != 0.0 && remain > 0.0 => Some(remain / pace),
+        _ => None,
+    };
+    crate::models::FormulaGoal {
+        target,
+        remain,
+        years,
+        eta: goal_eta(today, years),
+    }
+}
+
+/// The `Overview!J10:M20` + `N13:P16` 目標 block, derived on read:
+///
+/// `L12` = the sheet's `AVERAGE(G7*12, J22, M31*12, L8*12, (L8+N8)*12)` —
+/// the mean over the present terms; `M12` = `L12/12`. `L13` = `K13 × N4`.
+/// Each milestone: `remain = target − K13`, `years = remain ÷ L12`,
+/// `eta = today + round(365 × years)` days. 3rd target `O14` =
+/// `living_budget × inflation × 12 × years`, remain vs 流動資產, paced by
+/// `(L8 + N8) × 12`. Final `P14` = `salary × replacement × 12 ÷ N4`, remain
+/// vs 總數, paced by `C8 × 12`.
+pub fn overview_goals(input: &OverviewGoalsInput) -> crate::models::OverviewGoals {
+    use crate::models::{GoalMilestone, OverviewGoals};
+
+    // L12: the sheet's AVERAGE skips absent terms.
+    let combined_running = match (input.saved_avg, input.interest_avg) {
+        (Some(saved), Some(interest)) => Some((saved + interest) * 12.0),
+        _ => None,
+    };
+    let terms: Vec<f64> = [
+        input.avg_saved.map(|avg| avg * 12.0),
+        input.avg_invested,
+        input.mm_avg_per_month.map(|avg| avg * 12.0),
+        input.saved_avg.map(|avg| avg * 12.0),
+        combined_running,
+    ]
+    .into_iter()
+    .flatten()
+    .collect();
+    let saving_year = (!terms.is_empty()).then(|| terms.iter().sum::<f64>() / terms.len() as f64);
+
+    let (n4_year, n4_rate) = match input.n4 {
+        Some((year, rate)) => (Some(year), Some(rate)),
+        None => (None, None),
+    };
+    let passive_return_year = match (input.current_invest, n4_rate) {
+        (Some(invest), Some(rate)) => Some(invest * rate),
+        _ => None,
+    };
+
+    // K14/L14/J11 for each milestone: the years stay absent once reached.
+    let milestone = |target: Option<f64>| {
+        let remain = match (target, input.current_invest) {
+            (Some(target), Some(invest)) => Some(target - invest),
+            _ => None,
+        };
+        let years = match (remain, saving_year) {
+            (Some(remain), Some(saving)) if saving != 0.0 && remain > 0.0 => Some(remain / saving),
+            _ => None,
+        };
+        GoalMilestone {
+            target,
+            remain,
+            years,
+            eta: goal_eta(input.today, years),
+        }
+    };
+
+    let third_target = input
+        .living_budget
+        .map(|budget| budget * input.goal3_inflation * 12.0 * input.goal3_years);
+    let third = formula_goal(
+        third_target,
+        input.liquid_assets,
+        combined_running,
+        input.today,
+    );
+
+    let final_target = match (input.salary, n4_rate) {
+        (Some(salary), Some(rate)) if rate != 0.0 => {
+            Some(salary * input.final_replacement * 12.0 / rate)
+        }
+        _ => None,
+    };
+    let final_goal = formula_goal(
+        final_target,
+        input.total_assets,
+        input.total_change_avg.map(|avg| avg * 12.0),
+        input.today,
+    );
+
+    OverviewGoals {
+        n4_rate,
+        n4_year,
+        current_invest: input.current_invest,
+        saving_year,
+        saving_month: saving_year.map(|year| year / 12.0),
+        passive_return_year,
+        passive_return_month: passive_return_year.map(|year| year / 12.0),
+        milestones: vec![milestone(input.goal1_amount), milestone(input.goal2_amount)],
+        third,
+        final_goal,
+    }
+}
+
 /// A deposit as a suggestion source: 定期 start/end events.
 #[derive(Debug, Clone)]
 pub struct SuggestionDeposit {
@@ -3001,6 +3188,9 @@ pub struct SuggestionDeposit {
     /// 收訖: the user confirmed the principal + interest came back. Interest
     /// counts in the end month only once received.
     pub received: bool,
+    /// The deposit's bank — maps its placement to a grid row (HS → 定期 HS,
+    /// anything else → SC高息馬拉松).
+    pub bank: Option<String>,
 }
 
 /// An HK trade as a suggestion source (US trades settle inside IBKR and stay
@@ -3267,7 +3457,8 @@ pub struct ForecastInput<'a> {
     /// (`overview.semi_liquid_target`, 0.25 while unset) — the ref-check ratio;
     /// the sheet's `N7` hardcodes ÷ 4.
     pub semi_liquid_target: f64,
-    /// Σ active deposit principal (`定期!B1`): the locked anchor.
+    /// The locked anchor: Σ principal of deposits held on the window's first
+    /// day (`forecast_locked_anchor`), not the live "end date not passed" sum.
     pub locked_base: f64,
     /// The effective quarterly 差餉 amount.
     pub bill_amount: f64,
@@ -3300,13 +3491,15 @@ pub struct ForecastMonthDerived {
     pub plans: f64,
     /// Σ `hs_deposit` + `sc_deposit` items (negative = cash out into lockup).
     pub deposit_plans: f64,
+    /// Σ principal of real deposits placed in the month (`start_date` in it).
+    pub deposit_start: f64,
     /// Σ principal returning from in-window plans this month.
     pub deposit_return: f64,
     /// start + salary + spend + finish + interest + bill + plans + deposit
-    /// plans + deposit return; absent while `start` is.
+    /// plans − deposit placements + deposit return; absent while `start` is.
     pub cash: Option<f64>,
-    /// Prior `locked` − finish − deposit plans − returns, anchored on
-    /// `locked_base`.
+    /// Prior `locked` − finish − deposit plans + placements − returns,
+    /// anchored on `locked_base`.
     pub locked: Option<f64>,
     /// `cash` + `locked`.
     pub semi_liquid: Option<f64>,
@@ -3322,6 +3515,24 @@ fn item_return_month(item: &ForecastItemFacts) -> Option<chrono::NaiveDate> {
             .deposit_lag()
             .and_then(|lag| item.month.checked_add_months(chrono::Months::new(lag)))
     })
+}
+
+/// The locked anchor: Σ principal of deposits held on the window's first day —
+/// `start_date` absent or before the first month's 1st, `end_date` on or after
+/// it. `end_date >= first_month` keeps a deposit that matured earlier in the
+/// month in the anchor, so `deposit_finish` removes it exactly once.
+pub fn forecast_locked_anchor(
+    deposits: &[SuggestionDeposit],
+    first_month: chrono::NaiveDate,
+) -> f64 {
+    deposits
+        .iter()
+        .filter(|deposit| {
+            deposit.start_date.is_none_or(|d| d < first_month) && deposit.end_date >= first_month
+        })
+        .map(|deposit| deposit.principal)
+        .sum::<f64>()
+        + 0.0
 }
 
 /// The seven-month rolling 預測 grid. Every figure derives from the inputs;
@@ -3413,6 +3624,16 @@ pub fn forecast_months(input: &ForecastInput) -> Vec<ForecastMonthDerived> {
             None
         };
 
+        // A real deposit placed in the month moves principal out of 活期 into
+        // lockup — the same flow a hs_deposit/sc_deposit plan would model.
+        let deposit_start: f64 = input
+            .deposits
+            .iter()
+            .filter(|deposit| deposit.start_date.is_some_and(|d| in_month(d, *month)))
+            .map(|deposit| deposit.principal)
+            .sum::<f64>()
+            + 0.0;
+
         // This column's start is the chained cash before its own flows.
         let start = cash;
         cash = start.map(|start| {
@@ -3424,9 +3645,11 @@ pub fn forecast_months(input: &ForecastInput) -> Vec<ForecastMonthDerived> {
                 + bill.unwrap_or(0.0)
                 + plans
                 + deposit_plans
+                - deposit_start
                 + deposit_return
         });
-        locked = locked.map(|locked| locked - deposit_finish - deposit_plans - deposit_return);
+        locked = locked
+            .map(|locked| locked - deposit_finish - deposit_plans + deposit_start - deposit_return);
         let semi_liquid = cash.and_then(|cash| locked.map(|locked| cash + locked));
         derived.push(ForecastMonthDerived {
             month: *month,
@@ -3436,6 +3659,7 @@ pub fn forecast_months(input: &ForecastInput) -> Vec<ForecastMonthDerived> {
             bill,
             plans,
             deposit_plans,
+            deposit_start,
             deposit_return,
             cash,
             locked,
@@ -4116,6 +4340,8 @@ mod tests {
             estimated_amount: None,
             received_amount: None,
             received_price: None,
+            withholding_tax: None,
+            gross_amount: None,
         }
     }
 
@@ -4194,6 +4420,45 @@ mod tests {
         })
         .expect_err("must fail");
         assert!(errors.iter().any(|e| e.field == "estimated_amount"));
+    }
+
+    #[test]
+    fn dividend_net_from_gross_subtracts_the_tax() {
+        assert!(approx_eq(net_from_gross(12.76, Some(3.83)), 8.93));
+        assert!(approx_eq(net_from_gross(12.76, None), 12.76));
+    }
+
+    #[test]
+    fn dividend_rejects_tax_larger_than_gross() {
+        let errors = validate_dividend(DividendInput {
+            received_amount: Some(0.0),
+            gross_amount: Some(10.0),
+            withholding_tax: Some(12.0),
+            ..dividend_input()
+        })
+        .expect_err("must fail");
+        assert!(errors.iter().any(|e| e.field == "withholding_tax"));
+    }
+
+    #[test]
+    fn dividend_rejects_tax_on_a_pending_record() {
+        let errors = validate_dividend(DividendInput {
+            withholding_tax: Some(3.83),
+            ..dividend_input()
+        })
+        .expect_err("must fail");
+        assert!(errors.iter().any(|e| e.field == "withholding_tax"));
+    }
+
+    #[test]
+    fn dividend_rejects_negative_tax() {
+        let errors = validate_dividend(DividendInput {
+            received_amount: Some(8.93),
+            withholding_tax: Some(-3.83),
+            ..dividend_input()
+        })
+        .expect_err("must fail");
+        assert!(errors.iter().any(|e| e.field == "withholding_tax"));
     }
 
     #[test]
@@ -5697,6 +5962,7 @@ mod tests {
                     interest: 1200.0,
                     label: Some("SC-9632".to_string()),
                     received: false,
+                    bank: None,
                 },
                 SuggestionDeposit {
                     id: 2,
@@ -5706,6 +5972,7 @@ mod tests {
                     interest: 600.0,
                     label: None,
                     received: true,
+                    bank: None,
                 },
                 // Ended in the month but not yet 收訖: previews in the
                 // breakdown, does not count in the derived 利息.
@@ -5717,6 +5984,7 @@ mod tests {
                     interest: 999.0,
                     label: Some("HS-99".to_string()),
                     received: false,
+                    bank: None,
                 },
             ],
             trades: vec![
@@ -6014,6 +6282,7 @@ mod tests {
             interest,
             label: None,
             received: false,
+            bank: None,
         }
     }
 
@@ -6210,6 +6479,127 @@ mod tests {
         ));
     }
 
+    #[test]
+    fn forecast_locked_anchor_counts_month_start_holdings() {
+        let first = ym("2026-09-01");
+        // NULL start and starts before the 1st count; an end inside the
+        // month stays in (deposit_finish removes it exactly once).
+        let held = vec![
+            SuggestionDeposit {
+                start_date: None,
+                ..dep_event("2026-11-20", 80_000.0, 0.0)
+            },
+            SuggestionDeposit {
+                start_date: Some(day("2026-08-31")),
+                ..dep_event("2027-01-05", 80_000.0, 0.0)
+            },
+            SuggestionDeposit {
+                start_date: Some(day("2026-06-01")),
+                ..dep_event("2026-09-05", 10_000.0, 0.0)
+            },
+        ];
+        assert!(approx_eq(forecast_locked_anchor(&held, first), 170_000.0));
+        // A start on/after the 1st and an end before it stay out.
+        let out = vec![
+            SuggestionDeposit {
+                start_date: Some(day("2026-09-01")),
+                ..dep_event("2027-01-05", 5_000.0, 0.0)
+            },
+            SuggestionDeposit {
+                start_date: Some(day("2026-09-30")),
+                ..dep_event("2027-01-05", 55_000.0, 0.0)
+            },
+            SuggestionDeposit {
+                start_date: Some(day("2026-08-01")),
+                ..dep_event("2026-08-31", 7_000.0, 0.0)
+            },
+        ];
+        assert_eq!(forecast_locked_anchor(&out, first), 0.0);
+    }
+
+    #[test]
+    fn forecast_locked_anchor_matches_the_spec_scenario() {
+        let first = ym("2026-09-01");
+        let deposits = vec![
+            SuggestionDeposit {
+                start_date: Some(day("2026-07-01")),
+                ..dep_event("2026-11-03", 140_000.0, 0.0)
+            },
+            SuggestionDeposit {
+                start_date: None,
+                ..dep_event("2026-11-20", 80_000.0, 0.0)
+            },
+            SuggestionDeposit {
+                start_date: Some(day("2026-08-31")),
+                ..dep_event("2027-01-05", 80_000.0, 0.0)
+            },
+            SuggestionDeposit {
+                start_date: Some(day("2026-09-30")),
+                ..dep_event("2027-01-05", 55_000.0, 0.0)
+            },
+        ];
+        assert!(approx_eq(
+            forecast_locked_anchor(&deposits, first),
+            300_000.0
+        ));
+        // The in-window start enters through its placement month instead.
+        let events = SuggestionEvents::default();
+        let mut input = forecast_input(&deposits, &events, &[]);
+        input.locked_base = 300_000.0;
+        let months = forecast_months(&input);
+        assert!(approx_eq(months[0].locked.unwrap(), 355_000.0));
+    }
+
+    #[test]
+    fn forecast_deposit_start_places_principal_in_the_month() {
+        let deposits = vec![SuggestionDeposit {
+            start_date: Some(day("2026-09-30")),
+            ..dep_event("2027-01-05", 55_000.0, 0.0)
+        }];
+        let events = SuggestionEvents::default();
+        let base = forecast_months(&forecast_input(&[], &events, &[]));
+        let months = forecast_months(&forecast_input(&deposits, &events, &[]));
+        // Sep 活期 drops by the principal, 定期+SC gains it.
+        assert!(approx_eq(
+            months[0].cash.unwrap(),
+            base[0].cash.unwrap() - 55_000.0
+        ));
+        assert!(approx_eq(months[0].locked.unwrap(), 445_000.0 + 55_000.0));
+        // Jan 2027: the principal comes back as 定期 finish.
+        assert!(approx_eq(months[4].deposit_finish, 55_000.0));
+    }
+
+    #[test]
+    fn forecast_conversion_leaves_the_grid_totals() {
+        let events = SuggestionEvents::default();
+        // A: the sc_deposit plan with its return override.
+        let items = vec![plan(
+            "2026-09-01",
+            ForecastItemKind::ScDeposit,
+            -55_000.0,
+            Some("2027-01-01"),
+        )];
+        let planned = forecast_months(&forecast_input(&[], &events, &items));
+        // B: the converted deposit — same flows, so every column matches.
+        let deposits = vec![SuggestionDeposit {
+            start_date: Some(day("2026-09-30")),
+            ..dep_event("2027-01-05", 55_000.0, 0.0)
+        }];
+        let converted = forecast_months(&forecast_input(&deposits, &events, &[]));
+        for (plan_col, dep_col) in planned.iter().zip(&converted) {
+            assert!(approx_eq(plan_col.cash.unwrap(), dep_col.cash.unwrap()));
+            assert!(approx_eq(plan_col.locked.unwrap(), dep_col.locked.unwrap()));
+            assert!(approx_eq(
+                plan_col.semi_liquid.unwrap(),
+                dep_col.semi_liquid.unwrap()
+            ));
+            assert!(approx_eq(
+                plan_col.ref_check.unwrap(),
+                dep_col.ref_check.unwrap()
+            ));
+        }
+    }
+
     // --- Money Master (Overview!J29:N35) ---
 
     fn mm_input() -> MoneyMasterInput {
@@ -6297,5 +6687,166 @@ mod tests {
         assert!(mm.can_use.is_none());
         assert!(mm.avg_per_month.is_none());
         assert!(mm.progress_gap.is_none());
+    }
+
+    // --- Goals (Overview!J10:M20 + N13:P16) ---
+
+    /// The workbook's cached inputs/outputs (recomputed offline).
+    fn goals_input() -> OverviewGoalsInput {
+        OverviewGoalsInput {
+            current_invest: Some(1495563.431),
+            avg_saved: Some(30013.27),
+            avg_invested: Some(326841.2233),
+            mm_avg_per_month: Some(30400.14056),
+            saved_avg: Some(26362.84273),
+            interest_avg: Some(4480.899118),
+            total_change_avg: Some(59918.15472),
+            n4: Some((2025, 0.03851965006)),
+            liquid_assets: 1951776.034,
+            total_assets: 3579321.076,
+            living_budget: Some(14900.0),
+            salary: Some(52_700.0),
+            goal1_amount: Some(1_550_000.0),
+            goal2_amount: Some(2_500_000.0),
+            goal3_inflation: 1.07,
+            goal3_years: 30.0,
+            final_replacement: 0.7,
+            today: chrono::NaiveDate::from_ymd_opt(2026, 9, 29).unwrap(),
+        }
+    }
+
+    #[test]
+    fn overview_goals_reproduce_the_sheet_cells() {
+        let input = goals_input();
+        let goals = overview_goals(&input);
+        // The formula goals' ETAs follow the same today + round(365 × years)
+        // rule as the milestones' J11/J17.
+        let expected_eta = |years: f64| {
+            input
+                .today
+                .checked_add_signed(chrono::TimeDelta::days((365.0 * years).round() as i64))
+                .map(|date| date.to_string())
+        };
+        assert_eq!(goals.n4_year, Some(2025));
+        assert!(approx_eq(goals.n4_rate.unwrap(), 0.03851965006));
+        assert!(approx_eq(goals.saving_year.unwrap(), 347656.233));
+        assert!(approx_eq(goals.saving_month.unwrap(), 28971.35275));
+        assert!(approx_eq(goals.passive_return_year.unwrap(), 57608.58002));
+        assert!(approx_eq(
+            goals.passive_return_month.unwrap(),
+            57608.58002 / 12.0
+        ));
+
+        let first = &goals.milestones[0];
+        assert_eq!(first.target, Some(1_550_000.0));
+        assert!(approx_eq(first.remain.unwrap(), 54436.56857));
+        assert!(approx_eq(first.years.unwrap(), 0.1565815982));
+        // J11 = today + round(365 × 0.1565815982) days.
+        assert_eq!(first.eta.as_deref(), Some("2026-11-25"));
+        let second = &goals.milestones[1];
+        assert_eq!(second.target, Some(2_500_000.0));
+        assert!(approx_eq(second.remain.unwrap(), 1004436.569));
+        assert!(approx_eq(second.years.unwrap(), 2.889166002));
+        // round(365 × 2.889166002) = 1055 days — one day later than the
+        // sheet's truncating DATEVALUE result.
+        assert_eq!(second.eta.as_deref(), Some("2029-08-19"));
+
+        assert!(approx_eq(goals.third.target.unwrap(), 5739480.0));
+        assert!(approx_eq(goals.third.remain.unwrap(), 3787703.966));
+        assert!(approx_eq(goals.third.years.unwrap(), 10.23358316));
+        assert_eq!(goals.third.eta, expected_eta(10.23358316));
+        assert!(approx_eq(goals.final_goal.target.unwrap(), 11492316.24));
+        assert!(approx_eq(goals.final_goal.remain.unwrap(), 7912995.166));
+        assert!(approx_eq(goals.final_goal.years.unwrap(), 11.00528324));
+        assert_eq!(goals.final_goal.eta, expected_eta(11.00528324));
+    }
+
+    #[test]
+    fn overview_goals_skip_absent_terms_and_missing_inputs() {
+        let mut input = goals_input();
+        // AVERAGE over the four remaining terms.
+        input.avg_invested = None;
+        let goals = overview_goals(&input);
+        let expected = (30013.27 * 12.0
+            + 30400.14056 * 12.0
+            + 26362.84273 * 12.0
+            + (26362.84273 + 4480.899118) * 12.0)
+            / 4.0;
+        assert!(approx_eq(goals.saving_year.unwrap(), expected));
+
+        // Without a rate the IBKR HKD figure is absent, so K13 and every
+        // figure derived from it are absent; the formula goals still work.
+        input.current_invest = None;
+        input.n4 = None;
+        let goals = overview_goals(&input);
+        assert!(goals.n4_rate.is_none() && goals.n4_year.is_none());
+        assert!(goals.current_invest.is_none());
+        assert!(goals.passive_return_year.is_none());
+        for milestone in &goals.milestones {
+            assert!(milestone.remain.is_none() && milestone.years.is_none());
+            assert!(milestone.eta.is_none());
+        }
+        assert!(goals.final_goal.target.is_none());
+        assert!(goals.final_goal.eta.is_none());
+        assert!(goals.third.target.is_some());
+        assert!(goals.third.eta.is_some());
+    }
+
+    #[test]
+    fn overview_goals_mark_reached_goals() {
+        let mut input = goals_input();
+        input.goal1_amount = Some(1_000_000.0); // below current_invest
+        input.total_assets = 20_000_000.0; // above the Final Target
+        let goals = overview_goals(&input);
+        assert!(goals.milestones[0].remain.unwrap() < 0.0);
+        assert!(goals.milestones[0].years.is_none());
+        assert!(goals.milestones[0].eta.is_none());
+        assert!(goals.final_goal.remain.unwrap() < 0.0);
+        assert!(goals.final_goal.years.is_none());
+        assert!(goals.final_goal.eta.is_none());
+    }
+
+    #[test]
+    fn overview_goals_divisors_and_cleared_amounts() {
+        let mut input = goals_input();
+        input.goal1_amount = None;
+        input.salary = None;
+        input.total_change_avg = Some(0.0);
+        let goals = overview_goals(&input);
+        assert_eq!(goals.milestones[0].target, None);
+        assert!(goals.milestones[0].remain.is_none());
+        // salary missing and the pace divisor is zero — both absent.
+        assert!(goals.final_goal.target.is_none());
+        assert!(goals.final_goal.years.is_none());
+        // No saving terms at all → saving_year absent → milestone years too.
+        input.avg_saved = None;
+        input.avg_invested = None;
+        input.mm_avg_per_month = None;
+        input.saved_avg = None;
+        input.interest_avg = None;
+        let goals = overview_goals(&input);
+        assert!(goals.saving_year.is_none());
+        assert!(goals.milestones[1].years.is_none());
+        // The combined running term is absent too, so 3rd years go absent.
+        assert!(goals.third.years.is_none());
+        assert!(goals.third.eta.is_none());
+        assert!(goals.third.remain.is_some());
+    }
+
+    #[test]
+    fn overview_goals_constants_override_the_defaults() {
+        let mut input = goals_input();
+        input.goal3_inflation = 1.05;
+        input.goal3_years = 20.0;
+        input.final_replacement = 0.6;
+        let goals = overview_goals(&input);
+        assert!(approx_eq(
+            goals.third.target.unwrap(),
+            14900.0 * 1.05 * 12.0 * 20.0
+        ));
+        assert!(approx_eq(
+            goals.final_goal.target.unwrap(),
+            52_700.0 * 0.6 * 12.0 / 0.03851965006
+        ));
     }
 }

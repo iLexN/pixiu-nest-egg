@@ -17,7 +17,7 @@ const emit = defineEmits<{
   remove: [Dividend]
 }>()
 
-const columns = computed(() => (props.receivable ? 9 : 11))
+const columns = computed(() => (props.receivable ? 9 : 12))
 </script>
 
 <template>
@@ -33,6 +33,7 @@ const columns = computed(() => (props.receivable ? 9 : 11))
         <th class="num">息率</th>
         <template v-if="!props.receivable">
           <th class="num">實收派息</th>
+          <th class="num">Tax</th>
           <th class="num">現價</th>
           <th class="num">息率</th>
         </template>
@@ -51,6 +52,7 @@ const columns = computed(() => (props.receivable ? 9 : 11))
         <td class="num">{{ fmtPercent(dividend.yield_on_cost) }}</td>
         <template v-if="!props.receivable">
           <td class="num">{{ fmtMoney(dividend.received_amount) }}</td>
+          <td class="num">{{ fmtMoney(dividend.withholding_tax) }}</td>
           <td class="num">{{ fmtPrice(dividend.received_price) }}</td>
           <td class="num">{{ fmtPercent(dividend.yield_on_price) }}</td>
         </template>

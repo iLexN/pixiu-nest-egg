@@ -17,6 +17,8 @@ interface FormState {
   per_share: string
   estimated_amount: string
   received_amount: string
+  gross_amount: string
+  withholding_tax: string
   received_price: string
   note: string
   refresh_snapshots: boolean
@@ -29,6 +31,8 @@ function emptyForm(): FormState {
     per_share: '',
     estimated_amount: '',
     received_amount: '',
+    gross_amount: '',
+    withholding_tax: '',
     received_price: '',
     note: '',
     refresh_snapshots: false,
@@ -69,6 +73,12 @@ watch(
         dividend.estimated_amount === null ? '' : toInput(dividend.estimated_amount),
       received_amount:
         dividend.received_amount === null ? '' : toInput(dividend.received_amount),
+      gross_amount:
+        dividend.gross_amount === null && dividend.received_amount === null
+          ? ''
+          : toInput(dividend.gross_amount ?? dividend.received_amount ?? 0),
+      withholding_tax:
+        dividend.withholding_tax === null ? '' : toInput(dividend.withholding_tax),
       received_price:
         dividend.received_price === null ? '' : toInput(dividend.received_price),
       note: dividend.note ?? '',
@@ -127,10 +137,21 @@ async function submit() {
           ...payload,
           // Receipt fields only appear when the record is already received.
           ...(props.editing.status === 'RECEIVED'
-            ? {
-                received_amount: num(form.received_amount),
-                received_price: num(form.received_price),
-              }
+            ? props.editing.market === 'US'
+              ? {
+                  // A blank 派息 clears the receipt, like a blank 實收派息 on HK.
+                  ...(num(form.gross_amount) === null
+                    ? { received_amount: null }
+                    : {
+                        gross_amount: num(form.gross_amount),
+                        withholding_tax: num(form.withholding_tax),
+                      }),
+                  received_price: num(form.received_price),
+                }
+              : {
+                  received_amount: num(form.received_amount),
+                  received_price: num(form.received_price),
+                }
             : {}),
           refresh_snapshots: form.refresh_snapshots || undefined,
         })
@@ -213,7 +234,30 @@ async function submit() {
       </label>
 
       <template v-if="props.editing?.status === 'RECEIVED'">
-        <label>
+        <template v-if="props.editing.market === 'US'">
+          <label>
+            派息
+            <input v-model="form.gross_amount" type="number" step="any" inputmode="decimal" />
+            <small v-if="error?.fieldMessage('gross_amount')" class="error">{{
+              error.fieldMessage('gross_amount')
+            }}</small>
+          </label>
+
+          <label>
+            Tax
+            <input
+              v-model="form.withholding_tax"
+              type="number"
+              step="any"
+              inputmode="decimal"
+            />
+            <small v-if="error?.fieldMessage('withholding_tax')" class="error">{{
+              error.fieldMessage('withholding_tax')
+            }}</small>
+          </label>
+        </template>
+
+        <label v-else>
           實收派息
           <input
             v-model="form.received_amount"

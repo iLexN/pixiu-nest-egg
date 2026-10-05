@@ -6,12 +6,22 @@ import {
   type ForecastItem,
   type ForecastItemKind,
   type ForecastMonth,
+  type ForecastPlacement,
   type ForecastResponse,
   type InterestComponent,
   type OverviewResponse,
 } from '../api'
 import DepositForm from '../components/DepositForm.vue'
 import { fmtMoney, fmtPercent, fmtPercentShort, fmtPrice, signClass } from '../format'
+
+/** `remain ≤ 0` means the goal is already reached — show 已達成, not years. */
+function reached(remain: number | null): boolean {
+  return remain !== null && remain <= 0
+}
+
+function fmtYears(value: number | null): string {
+  return value === null ? '' : value.toFixed(2)
+}
 
 const data = ref<OverviewResponse | null>(null)
 const forecast = ref<ForecastResponse | null>(null)
@@ -50,10 +60,28 @@ function cellItems(month: ForecastMonth, kind: ForecastItemKind): ForecastItem[]
   return month.plan_items.filter((item) => item.kind === kind)
 }
 
-/** Σ item amounts for a cell; null while the cell is empty (sheet: blank). */
+/** A real deposit placement lands in its bank's plan row: `HS` → 定期 HS,
+ * every other bank → SC高息馬拉松. Other rows never carry placements. */
+function cellPlacements(month: ForecastMonth, kind: ForecastItemKind): ForecastPlacement[] {
+  if (kind === 'hs_deposit') {
+    return month.deposit_placements.filter((p) => p.bank === 'HS')
+  }
+  if (kind === 'sc_deposit') {
+    return month.deposit_placements.filter((p) => p.bank !== 'HS')
+  }
+  return []
+}
+
+/** Σ item amounts − placement principals; null while the cell is empty
+ * (sheet: blank). */
 function cellSum(month: ForecastMonth, kind: ForecastItemKind): number | null {
   const items = cellItems(month, kind)
-  return items.length ? items.reduce((sum, item) => sum + item.amount, 0) : null
+  const placements = cellPlacements(month, kind)
+  if (!items.length && !placements.length) return null
+  return (
+    items.reduce((sum, item) => sum + item.amount, 0) +
+    placements.reduce((sum, p) => sum - p.principal, 0)
+  )
 }
 
 const selectedKind = computed(() =>
@@ -74,6 +102,11 @@ const selectedMonth = computed(() =>
 const selectedItems = computed(() =>
   selectedMonth.value && selected.value
     ? cellItems(selectedMonth.value, selected.value.kind)
+    : [],
+)
+const selectedPlacements = computed(() =>
+  selectedMonth.value && selected.value
+    ? cellPlacements(selectedMonth.value, selected.value.kind)
     : [],
 )
 
@@ -641,6 +674,18 @@ onMounted(load)
           季繳差餉預設 −{{ fmtMoney(forecast?.bill_amount) }}（1/4/7/10 月）—
           新增項目會取代該月預設值
         </p>
+        <!-- Real deposits already placed in the month — read-only, above the
+             editable plan items. -->
+        <div
+          v-for="p in selectedPlacements"
+          :key="`dep-${p.deposit_id}`"
+          class="plan-row muted"
+        >
+          <span>{{ p.label || `定期 #${p.deposit_id}` }}</span>
+          <span class="num">{{ fmtMoney(-p.principal) }}</span>
+          <span>{{ p.start_date }}</span>
+          <span>已定期</span>
+        </div>
         <div v-for="item in selectedItems" :key="item.id" class="plan-row">
           <template v-if="drafts[item.id]">
           <input
@@ -741,6 +786,80 @@ onMounted(load)
       </table>
     </div>
 
+    <div class="card goals-card">
+      <h3>目標</h3>
+      <table>
+        <thead>
+          <tr>
+            <th></th>
+            <th class="num">目標金額</th>
+            <th class="num">剩餘</th>
+            <th class="num">年</th>
+            <th class="num">日期</th>
+          </tr>
+        </thead>
+        <tbody>
+          <!-- 1st/2nd: the shared 現值 (K13/K19) and pace (the sheet's
+               L12/M12/L13/M13, mirrored on L18/M18/L19/M19) show once in the
+               footer. -->
+          <tr v-for="(m, i) in data.goals.milestones" :key="i">
+            <td>{{ i === 0 ? '1st' : '2nd' }}</td>
+            <td class="num">{{ fmtMoney(m.target) || '—' }}</td>
+            <td class="num" :class="signClass(m.remain)">
+              {{ fmtMoney(m.remain) || '—' }}
+            </td>
+            <td class="num">
+              {{ reached(m.remain) ? '已達成' : fmtYears(m.years) || '—' }}
+            </td>
+            <td class="num">{{ reached(m.remain) ? '已達成' : m.eta || '—' }}</td>
+          </tr>
+          <!-- 3rd/Final: target, remain vs 流動資產/總數, and years only. -->
+          <tr
+            v-for="(g, i) in [data.goals.third, data.goals.final_goal]"
+            :key="`f${i}`"
+          >
+            <td>{{ i === 0 ? '3rd' : 'Final' }}</td>
+            <td class="num">{{ fmtMoney(g.target) || '—' }}</td>
+            <td class="num" :class="signClass(g.remain)">
+              {{ fmtMoney(g.remain) || '—' }}
+            </td>
+            <td class="num">
+              {{ reached(g.remain) ? '已達成' : fmtYears(g.years) || '—' }}
+            </td>
+            <td class="num">{{ reached(g.remain) ? '已達成' : g.eta || '—' }}</td>
+          </tr>
+        </tbody>
+        <tfoot>
+          <tr>
+            <td>現值</td>
+            <td class="num">{{ fmtMoney(data.goals.current_invest) || '—' }}</td>
+            <td colspan="3"></td>
+          </tr>
+          <tr>
+            <td>存/年</td>
+            <td class="num">{{ fmtMoney(data.goals.saving_year) || '—' }}</td>
+            <td>存/月</td>
+            <td class="num">{{ fmtMoney(data.goals.saving_month) || '—' }}</td>
+            <td></td>
+          </tr>
+          <tr>
+            <td>回報/年</td>
+            <td class="num">{{ fmtMoney(data.goals.passive_return_year) || '—' }}</td>
+            <td>回報/月</td>
+            <td class="num">{{ fmtMoney(data.goals.passive_return_month) || '—' }}</td>
+            <td></td>
+          </tr>
+        </tfoot>
+      </table>
+      <p class="muted">
+        年均回報率 N4 = {{ fmtPercent(data.goals.n4_rate) || '—'
+        }}<template v-if="data.goals.n4_year !== null"
+          >（{{ data.goals.n4_year }}）</template
+        >
+        · 目標金額及常數於 月結 → 設定 編輯
+      </p>
+    </div>
+
     <div class="card money-master">
       <h3>Money Master</h3>
       <table>
@@ -815,7 +934,8 @@ onMounted(load)
   min-width: 0;
   overflow-x: auto;
 }
-.overview-grid .card.invest-targets {
+.overview-grid .card.invest-targets,
+.overview-grid .card.goals-card {
   grid-column: span 2;
 }
 /* A strong rule separates the derived avg pace from the challenge inputs. */

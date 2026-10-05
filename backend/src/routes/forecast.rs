@@ -1,6 +1,7 @@
 use axum::Json;
 use axum::extract::{Path, State};
 use axum::http::StatusCode;
+use chrono::Datelike;
 use sqlx::sqlite::SqliteRow;
 use sqlx::{Row, SqlitePool};
 
@@ -8,8 +9,8 @@ use super::{AppState, deposits, months, mpf, now_timestamp};
 use crate::calc::{self, FieldError, ForecastItemFacts};
 use crate::error::{ApiError, ErrorBody};
 use crate::models::{
-    Deposit, ForecastItem, ForecastItemKind, ForecastItemPatch, ForecastMonth, ForecastResponse,
-    NewDeposit, NewForecastItem,
+    Deposit, ForecastItem, ForecastItemKind, ForecastItemPatch, ForecastMonth, ForecastPlacement,
+    ForecastResponse, NewDeposit, NewForecastItem,
 };
 
 const ITEM_COLUMNS: &str = "id, month, kind, amount, return_month, note, sort_order, created_at";
@@ -143,7 +144,7 @@ pub async fn forecast(State(state): State<AppState>) -> Result<Json<ForecastResp
         spend,
         liquid_assets: totals.liquid_assets,
         semi_liquid_target,
-        locked_base: input.deposits_active_principal,
+        locked_base: calc::forecast_locked_anchor(&events.deposits, first),
         bill_amount,
         deposits: &events.deposits,
         events: &events,
@@ -159,6 +160,23 @@ pub async fn forecast(State(state): State<AppState>) -> Result<Json<ForecastResp
                     .iter()
                     .filter(|item| item.month == month)
                     .cloned()
+                    .collect(),
+                deposit_placements: events
+                    .deposits
+                    .iter()
+                    .filter(|deposit| {
+                        deposit.start_date.is_some_and(|start_date| {
+                            start_date.year() == column.month.year()
+                                && start_date.month() == column.month.month()
+                        })
+                    })
+                    .map(|deposit| ForecastPlacement {
+                        deposit_id: deposit.id,
+                        label: deposit.label.clone(),
+                        bank: deposit.bank.clone(),
+                        principal: deposit.principal,
+                        start_date: deposit.start_date.expect("filtered to Some").to_string(),
+                    })
                     .collect(),
                 month,
                 start: column.start,

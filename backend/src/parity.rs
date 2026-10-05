@@ -1880,6 +1880,112 @@ async fn check_overview(
     ] {
         overview_compare(report, name, field, computed, sheet, false);
     }
+
+    // J10:M20 + N13:P16 目標: the seeded milestone amounts must reproduce
+    // the K12/K18 literals; the derived cells are informational — they drift
+    // with live prices, today's date, and the app's own N4 (computed from
+    // the year-review rows rather than the sheet's cached YearInReview!L13).
+    let goals = &response.goals;
+    let sheet_goals = &cached.goals;
+    let milestone = |index: usize| goals.milestones.get(index);
+    overview_compare(
+        report,
+        "Overview 1st 目標",
+        "K12",
+        milestone(0).and_then(|m| m.target),
+        sheet_goals.goal1_amount,
+        true,
+    );
+    overview_compare(
+        report,
+        "Overview 2nd 目標",
+        "K18",
+        milestone(1).and_then(|m| m.target),
+        sheet_goals.goal2_amount,
+        true,
+    );
+    for (name, field, computed, sheet) in [
+        (
+            "Overview 目標 current invest",
+            "K13",
+            goals.current_invest,
+            sheet_goals.current_invest,
+        ),
+        (
+            "Overview 目標 saving/year",
+            "L12",
+            goals.saving_year,
+            sheet_goals.saving_year,
+        ),
+        (
+            "Overview 目標 return/year",
+            "L13",
+            goals.passive_return_year,
+            sheet_goals.passive_return_year,
+        ),
+        (
+            "Overview 1st 目標 remain",
+            "K14",
+            milestone(0).and_then(|m| m.remain),
+            sheet_goals.goal1_remain,
+        ),
+        (
+            "Overview 1st 目標 years",
+            "L14",
+            milestone(0).and_then(|m| m.years),
+            sheet_goals.goal1_years,
+        ),
+        (
+            "Overview 2nd 目標 remain",
+            "K20",
+            milestone(1).and_then(|m| m.remain),
+            sheet_goals.goal2_remain,
+        ),
+        (
+            "Overview 2nd 目標 years",
+            "L20",
+            milestone(1).and_then(|m| m.years),
+            sheet_goals.goal2_years,
+        ),
+        (
+            "Overview 3rd target",
+            "O14",
+            goals.third.target,
+            sheet_goals.third_target,
+        ),
+        (
+            "Overview 3rd remain",
+            "O15",
+            goals.third.remain,
+            sheet_goals.third_remain,
+        ),
+        (
+            "Overview 3rd years",
+            "O16",
+            goals.third.years,
+            sheet_goals.third_years,
+        ),
+        (
+            "Overview Final target",
+            "P14",
+            goals.final_goal.target,
+            sheet_goals.final_target,
+        ),
+        (
+            "Overview Final remain",
+            "P15",
+            goals.final_goal.remain,
+            sheet_goals.final_remain,
+        ),
+        (
+            "Overview Final years",
+            "P16",
+            goals.final_goal.years,
+            sheet_goals.final_years,
+        ),
+    ] {
+        overview_compare(report, name, field, computed, sheet, false);
+    }
     Ok(())
 }
 

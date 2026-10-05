@@ -1374,6 +1374,38 @@ pub struct SheetMoneyMaster {
     pub can_use: Option<f64>,
 }
 
+/// The `Overview` `J10:M20` + `N13:P16` 目標 cells: the two milestone
+/// amounts plus the sheet's derived saving/return/remain/years figures.
+/// Rows 18–19 (the 2nd block's `L18`/`M18`/`K19`/`L19`/`M19`) mirror the
+/// shared cells by formula and are not read.
+#[derive(Debug, Clone, Default)]
+pub struct SheetGoals {
+    /// K12/K18: the 1st/2nd 目標 amounts (literals — seeded into settings).
+    pub goal1_amount: Option<f64>,
+    pub goal2_amount: Option<f64>,
+    /// K13: current invest = 港股 + 債券 + IBKR.
+    pub current_invest: Option<f64>,
+    /// L12/M12: the AVERAGE saving pace per year/month.
+    pub saving_year: Option<f64>,
+    pub saving_month: Option<f64>,
+    /// L13/M13: passive return = K13 × N4, per year/month.
+    pub passive_return_year: Option<f64>,
+    pub passive_return_month: Option<f64>,
+    /// K14/L14, K20/L20: remain and years for the two milestones.
+    pub goal1_remain: Option<f64>,
+    pub goal1_years: Option<f64>,
+    pub goal2_remain: Option<f64>,
+    pub goal2_years: Option<f64>,
+    /// O14:O16: the 3rd target — target, remain vs 流動資產, years.
+    pub third_target: Option<f64>,
+    pub third_remain: Option<f64>,
+    pub third_years: Option<f64>,
+    /// P14:P16: the Final Target — target, remain vs 總數, years.
+    pub final_target: Option<f64>,
+    pub final_remain: Option<f64>,
+    pub final_years: Option<f64>,
+}
+
 /// The `Overview` cells the app seeds from or parity-checks against.
 #[derive(Debug, Clone, Default)]
 pub struct OverviewCached {
@@ -1419,6 +1451,8 @@ pub struct OverviewCached {
     pub tier_long_term: Option<f64>,
     /// The J29:N35 Money Master block.
     pub money_master: SheetMoneyMaster,
+    /// The J10:M20 + N13:P16 目標 block.
+    pub goals: SheetGoals,
 }
 
 /// The 美股 sheet's IBKR account header block (A1:B5 + B7): all manual inputs
@@ -1782,6 +1816,28 @@ fn parse_overview(rows: Option<&Rows>) -> OverviewCached {
             progress_gap: cell_num(32, 12),
             coming_save: cell_num(33, 10),
             can_use: cell_num(34, 10),
+        },
+        // J10:M20 目標: K12/L12/M12 (r11), K13/L13/M13 (r12), K14/L14 (r13);
+        // K18 (r17) and K20/L20 (r19) — rows 18–19 mirror r12/r11 cells.
+        // N13:P16: O14/P14 (r13), O15/P15 (r14), O16/P16 (r15).
+        goals: SheetGoals {
+            goal1_amount: cell_num(11, 10),
+            saving_year: cell_num(11, 11),
+            saving_month: cell_num(11, 12),
+            current_invest: cell_num(12, 10),
+            passive_return_year: cell_num(12, 11),
+            passive_return_month: cell_num(12, 12),
+            goal1_remain: cell_num(13, 10),
+            goal1_years: cell_num(13, 11),
+            goal2_amount: cell_num(17, 10),
+            goal2_remain: cell_num(19, 10),
+            goal2_years: cell_num(19, 11),
+            third_target: cell_num(13, 14),
+            third_remain: cell_num(14, 14),
+            third_years: cell_num(15, 14),
+            final_target: cell_num(13, 15),
+            final_remain: cell_num(14, 15),
+            final_years: cell_num(15, 15),
         },
     }
 }
@@ -2405,6 +2461,27 @@ mod tests {
         assert!(near(data.overview.tier_cannot_use, 316200.0));
         assert!(near(data.overview.tier_short_term, 1495563.431));
         assert!(near(data.overview.tier_long_term, 1605823.024));
+
+        // The J10:M20 + N13:P16 目標 cells: the milestone amounts and the
+        // sheet's derived saving/remain/years figures.
+        let goals = &data.overview.goals;
+        assert_eq!(goals.goal1_amount, Some(1_550_000.0));
+        assert_eq!(goals.goal2_amount, Some(2_500_000.0));
+        assert!(near(goals.current_invest, 1495563.431));
+        assert!(near(goals.saving_year, 347656.233));
+        assert!(near(goals.saving_month, 28971.35275));
+        assert!(near(goals.passive_return_year, 57608.58002));
+        assert!(near(goals.passive_return_month, 4800.715002));
+        assert!(near(goals.goal1_remain, 54436.56857));
+        assert!(near(goals.goal1_years, 0.1565815982));
+        assert!(near(goals.goal2_remain, 1004436.569));
+        assert!(near(goals.goal2_years, 2.889166002));
+        assert!(near(goals.third_target, 5739480.0));
+        assert!(near(goals.third_remain, 3787703.966));
+        assert!(near(goals.third_years, 10.23358316));
+        assert!(near(goals.final_target, 11492316.24));
+        assert!(near(goals.final_remain, 7912995.166));
+        assert!(near(goals.final_years, 11.00528324));
 
         // The seeded liquidity follows the sheet's K6/K7 wiring: B7 Irene is
         // short-term, B8 HS人壽 long-term (cash rows carry `long`).

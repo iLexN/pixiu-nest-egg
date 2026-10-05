@@ -1250,6 +1250,139 @@ async fn coupon_and_dividend_receive_banks_in_and_records_the_item() {
 }
 
 #[tokio::test]
+async fn dividend_us_receipt_with_withholding_tax() {
+    let app = app().await;
+    create_stock(&app, "US", "VOO", None).await;
+    let (status, div) = send(
+        &app,
+        "POST",
+        "/api/dividends",
+        Some(json!({ "market": "US", "code": "VOO",
+                     "pay_date": "2099-12-10", "estimated_amount": 12.76 })),
+    )
+    .await;
+    assert_eq!(status, StatusCode::CREATED, "body = {div}");
+    let id = div["id"].as_i64().expect("div id");
+    assert!(div["withholding_tax"].is_null());
+    assert!(div["gross_amount"].is_null());
+
+    // (e) Tax on a pending dividend is rejected.
+    let (status, body) = send(
+        &app,
+        "PATCH",
+        &format!("/api/dividends/{id}"),
+        Some(json!({ "withholding_tax": 3.83 })),
+    )
+    .await;
+    assert_eq!(status, StatusCode::BAD_REQUEST, "body = {body}");
+    assert!(
+        body["fields"]
+            .as_array()
+            .expect("fields")
+            .iter()
+            .any(|f| f["field"] == "withholding_tax")
+    );
+
+    // (c) Tax larger than the gross is rejected on withholding_tax.
+    let (status, body) = send(
+        &app,
+        "PATCH",
+        &format!("/api/dividends/{id}"),
+        Some(json!({ "gross_amount": 10.0, "withholding_tax": 12.0 })),
+    )
+    .await;
+    assert_eq!(status, StatusCode::BAD_REQUEST, "body = {body}");
+    assert!(
+        body["fields"]
+            .as_array()
+            .expect("fields")
+            .iter()
+            .any(|f| f["field"] == "withholding_tax")
+    );
+
+    // (d) Gross and net together are ambiguous.
+    let (status, body) = send(
+        &app,
+        "PATCH",
+        &format!("/api/dividends/{id}"),
+        Some(json!({ "gross_amount": 12.76, "received_amount": 8.93 })),
+    )
+    .await;
+    assert_eq!(status, StatusCode::BAD_REQUEST, "body = {body}");
+    assert!(
+        body["fields"]
+            .as_array()
+            .expect("fields")
+            .iter()
+            .any(|f| f["field"] == "gross_amount")
+    );
+
+    // The failed patches changed nothing.
+    let (_, body) = send(&app, "GET", "/api/dividends?market=US", None).await;
+    assert!(body[0]["received_amount"].is_null());
+    assert!(body[0]["withholding_tax"].is_null());
+
+    // (a) 收訖 with gross + tax stores the net and banks it into IBKR USD.
+    let (status, body) = send(
+        &app,
+        "PATCH",
+        &format!("/api/dividends/{id}"),
+        Some(json!({ "gross_amount": 12.76, "withholding_tax": 3.83 })),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "body = {body}");
+    approx(&body["received_amount"], 8.93);
+    approx(&body["withholding_tax"], 3.83);
+    approx(&body["gross_amount"], 12.76);
+    let (_, overview) = send(&app, "GET", "/api/overview", None).await;
+    approx(&overview["ibkr"]["usd_cash"], 8.93);
+
+    // (g) Editing the received record with a new gross + tax recomputes net.
+    let (status, body) = send(
+        &app,
+        "PATCH",
+        &format!("/api/dividends/{id}"),
+        Some(json!({ "gross_amount": 12.80, "withholding_tax": 3.84 })),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "body = {body}");
+    approx(&body["received_amount"], 8.96);
+    approx(&body["withholding_tax"], 3.84);
+    approx(&body["gross_amount"], 12.80);
+    // No re-banking on an amount edit — the credit stays at 8.93.
+    let (_, overview) = send(&app, "GET", "/api/overview", None).await;
+    approx(&overview["ibkr"]["usd_cash"], 8.93);
+
+    // (f) Un-receive reverses the IBKR credit and clears the tax.
+    let (status, body) = send(
+        &app,
+        "PATCH",
+        &format!("/api/dividends/{id}"),
+        Some(json!({ "received_amount": null })),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "body = {body}");
+    assert!(body["received_amount"].is_null());
+    assert!(body["withholding_tax"].is_null());
+    assert!(body["gross_amount"].is_null());
+    let (_, overview) = send(&app, "GET", "/api/overview", None).await;
+    approx(&overview["ibkr"]["usd_cash"], 0.0);
+
+    // (b) Gross only: received = gross, tax stays null.
+    let (status, body) = send(
+        &app,
+        "PATCH",
+        &format!("/api/dividends/{id}"),
+        Some(json!({ "gross_amount": 200.0 })),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "body = {body}");
+    approx(&body["received_amount"], 200.0);
+    assert!(body["withholding_tax"].is_null());
+    assert!(body["gross_amount"].is_null());
+}
+
+#[tokio::test]
 async fn month_recapture_snapshots_start_cash_from_the_cash_sum() {
     let app = app().await;
 

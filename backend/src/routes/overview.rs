@@ -4,7 +4,9 @@ use chrono::Datelike;
 use sqlx::SqlitePool;
 
 use super::{AppState, aia, months, mpf, now_timestamp, summary, today};
-use crate::calc::{FieldError, liquidity_tiers, live_totals, trailing_averages};
+use crate::calc::{
+    FieldError, liquidity_tiers, live_totals, month_running_averages, trailing_averages,
+};
 use crate::error::{ApiError, ErrorBody};
 use crate::models::{
     IbkrBlock, IbkrPatch, ManualAsset, ManualAssetKind, ManualAssetLiquidity, OverviewAssetRow,
@@ -258,6 +260,46 @@ pub async fn overview(State(state): State<AppState>) -> Result<Json<OverviewResp
         today: today(),
     });
 
+    // J10:M20 + N13:P16 目標 — the milestone amounts are stored settings;
+    // everything else derives. N4 = the latest completed year's
+    // income_value_rate from the year-review rows.
+    let running = month_running_averages(
+        &stat_rows,
+        &items,
+        months::live_tail(&stat_rows, Some(totals)),
+    );
+    let n4_year = today().year() - 1;
+    let n4 = review
+        .years
+        .iter()
+        .find(|row| row.year == n4_year)
+        .and_then(|row| row.assets.income_value_rate.map(|rate| (row.year, rate)));
+    let (goal3_inflation, goal3_years, final_replacement) =
+        months::goal_constants(&state.pool).await?;
+    let goals = crate::calc::overview_goals(&crate::calc::OverviewGoalsInput {
+        // K13 = 港股 + 債券 + IBKR — absent while the rate-derived B9 is.
+        current_invest: ibkr
+            .computed_total_hkd
+            .map(|total| input.hk_market_value + input.bonds_active_principal + total),
+        avg_saved: trailing.saved,
+        avg_invested: invest_targets.avg_invested,
+        mm_avg_per_month: money_master.avg_per_month,
+        saved_avg: running.saved_avg,
+        interest_avg: running.interest_avg,
+        total_change_avg: running.total_change_avg,
+        n4,
+        liquid_assets: totals.liquid_assets,
+        total_assets: totals.total_assets,
+        living_budget: averages.living_budget,
+        salary,
+        goal1_amount: mpf::meta_f64(&state.pool, months::GOAL1_AMOUNT_KEY).await?,
+        goal2_amount: mpf::meta_f64(&state.pool, months::GOAL2_AMOUNT_KEY).await?,
+        goal3_inflation,
+        goal3_years,
+        final_replacement,
+        today: today(),
+    });
+
     // J3:K7 策略 — 總數 re-partitioned into liquidity tiers.
     let liquidity_tiers = liquidity_tiers(
         salary,
@@ -287,6 +329,7 @@ pub async fn overview(State(state): State<AppState>) -> Result<Json<OverviewResp
         invest_targets,
         liquidity_tiers,
         money_master,
+        goals,
     }))
 }
 
@@ -319,6 +362,33 @@ mod tests {
         assert_eq!(response.semi_liquid_target, 0.3);
         let expected = response.semi_liquid.total - 0.3 * response.liquid_assets;
         assert!((response.semi_liquid.vs_quarter_liquid - expected).abs() < 1e-9);
+    }
+
+    #[tokio::test]
+    async fn overview_reports_the_goals_block() {
+        let pool = connect_memory().await.expect("memory db");
+        crate::mpf::meta_put(&pool, months::GOAL1_AMOUNT_KEY, Some("1550000"))
+            .await
+            .unwrap();
+        crate::mpf::meta_put(&pool, months::GOAL3_YEARS_KEY, Some("25"))
+            .await
+            .unwrap();
+
+        let goals = overview(State(AppState { pool }))
+            .await
+            .expect("overview")
+            .0
+            .goals;
+        assert_eq!(goals.milestones.len(), 2);
+        assert_eq!(goals.milestones[0].target, Some(1_550_000.0));
+        assert_eq!(goals.milestones[1].target, None);
+        // No stored data: the derived figures are absent, not zero.
+        assert!(goals.current_invest.is_none());
+        assert!(goals.saving_year.is_none());
+        assert!(goals.milestones[0].remain.is_none());
+        assert!(goals.milestones[0].eta.is_none());
+        assert!(goals.third.target.is_none());
+        assert!(goals.final_goal.target.is_none());
     }
 
     #[tokio::test]

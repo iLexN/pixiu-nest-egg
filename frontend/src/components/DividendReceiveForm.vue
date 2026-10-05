@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { reactive, ref, watch } from 'vue'
+import { computed, reactive, ref, watch } from 'vue'
 import { api, ApiError, type Dividend } from '../api'
 import { fmtMoney } from '../format'
 
@@ -11,6 +11,8 @@ const emit = defineEmits<{ saved: [Dividend]; cancelled: [] }>()
 
 interface FormState {
   received_amount: string
+  gross_amount: string
+  withholding_tax: string
   received_price: string
   also_update_price: boolean
   bank_in: boolean
@@ -18,6 +20,8 @@ interface FormState {
 
 const form = reactive<FormState>({
   received_amount: '',
+  gross_amount: '',
+  withholding_tax: '',
   received_price: '',
   also_update_price: false,
   bank_in: true,
@@ -30,6 +34,9 @@ watch(
   (dividend) => {
     form.received_amount =
       dividend.estimated_amount === null ? '' : String(dividend.estimated_amount)
+    form.gross_amount =
+      dividend.estimated_amount === null ? '' : String(dividend.estimated_amount)
+    form.withholding_tax = ''
     form.received_price = ''
     form.also_update_price = false
     form.bank_in = true
@@ -45,16 +52,33 @@ function num(value: string | number | null): number | null {
   return Number.isFinite(parsed) ? parsed : null
 }
 
+// Display-only preview: the backend computes the authoritative net amount.
+const netPreview = computed(() => {
+  const gross = num(form.gross_amount)
+  if (gross === null) return null
+  return gross - (num(form.withholding_tax) ?? 0)
+})
+
 async function submit() {
   error.value = null
   saving.value = true
   try {
     const receivedPrice = num(form.received_price)
-    const saved = await api.updateDividend(props.dividend.id, {
-      received_amount: num(form.received_amount),
-      received_price: receivedPrice,
-      bank_in: form.bank_in,
-    })
+    const saved = await api.updateDividend(
+      props.dividend.id,
+      props.dividend.market === 'US'
+        ? {
+            gross_amount: num(form.gross_amount),
+            withholding_tax: num(form.withholding_tax),
+            received_price: receivedPrice,
+            bank_in: form.bank_in,
+          }
+        : {
+            received_amount: num(form.received_amount),
+            received_price: receivedPrice,
+            bank_in: form.bank_in,
+          },
+    )
     // Opt-in: the receipt price is a snapshot on this record; updating the
     // stock's 現價 is a separate, possibly different-day decision.
     if (form.also_update_price && receivedPrice !== null) {
@@ -75,7 +99,25 @@ async function submit() {
     <h3>收訖派息 {{ props.dividend.code }}（派息日 {{ props.dividend.pay_date }}）</h3>
 
     <div class="grid">
-      <label>
+      <template v-if="props.dividend.market === 'US'">
+        <label>
+          派息
+          <input v-model="form.gross_amount" type="number" step="any" inputmode="decimal" />
+          <small v-if="error?.fieldMessage('gross_amount')" class="error">{{
+            error.fieldMessage('gross_amount')
+          }}</small>
+        </label>
+
+        <label>
+          Tax
+          <input v-model="form.withholding_tax" type="number" step="any" inputmode="decimal" />
+          <small v-if="error?.fieldMessage('withholding_tax')" class="error">{{
+            error.fieldMessage('withholding_tax')
+          }}</small>
+        </label>
+      </template>
+
+      <label v-else>
         實收派息
         <input v-model="form.received_amount" type="number" step="any" inputmode="decimal" />
         <small v-if="error?.fieldMessage('received_amount')" class="error">{{
@@ -101,6 +143,10 @@ async function submit() {
       <input v-model="form.also_update_price" type="checkbox" />
       同時更新 {{ props.dividend.code }} 現價
     </label>
+
+    <p v-if="props.dividend.market === 'US' && netPreview !== null" class="muted">
+      實收派息 ≈ {{ fmtMoney(netPreview) }}
+    </p>
 
     <p v-if="props.dividend.estimated_amount !== null" class="muted">
       預期派息 {{ fmtMoney(props.dividend.estimated_amount) }}

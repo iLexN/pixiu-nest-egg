@@ -21,7 +21,7 @@ The importer reads:
 - `MPF` — the account table under the 總供款額/帳戶結存 headers; the fund-details table below it and the remark row are ignored
 - `債券` — the registry table under the `end` header (label / 發行編號 / principal / maturity), then each bond's coupon block under its 發行編號 label line: 付息日 / 利息釐定日 / 年息率 / 每1萬利息 / cached 利息; `待定` cells import as NULL
 - `AIA` — the D–O policy block: rows with numeric `buy usd`/`now usd` cells and a label or policy number; a blank label inherits the plan name above it, and the remark cells (L onward) join into `note`. A row resuming after a blank gap imports `in_account` false, and the row whose removal reconciles Σ premium/Σ value to the cached `buy usd`/`now usd` cells imports `excluded` — `irene 20%` and `irene 年金` respectively today; unresolvable cases flag nothing and report a warning
-- `Overview` — `N3`, the cached USD→HKD rate, which seeds `aia.usd_hkd_rate` once; plus `E1` (salary → `overview.salary`), `N8` (current-year pool rate → `overview.pool_rate.<year>`), the manual cells `B7`/`B8`/`B16`/`B17` → `manual_assets` (all seed only when unset), and the 投資目標 block's `J:K` year/invested cells → `year_review.invested_adjustment` for years the YearInReview sheet has no block for (e.g. 2023's +110000), never overwriting a stored value
+- `Overview` — `N3`, the cached USD→HKD rate, which seeds `aia.usd_hkd_rate` once; plus `E1` (salary → `overview.salary`), `N8` (current-year pool rate → `overview.pool_rate.<year>`), the 目標 amounts `K12`/`K18` → `overview.goal1_amount`/`overview.goal2_amount`, the manual cells `B7`/`B8`/`B16`/`B17` → `manual_assets` (all seed only when unset), and the 投資目標 block's `J:K` year/invested cells → `year_review.invested_adjustment` for years the YearInReview sheet has no block for (e.g. 2023's +110000), never overwriting a stored value
 - `Month Stat` — monthly rows since 2023-12: F/O/P store as-is (blank → 0), B/D store their cached literal unless the cell links to `Overview!` (then NULL = live), G/I−J/L-tail materialize as `month_items` keeping the formula text in `note`, and N 利息 imports as an `interest` item holding `sheet N − all in-month auto events` (the unexplained remainder, labeled 其他利息 — skipped for blank cells and exact matches; unreceived deposits are still subtracted so their later 收訖 doesn't double-count a pre-typed cell); each row's salary is recovered from its L formula's leading literal (fallbacks: previous row's H trailing literal, latest known, `Overview!E1`); the yearly block feeds only the historical pool-rate solve — past years' `overview.pool_rate.<y>` are derived from the sheet's M/G/H/N chain (e.g. 2024 → 0.53, 2025 → 0.425); date-only rows are skipped
 - The market sheets' year blocks (B year, C net invested, F 成本, H 總市值) and `YearInReview`'s 股票 rows — seeded into `year_snapshots` for years before the current one; the current year stays live
 
@@ -74,7 +74,13 @@ cargo run -p wealth-backend --bin check_parity -- "財富分析報告.xlsx"
     user-edited manual inputs report informational. The J22:N27 投資目標
     block compares J22, the K invested cells, and completed-year N growth
     normally; the L/M cells and the current-year N report informational
-    since the unified formula supersedes the sheet's per-year ones
+    since the unified formula supersedes the sheet's per-year ones. The
+    J10:M20 + N13:P16 目標 cells compare the seeded milestone amounts
+    `K12`/`K18` normally and the derived cells (`K13`, `L12`, `L13`,
+    `K14`, `L14`, `K20`, `L20`, `O14:P16`) informationally — they drift
+    with live prices, today's date, and the app's own N4 (the latest
+    completed year's `income_value_rate`, not the sheet's cached
+    `YearInReview!L13`)
   → rebuilds each YearInReview block and compares every cell it parses:
     ledger sums, interest, seeded manual figures (收入/invested/投資P/L),
     past-year bond/deposit overrides, and the derived blends; the

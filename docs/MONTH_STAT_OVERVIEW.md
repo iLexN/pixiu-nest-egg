@@ -13,6 +13,8 @@ Analysis of the last two unmigrated core sheets in `財富分析報告.xlsx`, ca
 > **Also implemented (add-cash-forecast, 2026-09):** the `A20:H36` 預測 grid — `GET /api/forecast` derives the seven-month projection (start/salary/spend/finish/interest/bill/returns → 活期, 定期+SC locked chain, 半流動, ref check); only `forecast_items` plans are stored, and `POST /api/forecast-items/:id/convert` turns a plan into a real deposit. The sheet's B22/B24/B25 anchors and the block-copy ritual are gone. See `docs/overview.md` → "The 預測 forecast grid".
 >
 > **Also implemented (add-money-master, 2026-09):** the `J29:N35` Money Master block — `saved` + challenge params are `app_meta` settings edited in 月結 settings; `month now` derives from `start_date` and `comming save per month` derives from salary + remaining gap, each with an optional override. See `docs/overview.md` → the Money Master paragraph.
+>
+> **Also implemented (overview-goals, 2026-09):** the `J10:M20` + `N13:P16` 目標 blocks — the milestone amounts (`K12`/`K18`) seed once into `overview.goal1_amount`/`goal2_amount`, the constants (`1.07`/`30`/`0.7`) live in `overview.goal3_inflation`/`goal3_years`/`final_replacement`, and every derived figure (saving pace, passive return, remain/years/ETA) computes on `GET /api/overview`. `N4` resolves to the latest completed year's `income_value_rate`; a goal with `remain ≤ 0` shows 已達成 instead of the sheet's negative years. See `docs/overview.md` → the 目標 paragraph.
 
 ## Scope decision (confirmed with user)
 
@@ -72,7 +74,7 @@ A ~90%-derived dashboard. Blocks:
 - **Liquidity tiers J/K**: can-use K4 = B14−K5; cannot-use K5 = N6 (6-month salary); short-term K6 = B7+B4+B3+B9; long-term K7 = B5+B6+B8.
 - **Rates M/N**: N3 GOOGLEFINANCE USD→HKD (already in app as `aia.usd_hkd_rate`, seeded at import), N4 avg return/year `=YearInReview!L13`, N5/N6 3/6-month salary, N7 = 25% of 流動資產, **N8 = 娛樂/pool rate (manual, per year)**.
 - **估值 history Q4:R8** — manual checkpoints; user says ignorable now.
-- **Targets J10:M18 / N13:S16**: 1st 目標 K12 = 1.55M, 2nd K18 = 2.5M; saving/year L12 = average of several sources incl. `'Month Stat'!L8*12`; 3rd target O14 = budget×1.07×12×30yr; Final Target P14 = salary×0.7×12÷N4, R14 = 10M; years-to-target and projected dates. Inputs essentially static.
+- **Targets J10:M18 / N13:S16** *(migrated — overview-goals; the R-column extras stay in the sheet)*: 1st 目標 K12 = 1.55M, 2nd K18 = 2.5M; saving/year L12 = average of several sources incl. `'Month Stat'!L8*12`; 3rd target O14 = budget×1.07×12×30yr; Final Target P14 = salary×0.7×12÷N4, R14 = 10M; years-to-target and projected dates. Inputs essentially static.
 - **預測 forecast grid A20:H36**: monthly cash projection Sep 2026→Mar 2027 — start balance + salary − budget + 定期 finish (`'2026回報率'!D44:D47` / `'定期Info'!D9:D11`) + 利息 (`'2026回報率'!C44:C47` + trade-sheet dividend sums) − tax/AIA/差餉 items − SC高息馬拉松 placements. This is the cash-planning tool.
 - **Invested table J22:N34**: per-year invested (K23 literal, K24/K25 `YearInReview!F5/F14`, K26 `YearInReview!F23`), target vs now, months saved.
 - **Long-term projection P19:V36**: 12-year compounding (total+利息, per-month, without-play-pool, HappyPool split at N8).

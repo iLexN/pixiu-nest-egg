@@ -776,6 +776,8 @@ async fn import_dividends(
             estimated_amount,
             received_amount,
             received_price,
+            withholding_tax: None,
+            gross_amount: None,
         })
         .map_err(|errors| {
             anyhow!(
@@ -1237,6 +1239,25 @@ async fn import_months(pool: &SqlitePool, data: &WorkbookData) -> anyhow::Result
         )
         .await?;
         report.settings_seeded += 1;
+    }
+    // The 目標 milestone amounts seed from Overview!K12/K18 once — later
+    // edits in settings win over re-imports.
+    for (key, value) in [
+        (
+            crate::routes::months::GOAL1_AMOUNT_KEY,
+            data.overview.goals.goal1_amount,
+        ),
+        (
+            crate::routes::months::GOAL2_AMOUNT_KEY,
+            data.overview.goals.goal2_amount,
+        ),
+    ] {
+        if let Some(amount) = value
+            && crate::mpf::meta_get(pool, key).await?.is_none()
+        {
+            crate::mpf::meta_put(pool, key, Some(&amount.to_string())).await?;
+            report.settings_seeded += 1;
+        }
     }
     let rate_key = crate::routes::months::pool_rate_key;
     if crate::mpf::meta_get(pool, &rate_key(current_year))

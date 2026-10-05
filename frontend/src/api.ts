@@ -456,6 +456,8 @@ export interface Dividend {
   estimated_amount: number | null
   received_amount: number | null
   received_price: number | null
+  withholding_tax: number | null
+  gross_amount: number | null
   note: string | null
   status: DividendStatus
   amount: number | null
@@ -485,6 +487,9 @@ export interface DividendPatch {
   estimated_amount?: number | null
   received_amount?: number | null
   received_price?: number | null
+  /** Input-only 派息 gross; the backend stores received_amount = gross − tax. */
+  gross_amount?: number | null
+  withholding_tax?: number | null
   note?: string | null
   refresh_snapshots?: boolean
   /** On 收訖, bank the amount (HK → HS cash row, US → IBKR USD cash).
@@ -908,6 +913,15 @@ export interface MonthSettings {
   /** Optional overrides pinning the derived month/coming-save while set. */
   money_master_month_now: number | null
   money_master_coming_save: number | null
+  /** `overview.goal1_amount`/`goal2_amount` — the 1st/2nd 目標 targets
+   * (Overview!K12/K18); null while unset. */
+  goal1_amount: number | null
+  goal2_amount: number | null
+  /** The effective 3rd-target constants (1.07 / 30 while unset). */
+  goal3_inflation: number
+  goal3_years: number
+  /** The effective Final Target salary-replacement ratio (0.7 while unset). */
+  final_replacement: number
 }
 
 export interface MonthStatPatch {
@@ -954,6 +968,13 @@ export interface MonthSettingsPatch {
   money_master_month_now?: number | null
   /** `null` clears the override so `coming_save` derives again. */
   money_master_coming_save?: number | null
+  /** `null` clears the amount, blanking that milestone's figures. */
+  goal1_amount?: number | null
+  goal2_amount?: number | null
+  /** `null` resets the constant to its default (1.07 / 30 / 0.7). */
+  goal3_inflation?: number | null
+  goal3_years?: number | null
+  final_replacement?: number | null
 }
 
 /** A forecast plan kind — the 預測 row the item belongs to. */
@@ -995,6 +1016,17 @@ export interface ForecastItemPatch {
   note?: string | null
 }
 
+/** A real deposit placed in the month — a read-only line in its bank's plan
+ * row (HS → 定期 HS, else SC高息馬拉松). */
+export interface ForecastPlacement {
+  deposit_id: number
+  label: string | null
+  bank: string | null
+  principal: number
+  /** `YYYY-MM-DD` — the day the money left 活期. */
+  start_date: string
+}
+
 /** One month column of the 預測 grid (sheet columns B:H). */
 export interface ForecastMonth {
   month: string
@@ -1008,6 +1040,7 @@ export interface ForecastMonth {
   interest_components: InterestComponent[]
   bill: number | null
   plan_items: ForecastItem[]
+  deposit_placements: ForecastPlacement[]
   deposit_return: number
   cash: number | null
   locked: number | null
@@ -1142,6 +1175,51 @@ export interface MoneyMaster {
   can_use: number | null
 }
 
+/** One J10:M20 milestone (1st/2nd 目標): a stored target plus the derived
+ * remain/years/ETA — all null while inputs are missing, and years/eta null
+ * once the goal is reached (remain ≤ 0). */
+export interface GoalMilestone {
+  /** K12/K18. */
+  target: number | null
+  /** K14/K20 = target − current_invest. */
+  remain: number | null
+  /** L14/L20 = remain ÷ saving_year. */
+  years: number | null
+  /** J11/J17 = today + round(365 × years) days, YYYY-MM-DD. */
+  eta: string | null
+}
+
+/** One N13:P16 formula goal (3rd target / Final Target). */
+export interface FormulaGoal {
+  target: number | null
+  remain: number | null
+  /** O16/P16; null once the goal is reached. */
+  years: number | null
+  /** today + round(365 × years) days, YYYY-MM-DD; null with years. */
+  eta: string | null
+}
+
+/** The 目標 block (Overview!J10:M20 + N13:P16). */
+export interface OverviewGoals {
+  /** N4 = the latest completed year's income_value_rate, with its year. */
+  n4_rate: number | null
+  n4_year: number | null
+  /** K13 = 港股 + 債券 + IBKR. */
+  current_invest: number | null
+  /** L12/M12: the saving pace per year/month. */
+  saving_year: number | null
+  saving_month: number | null
+  /** L13/M13 = K13 × N4. */
+  passive_return_year: number | null
+  passive_return_month: number | null
+  /** The 1st/2nd 目標 rows, in order. */
+  milestones: GoalMilestone[]
+  /** O14:O16 — budget × inflation × 12 × years vs 流動資產. */
+  third: FormulaGoal
+  /** P14:P16 — salary × replacement × 12 ÷ N4 vs 總數. */
+  final_goal: FormulaGoal
+}
+
 export interface OverviewResponse {
   today: string
   rate: number | null
@@ -1159,6 +1237,7 @@ export interface OverviewResponse {
   invest_targets: InvestTargets
   liquidity_tiers: LiquidityTiers
   money_master: MoneyMaster
+  goals: OverviewGoals
 }
 
 /** Carries the server's field-level messages so forms can show them inline. */

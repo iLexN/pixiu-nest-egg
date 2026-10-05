@@ -43,9 +43,36 @@ pub const MM_TARGET_MONTHS_KEY: &str = "money_master.target_months";
 pub const MM_TARGET_AMOUNT_KEY: &str = "money_master.target_amount";
 pub const MM_MONTH_NOW_KEY: &str = "money_master.month_now";
 pub const MM_COMING_SAVE_KEY: &str = "money_master.coming_save";
+/// `app_meta` keys for the Overview 目標 block: the two milestone amounts
+/// (the sheet's K12/K18 literals, seeded at import) and the three formula
+/// constants, which fall back to the sheet literals while unset.
+pub const GOAL1_AMOUNT_KEY: &str = "overview.goal1_amount";
+pub const GOAL2_AMOUNT_KEY: &str = "overview.goal2_amount";
+pub const GOAL3_INFLATION_KEY: &str = "overview.goal3_inflation";
+pub const GOAL3_YEARS_KEY: &str = "overview.goal3_years";
+pub const FINAL_REPLACEMENT_KEY: &str = "overview.final_replacement";
+pub const DEFAULT_GOAL3_INFLATION: f64 = 1.07;
+pub const DEFAULT_GOAL3_YEARS: f64 = 30.0;
+pub const DEFAULT_FINAL_REPLACEMENT: f64 = 0.7;
 
 pub fn pool_rate_key(year: i32) -> String {
     format!("{POOL_RATE_PREFIX}{year}")
+}
+
+/// The effective 3rd-target/Final-Target constants — the sheet literals
+/// (`1.07`, `30`, `0.7`) while unset.
+pub async fn goal_constants(pool: &SqlitePool) -> Result<(f64, f64, f64), ApiError> {
+    Ok((
+        mpf::meta_f64(pool, GOAL3_INFLATION_KEY)
+            .await?
+            .unwrap_or(DEFAULT_GOAL3_INFLATION),
+        mpf::meta_f64(pool, GOAL3_YEARS_KEY)
+            .await?
+            .unwrap_or(DEFAULT_GOAL3_YEARS),
+        mpf::meta_f64(pool, FINAL_REPLACEMENT_KEY)
+            .await?
+            .unwrap_or(DEFAULT_FINAL_REPLACEMENT),
+    ))
 }
 
 /// The configured 半流動資金 target share of 流動資產 — `0.25` while unset.
@@ -438,7 +465,7 @@ fn wants_live(stored: &[StoredMonth]) -> bool {
 /// in-progress change. Gated to the current month: a future placeholder has
 /// no knowable change and a stale last row must not pull a live diff into
 /// an old year.
-fn live_tail(rows: &[MonthStatRow], live: Option<LiveTotals>) -> Option<LiveTotals> {
+pub(crate) fn live_tail(rows: &[MonthStatRow], live: Option<LiveTotals>) -> Option<LiveTotals> {
     live.filter(|_| rows.last().is_some_and(|row| row.month == live_from()))
 }
 
@@ -565,6 +592,7 @@ pub async fn summary(
 )]
 pub async fn settings(State(state): State<AppState>) -> Result<Json<MonthSettings>, ApiError> {
     let pool_rate_year = today().year();
+    let (goal3_inflation, goal3_years, final_replacement) = goal_constants(&state.pool).await?;
     Ok(Json(MonthSettings {
         salary: mpf::meta_f64(&state.pool, SALARY_KEY).await?,
         pool_rate: mpf::meta_f64(&state.pool, &pool_rate_key(pool_rate_year)).await?,
@@ -579,6 +607,11 @@ pub async fn settings(State(state): State<AppState>) -> Result<Json<MonthSetting
         money_master_target_amount: mpf::meta_f64(&state.pool, MM_TARGET_AMOUNT_KEY).await?,
         money_master_month_now: mpf::meta_f64(&state.pool, MM_MONTH_NOW_KEY).await?,
         money_master_coming_save: mpf::meta_f64(&state.pool, MM_COMING_SAVE_KEY).await?,
+        goal1_amount: mpf::meta_f64(&state.pool, GOAL1_AMOUNT_KEY).await?,
+        goal2_amount: mpf::meta_f64(&state.pool, GOAL2_AMOUNT_KEY).await?,
+        goal3_inflation,
+        goal3_years,
+        final_replacement,
     }))
 }
 
@@ -667,6 +700,27 @@ pub async fn update_settings(
             errors.push(FieldError::new(field, "must be a number"));
         }
     }
+    for (field, value) in [
+        ("goal1_amount", patch.goal1_amount),
+        ("goal2_amount", patch.goal2_amount),
+    ] {
+        if let Some(Some(value)) = value
+            && (!value.is_finite() || value < 0.0)
+        {
+            errors.push(FieldError::new(field, "goal amount must not be negative"));
+        }
+    }
+    for (field, value) in [
+        ("goal3_inflation", patch.goal3_inflation),
+        ("goal3_years", patch.goal3_years),
+        ("final_replacement", patch.final_replacement),
+    ] {
+        if let Some(Some(value)) = value
+            && (!value.is_finite() || value <= 0.0)
+        {
+            errors.push(FieldError::new(field, "must be positive"));
+        }
+    }
     if !errors.is_empty() {
         return Err(ApiError::Validation(errors));
     }
@@ -713,6 +767,11 @@ pub async fn update_settings(
         (MM_TARGET_AMOUNT_KEY, patch.money_master_target_amount),
         (MM_MONTH_NOW_KEY, patch.money_master_month_now),
         (MM_COMING_SAVE_KEY, patch.money_master_coming_save),
+        (GOAL1_AMOUNT_KEY, patch.goal1_amount),
+        (GOAL2_AMOUNT_KEY, patch.goal2_amount),
+        (GOAL3_INFLATION_KEY, patch.goal3_inflation),
+        (GOAL3_YEARS_KEY, patch.goal3_years),
+        (FINAL_REPLACEMENT_KEY, patch.final_replacement),
     ] {
         if let Some(value) = value {
             crate::mpf::meta_put(
@@ -737,10 +796,10 @@ async fn load_deposit_events(
     pool: &SqlitePool,
     range: Option<(String, String)>,
 ) -> Result<Vec<SuggestionDeposit>, ApiError> {
-    let rows = match &range {
-        Some((first, next)) => {
-            sqlx::query(
-                "SELECT id, label, start_date, end_date, principal, interest, received_at \
+    let rows =
+        match &range {
+            Some((first, next)) => sqlx::query(
+                "SELECT id, label, bank, start_date, end_date, principal, interest, received_at \
                  FROM deposits \
              WHERE (start_date IS NOT NULL AND start_date >= ? AND start_date < ?) \
              OR (end_date >= ? AND end_date < ?)",
@@ -750,17 +809,14 @@ async fn load_deposit_events(
             .bind(first)
             .bind(next)
             .fetch_all(pool)
-            .await?
-        }
-        None => {
-            sqlx::query(
-                "SELECT id, label, start_date, end_date, principal, interest, received_at \
+            .await?,
+            None => sqlx::query(
+                "SELECT id, label, bank, start_date, end_date, principal, interest, received_at \
                  FROM deposits",
             )
             .fetch_all(pool)
-            .await?
-        }
-    };
+            .await?,
+        };
     rows.iter()
         .map(|row| {
             let start_date: Option<String> = row.try_get("start_date")?;
@@ -773,6 +829,7 @@ async fn load_deposit_events(
                 interest: row.try_get::<Option<f64>, _>("interest")?.unwrap_or(0.0),
                 label: row.try_get("label")?,
                 received: received_at.is_some(),
+                bank: row.try_get("bank")?,
             })
         })
         .collect()
@@ -1680,6 +1737,71 @@ mod tests {
         .await
         .expect_err("rejected");
         assert!(matches!(err, ApiError::Validation(_)));
+    }
+
+    #[tokio::test]
+    async fn update_settings_round_trips_the_goal_settings() {
+        let pool = connect_memory().await.expect("memory db");
+        let state = AppState { pool };
+
+        // The constants fall back to the sheet literals while unset.
+        let current = settings(State(state.clone())).await.expect("settings").0;
+        assert_eq!(current.goal1_amount, None);
+        assert_eq!(current.goal2_amount, None);
+        assert_eq!(current.goal3_inflation, DEFAULT_GOAL3_INFLATION);
+        assert_eq!(current.goal3_years, DEFAULT_GOAL3_YEARS);
+        assert_eq!(current.final_replacement, DEFAULT_FINAL_REPLACEMENT);
+
+        let updated = update_settings(
+            State(state.clone()),
+            Json(MonthSettingsPatch {
+                goal1_amount: Some(Some(1_550_000.0)),
+                goal3_inflation: Some(Some(1.05)),
+                ..Default::default()
+            }),
+        )
+        .await
+        .expect("patched")
+        .0;
+        assert_eq!(updated.goal1_amount, Some(1_550_000.0));
+        assert_eq!(updated.goal3_inflation, 1.05);
+        assert_eq!(updated.goal3_years, DEFAULT_GOAL3_YEARS);
+
+        // `null` clears an amount and resets a constant to its default.
+        let reset = update_settings(
+            State(state.clone()),
+            Json(MonthSettingsPatch {
+                goal1_amount: Some(None),
+                goal3_inflation: Some(None),
+                ..Default::default()
+            }),
+        )
+        .await
+        .expect("reset")
+        .0;
+        assert_eq!(reset.goal1_amount, None);
+        assert_eq!(reset.goal3_inflation, DEFAULT_GOAL3_INFLATION);
+
+        // Negative amounts and non-positive constants are rejected.
+        for patch in [
+            MonthSettingsPatch {
+                goal1_amount: Some(Some(-1.0)),
+                ..Default::default()
+            },
+            MonthSettingsPatch {
+                goal3_years: Some(Some(0.0)),
+                ..Default::default()
+            },
+            MonthSettingsPatch {
+                final_replacement: Some(Some(-0.5)),
+                ..Default::default()
+            },
+        ] {
+            let err = update_settings(State(state.clone()), Json(patch))
+                .await
+                .expect_err("rejected");
+            assert!(matches!(err, ApiError::Validation(_)));
+        }
     }
 
     #[tokio::test]

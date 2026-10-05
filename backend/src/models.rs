@@ -388,7 +388,8 @@ pub enum DividendStatus {
 
 /// A 派息 record. `shares_held`, `buy_cost` and `received_price` are
 /// point-in-time snapshots stored at write time; `status`, `amount`,
-/// `yield_on_cost`, `yield_on_price` and `variance` are derived on read.
+/// `yield_on_cost`, `yield_on_price`, `variance` and `gross_amount` are
+/// derived on read.
 #[derive(Debug, Clone, Serialize, ToSchema)]
 pub struct Dividend {
     pub id: i64,
@@ -405,10 +406,14 @@ pub struct Dividend {
     pub buy_cost: Option<f64>,
     /// 預期派息.
     pub estimated_amount: Option<f64>,
-    /// 實收派息; NULL while pending.
+    /// 實收派息 (net of withholding tax); NULL while pending.
     pub received_amount: Option<f64>,
     /// 現價 snapshot at receipt (the sheet's N denominator).
     pub received_price: Option<f64>,
+    /// Tax withheld from the gross 派息; NULL when none was recorded.
+    pub withholding_tax: Option<f64>,
+    /// 派息 gross: received_amount + withholding_tax when both are present.
+    pub gross_amount: Option<f64>,
     pub note: Option<String>,
     pub status: DividendStatus,
     /// received_amount when present, else estimated_amount.
@@ -724,6 +729,11 @@ pub struct DividendPatch {
     pub received_amount: Option<Option<f64>>,
     #[serde(default, deserialize_with = "nullable")]
     pub received_price: Option<Option<f64>>,
+    /// Input-only 派息 gross; resolves to received_amount = gross − tax.
+    #[serde(default)]
+    pub gross_amount: Option<f64>,
+    #[serde(default, deserialize_with = "nullable")]
+    pub withholding_tax: Option<Option<f64>>,
     #[serde(default, deserialize_with = "nullable")]
     pub note: Option<Option<String>>,
     #[serde(default)]
@@ -1134,6 +1144,17 @@ pub struct MonthSettings {
     /// the derived figures while set.
     pub money_master_month_now: Option<f64>,
     pub money_master_coming_save: Option<f64>,
+    /// `overview.goal1_amount`/`overview.goal2_amount` — the 1st/2nd 目標
+    /// milestone targets (Overview!K12/K18); `null` while unset.
+    pub goal1_amount: Option<f64>,
+    pub goal2_amount: Option<f64>,
+    /// `overview.goal3_inflation`/`overview.goal3_years` — the 3rd target's
+    /// constants (the sheet's `1.07` and `25+5`); the effective values.
+    pub goal3_inflation: f64,
+    pub goal3_years: f64,
+    /// `overview.final_replacement` — the Final Target's salary-replacement
+    /// ratio (the sheet's `0.7`); the effective value.
+    pub final_replacement: f64,
 }
 
 /// Absent fields are left untouched; `null` clears `salary`/`pool_rate`/
@@ -1167,6 +1188,18 @@ pub struct MonthSettingsPatch {
     /// `null` clears the override so `coming_save` derives again.
     #[serde(default, deserialize_with = "nullable")]
     pub money_master_coming_save: Option<Option<f64>>,
+    /// `null` clears the milestone amount, blanking that milestone's figures.
+    #[serde(default, deserialize_with = "nullable")]
+    pub goal1_amount: Option<Option<f64>>,
+    #[serde(default, deserialize_with = "nullable")]
+    pub goal2_amount: Option<Option<f64>>,
+    /// `null` resets the constant to its default (1.07 / 30 / 0.7).
+    #[serde(default, deserialize_with = "nullable")]
+    pub goal3_inflation: Option<Option<f64>>,
+    #[serde(default, deserialize_with = "nullable")]
+    pub goal3_years: Option<Option<f64>>,
+    #[serde(default, deserialize_with = "nullable")]
+    pub final_replacement: Option<Option<f64>>,
 }
 
 /// A computed candidate item for a month, never stored until accepted.
@@ -1374,6 +1407,61 @@ pub struct MoneyMaster {
     pub can_use: Option<f64>,
 }
 
+/// One `J10:M20` milestone (the sheet's 1st/2nd 目標): a fixed stored target
+/// and its derived remain/years/ETA. Every figure is absent while its inputs
+/// are missing; `years`/`eta` are also absent once `remain ≤ 0` (已達成).
+#[derive(Debug, Clone, Default, Serialize, ToSchema)]
+pub struct GoalMilestone {
+    /// K12/K18: the target amount (`overview.goal1_amount`/`goal2_amount`).
+    pub target: Option<f64>,
+    /// K14/K20 = target − current_invest.
+    pub remain: Option<f64>,
+    /// L14/L20 = remain ÷ saving_year.
+    pub years: Option<f64>,
+    /// J11/J17 = today + round(365 × years) days, `YYYY-MM-DD`.
+    pub eta: Option<String>,
+}
+
+/// One `N13:P16` formula goal (the sheet's 3rd target / Final Target): the
+/// target is a formula, not a stored amount.
+#[derive(Debug, Clone, Default, Serialize, ToSchema)]
+pub struct FormulaGoal {
+    /// O14/P14: the formula target.
+    pub target: Option<f64>,
+    /// O15/P15 = target − 流動資產 (3rd) / 總數 (final).
+    pub remain: Option<f64>,
+    /// O16/P16 = remain ÷ the goal's yearly pace; absent once `remain ≤ 0`.
+    pub years: Option<f64>,
+    /// today + round(365 × years) days, `YYYY-MM-DD` — absent while `years`
+    /// is absent, including once the goal is reached.
+    pub eta: Option<String>,
+}
+
+/// The `Overview!J10:M20` + `N13:P16` 目標 block: the shared saving/return
+/// figures, the two stored-amount milestones, and the two formula targets.
+#[derive(Debug, Clone, Default, Serialize, ToSchema)]
+pub struct OverviewGoals {
+    /// N4 = `income_value_rate` of the latest completed year (today's − 1);
+    /// both absent while that year's row or rate is missing.
+    pub n4_rate: Option<f64>,
+    pub n4_year: Option<i32>,
+    /// K13 = 港股 + 債券 + IBKR; absent while the IBKR HKD total is absent.
+    pub current_invest: Option<f64>,
+    /// L12 = the sheet's AVERAGE over the five saving sources, absent terms
+    /// skipped; M12 = L12 ÷ 12.
+    pub saving_year: Option<f64>,
+    pub saving_month: Option<f64>,
+    /// L13 = K13 × N4; M13 = L13 ÷ 12.
+    pub passive_return_year: Option<f64>,
+    pub passive_return_month: Option<f64>,
+    /// The 1st/2nd 目標 rows, in order.
+    pub milestones: Vec<GoalMilestone>,
+    /// O14:O16 3rd target = 生活預算 × inflation × 12 × years vs 流動資產.
+    pub third: FormulaGoal,
+    /// P14:P16 Final Target = salary × replacement × 12 ÷ N4 vs 總數.
+    pub final_goal: FormulaGoal,
+}
+
 /// `GET /api/overview`: the sheet's A3:C18 block plus the B1/H1/J1 headline.
 #[derive(Debug, Clone, Serialize, ToSchema)]
 pub struct OverviewResponse {
@@ -1404,6 +1492,8 @@ pub struct OverviewResponse {
     pub liquidity_tiers: LiquidityTiers,
     /// J29:N35.
     pub money_master: MoneyMaster,
+    /// J10:M20 + N13:P16.
+    pub goals: OverviewGoals,
 }
 
 /// Which 預測 row a forecast item belongs to. `hs_deposit`/`sc_deposit` are
@@ -1512,6 +1602,22 @@ pub struct ForecastItemPatch {
     pub note: Option<Option<String>>,
 }
 
+/// A real deposit placed in the month (`start_date` inside it) — shown
+/// read-only in its bank's plan row alongside the editable `plan_items`.
+#[derive(Debug, Clone, Serialize, ToSchema)]
+pub struct ForecastPlacement {
+    /// The `deposits` row id.
+    pub deposit_id: i64,
+    /// The deposit's label (`SC-9632`-style), absent while unset.
+    pub label: Option<String>,
+    /// The deposit's bank; `HS` maps to the 定期 HS row, anything else to
+    /// SC高息馬拉松.
+    pub bank: Option<String>,
+    pub principal: f64,
+    /// `YYYY-MM-DD` — the day the money left 活期.
+    pub start_date: String,
+}
+
 /// One month column of the Overview 預測 grid (sheet columns B:H).
 #[derive(Debug, Clone, Serialize, ToSchema)]
 pub struct ForecastMonth {
@@ -1538,12 +1644,16 @@ pub struct ForecastMonth {
     pub bill: Option<f64>,
     /// The month's stored forecast items — the sheet's editable cells.
     pub plan_items: Vec<ForecastItem>,
+    /// The month's real deposit placements (`start_date` inside it), read-only
+    /// lines in the deposit rows.
+    pub deposit_placements: Vec<ForecastPlacement>,
     /// Row 35 TBC - 定期 end: Σ principal returning from earlier plans.
     pub deposit_return: f64,
-    /// Row 23 活期 = Σ(start..deposit_return); absent while `start` is.
+    /// Row 23 活期 = Σ(start..deposit_return) − deposit placements; absent
+    /// while `start` is.
     pub cash: Option<f64>,
-    /// Row 24 定期+SC: prior `locked` − finish − plans − returns, anchored on
-    /// Σ active deposit principal.
+    /// Row 24 定期+SC: prior `locked` − finish − plans + placements − returns,
+    /// anchored on the deposits held on the window's first day.
     pub locked: Option<f64>,
     /// Row 21 半流動 = `cash` + `locked`.
     pub semi_liquid: Option<f64>,

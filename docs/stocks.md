@@ -296,6 +296,8 @@ The snapshots are stored, not recomputed: buying more of the same stock later do
 ```text
 收訖 on a pending row → DividendReceiveForm
   → PATCH /api/dividends/:id { received_amount, received_price?, bank_in? }
+    — or, US only, { gross_amount, withholding_tax?, received_price?, bank_in? }
+    and the backend stores received_amount = gross_amount − withholding_tax
   → status becomes received; both rates now use the received amount
   → received_price omitted or null → the stock's current 現價 is stored
     as the receipt snapshot (NULL when the stock has no 現價)
@@ -305,7 +307,7 @@ The snapshots are stored, not recomputed: buying more of the same stock later do
   → 同時更新現價 checked → a separate PATCH /api/stocks/:id sets manual_price
 ```
 
-The 現價 entered at receipt is stored on the dividend record only — and a blank 當時現價 snapshots the stock's current 現價 onto the record (a read, not a write). It does not update the stock's 現價 unless 同時更新現價 is checked, because the receipt price may be recorded on a different day than the price update. Clearing `received_price` on an already-received record stays cleared; clearing `received_amount` reverses the bank-in credit and deletes the `div:<id>` item.
+The 現價 entered at receipt is stored on the dividend record only — and a blank 當時現價 snapshots the stock's current 現價 onto the record (a read, not a write). It does not update the stock's 現價 unless 同時更新現價 is checked, because the receipt price may be recorded on a different day than the price update. Clearing `received_price` on an already-received record stays cleared; clearing `received_amount` reverses the bank-in credit, deletes the `div:<id>` item, and clears `withholding_tax`.
 
 ## Load the 股票 → 派息 view
 
@@ -320,7 +322,7 @@ DividendsView (股票 → 派息 tab, market-scoped like 交易記錄)
       → received history rows
 ```
 
-Derived on every read, never stored: `status`, effective `amount`, `yield_on_cost` (amount ÷ buy_cost), `yield_on_price` (amount ÷ received_price × shares_held), `variance` (received − estimated). Yields are empty when their denominator is missing.
+Derived on every read, never stored: `status`, effective `amount`, `yield_on_cost` (amount ÷ buy_cost), `yield_on_price` (amount ÷ received_price × shares_held), `variance` (received − estimated), `gross_amount` (received + withholding_tax). Yields are empty when their denominator is missing.
 
 ## Load the yearly table in 股票 → 總覽
 
