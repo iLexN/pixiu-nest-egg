@@ -2739,6 +2739,8 @@ pub fn invest_targets(rows: &[YearReviewRow], current_year: i32) -> crate::model
             year: row.year,
             invested,
             raise: row.investment.raise,
+            interest: row.investment.interest,
+            pool_spend: row.ledger.pool_spend,
             target,
             remain,
             growth,
@@ -3173,6 +3175,9 @@ pub fn overview_goals(input: &OverviewGoalsInput) -> crate::models::OverviewGoal
         milestones: vec![milestone(input.goal1_amount), milestone(input.goal2_amount)],
         third,
         final_goal,
+        goal3_inflation: input.goal3_inflation,
+        goal3_years: input.goal3_years,
+        final_replacement: input.final_replacement,
     }
 }
 
@@ -5750,6 +5755,15 @@ mod tests {
         ));
         assert_eq!(y2025.remain, None);
 
+        // Each row also carries the raw formula inputs, 0 when the year has
+        // none — the footnote expands the target from these.
+        assert!(approx_eq(y2026.interest, 62753.15));
+        assert!(approx_eq(y2026.pool_spend, 9593.0));
+        assert!(approx_eq(y2025.interest, 51900.65));
+        assert!(approx_eq(y2025.pool_spend, 38729.5));
+        assert_eq!(targets.rows[0].interest, 0.0);
+        assert_eq!(targets.rows[0].pool_spend, 0.0);
+
         // The first year has no prior: target/growth absent, invested present.
         assert_eq!(targets.rows[0].target, None);
         assert_eq!(targets.rows[0].growth, None);
@@ -6848,5 +6862,9 @@ mod tests {
             goals.final_goal.target.unwrap(),
             52_700.0 * 0.6 * 12.0 / 0.03851965006
         ));
+        // The effective constants echo so the card can expand the formulas.
+        assert_eq!(goals.goal3_inflation, 1.05);
+        assert_eq!(goals.goal3_years, 20.0);
+        assert_eq!(goals.final_replacement, 0.6);
     }
 }

@@ -125,12 +125,17 @@ The 總覽 page SHALL show a "過去 12 個月平均" card listing 總數增加,
 
 ### Requirement: 投資目標 block
 
-`GET /api/overview` SHALL return an `invest_targets` block mirroring the sheet's `J22:N27`: `avg_invested` (the sheet's `J22`) and `rows`, one per year covered by the year-review row set, ordered ascending. Each row SHALL carry `year`, `invested` (the year-review row's `invested`, absent while none), the year's effective `raise`, `target`, `remain`, and `growth` per the formula requirement below. `avg_invested` SHALL be the mean of `invested` over the rows for the three most recent completed years (years before the current year), skipping rows whose `invested` is absent, and SHALL be absent while no completed year reports `invested`.
+`GET /api/overview` SHALL return an `invest_targets` block mirroring the sheet's `J22:N27`: `avg_invested` (the sheet's `J22`) and `rows`, one per year covered by the year-review row set, ordered ascending. Each row SHALL carry `year`, `invested` (the year-review row's `invested`, absent while none), the year's effective `raise`, `interest` (the year-review row's 利息回報), `pool_spend` (the year-review row's 開心Pool支出), `target`, `remain`, and `growth` per the formula requirement below. `interest`/`pool_spend` SHALL be `0` when the year reports none — the same count-absent-as-0 semantics the target formula applies. `avg_invested` SHALL be the mean of `invested` over the rows for the three most recent completed years (years before the current year), skipping rows whose `invested` is absent, and SHALL be absent while no completed year reports `invested`.
 
 #### Scenario: Rows cover the year-review years
 
 - **WHEN** `GET /api/year-review` returns rows for 2023–2026 and the current year is 2026
 - **THEN** the block lists exactly those four years ascending
+
+#### Scenario: Rows carry the formula inputs
+
+- **WHEN** a year reports `interest` `62753.15` and `pool_spend` `9593` on its year-review row
+- **THEN** that year's `invest_targets` row carries `interest` `62753.15` and `pool_spend` `9593`
 
 #### Scenario: Average over the last three completed years
 
@@ -163,12 +168,22 @@ For each row the system SHALL derive `target` = `invested(Y-1) − interest(Y-1)
 
 ### Requirement: 投資目標 card
 
-The 總覽 page SHALL show an 投資目標 card with the `avg_invested` figure (近3年平均) as its header stat and a per-year table of 年份, `invested`, `target`, `remain`, and `growth` rendered as a percentage — `—` while a figure is absent.
+The 總覽 page SHALL show an 投資目標 card with the `avg_invested` figure (近3年平均) as its header stat and a per-year table of 年份, `invested`, `target`, `remain`, and `growth` rendered as a percentage — `—` while a figure is absent. A muted footnote SHALL expand the current year's `target` into its formula terms — `上年invested`, `上年利息回報`, `上年Pool支出×0.7`, `月薪增幅×50%*12`, `今年利息回報`, `今年Pool支出×0.7` — each followed by its computed contribution in parentheses, `—` while an input is absent; an absent `raise` counts as `0`. The footnote SHALL be absent while no current-year row exists.
 
 #### Scenario: Card renders the block
 
 - **WHEN** the block returns four year rows and an `avg_invested`
 - **THEN** the card shows the average and one table row per year, rendering absent figures as `—`
+
+#### Scenario: Footnote expands the current-year target
+
+- **WHEN** the current year is 2026, its row reports `raise` `1890`, `interest` `62753.15`, `pool_spend` `9593`, and the 2025 row reports `invested` `428635.41`, `interest` `51900.65`, `pool_spend` `38729.5`
+- **THEN** the footnote shows each term's contribution: `428,635.41`, `51,900.65`, `27,110.65`, `11,340.00`, `62,753.15`, `6,715.10`
+
+#### Scenario: Footnote hidden without a current-year row
+
+- **WHEN** the block lists no row for the current year
+- **THEN** the card shows no formula footnote
 
 ### Requirement: Goals block
 
@@ -180,6 +195,7 @@ Shared figures:
 - `current_invest` (`K13`): 港股 market value + 債券 active principal + the IBKR computed HKD total; absent while the IBKR total is absent (no USD→HKD rate).
 - `saving_year` (`L12`): the mean of the present terms among `averages.saved × 12`, `invest_targets.avg_invested`, `money_master.avg_per_month × 12`, running `saved_avg × 12`, and `(running saved_avg + interest_avg) × 12`, absent terms skipped — matching the sheet's `AVERAGE`; absent while no term is present. `saving_month` (`M12`) = `saving_year ÷ 12`.
 - `passive_return_year` (`L13`) = `current_invest × n4_rate`; `passive_return_month` (`M13`) = ÷ 12.
+- `goal3_inflation`/`goal3_years`/`final_replacement`: the effective `overview.goal3_*`/`overview.final_replacement` constants feeding `third.target`/`final_goal.target`, reporting the `1.07`/`30`/`0.7` defaults while unset — echoed so the card can expand the formulas without a second fetch.
 
 Each milestone row (`milestones[0]`/`milestones[1]` = the sheet's 1st/2nd 目標):
 
@@ -199,6 +215,11 @@ Unlike the sheet, a goal whose `remain ≤ 0` is already reached: its `years` an
 
 - **WHEN** `current_invest` is `1495563.431`, the saving terms are `30013.27` (monthly saved), `326841.2233` (avg invested), `30400.14056` (money-master monthly), `26362.84273` (running saved) and `4480.899118` (running interest), `n4_rate` `0.03851965006`, the milestone targets `1550000`/`2500000`, budget `14900` with `1.07`/`30`, liquid assets `1951776.034`, salary `52700` with `0.7`, total assets `3579321.076`, and running total change `59918.15472`
 - **THEN** `saving_year` ≈ `347656.233`, `saving_month` ≈ `28971.35275`, `passive_return_year` ≈ `57608.58002`, the 1st milestone reports `remain` ≈ `54436.56857` and `years` ≈ `0.1565815982`, the 2nd `remain` ≈ `1004436.569` and `years` ≈ `2.889166002`, `third.target` ≈ `5739480`, `third.remain` ≈ `3787703.966`, `third.years` ≈ `10.23358316`, `final_goal.target` ≈ `11492316.24`, `final_goal.remain` ≈ `7912995.166`, and `final_goal.years` ≈ `11.00528324`
+
+#### Scenario: Constants echoed
+
+- **WHEN** `overview.goal3_inflation` and `overview.goal3_years` are unset and `overview.final_replacement` is `0.6`
+- **THEN** the block reports `goal3_inflation` `1.07`, `goal3_years` `30`, and `final_replacement` `0.6`
 
 #### Scenario: Milestone ETA
 
@@ -244,12 +265,17 @@ The month-stat settings SHALL carry the five goal inputs as `app_meta` keys: `ov
 
 ### Requirement: 目標 card
 
-The 總覽 page SHALL show a `目標` card mirroring the sheet's layout: for the 1st/2nd milestones a row carrying target, remain, years, and the ETA date; for the 3rd and Final targets a row carrying target, remain, years, and the ETA date. The shared current invest value, saving per year / per month, and passive return per year / per month SHALL show once in the table footer rather than repeating on each milestone row. The card SHALL caption the `N4` rate with the year it belongs to. A goal whose `remain ≤ 0` SHALL show `已達成` instead of years/eta, and every absent figure renders as `—`.
+The 總覽 page SHALL show a `目標` card mirroring the sheet's layout: for the 1st/2nd milestones a row carrying target, remain, years, and the ETA date; for the 3rd and Final targets a row carrying target, remain, years, and the ETA date. The shared current invest value, saving per year / per month, and passive return per year / per month SHALL show once in the table footer rather than repeating on each milestone row. The card SHALL caption the `N4` rate with the year it belongs to. A goal whose `remain ≤ 0` SHALL show `已達成` instead of years/eta, and every absent figure renders as `—`. A muted footnote SHALL expand the two formula targets with live values — `3rd = 生活預算 (…) × 通脹 (…) × 12 × 年期 (…)` and `Final = 薪金 (…) × 替代率 (…) × 12 ÷ N4 (…)` — each input's current figure in parentheses, `—` while an input is absent.
 
 #### Scenario: Card renders the block
 
 - **WHEN** the block reports both milestones with targets, a shared `current_invest`/`saving_*`/`passive_return_*`, `years`/`eta` on each, and both formula goals with target/remain/years/eta
 - **THEN** the card shows all four rows with those figures and the `N4` caption naming its year
+
+#### Scenario: Footnote expands the formula targets
+
+- **WHEN** `living_budget` is `14900`, `goal3_inflation` `1.07`, `goal3_years` `30`, `salary` `52700`, `final_replacement` `0.7`, and `n4_rate` `0.03851965006`
+- **THEN** the footnote shows `14,900.00`, `1.07`, `30`, `52,700.00`, `70%`, and `3.852%` in place
 
 #### Scenario: Reached goal
 

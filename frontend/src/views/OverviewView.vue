@@ -247,6 +247,35 @@ async function saveEdit() {
   }
 }
 
+// ----- 投資目標 formula footnote -----
+
+/** The current calendar year's row; the footnote expands its target. */
+const targetNoteRow = computed(() => {
+  const year = new Date().getFullYear()
+  return data.value?.invest_targets.rows.find((row) => row.year === year) ?? null
+})
+
+const targetNotePrior = computed(() => {
+  const year = targetNoteRow.value?.year
+  if (year === undefined) return null
+  return data.value?.invest_targets.rows.find((row) => row.year === year - 1) ?? null
+})
+
+/** The six formula terms with their contributions; null without a current-year row. */
+const targetNoteTerms = computed(() => {
+  const row = targetNoteRow.value
+  const prior = targetNotePrior.value
+  if (!row) return null
+  return {
+    priorInvested: prior?.invested ?? null,
+    priorInterest: prior?.interest ?? null,
+    priorPool: prior === null ? null : prior.pool_spend * 0.7,
+    raiseTerm: (row.raise ?? 0) * 6,
+    interest: row.interest,
+    pool: row.pool_spend * 0.7,
+  }
+})
+
 onMounted(load)
 </script>
 
@@ -789,6 +818,30 @@ onMounted(load)
           </tr>
         </tbody>
       </table>
+      <p v-if="targetNoteTerms" class="muted note-formula">
+        <span>目標 =</span>
+        <span>
+          <span class="note-line">上年invested ({{
+            fmtMoney(targetNoteTerms.priorInvested) || '—'
+          }}) −</span>
+          <span class="note-line">上年利息回報 ({{
+            fmtMoney(targetNoteTerms.priorInterest) || '—'
+          }}) −</span>
+          <span class="note-line">上年Pool支出×0.7 ({{
+            fmtMoney(targetNoteTerms.priorPool) || '—'
+          }}) +</span>
+          <span class="note-line">月薪增幅×50% * 12 ({{
+            fmtMoney(targetNoteTerms.raiseTerm)
+          }}) +</span>
+          <span class="note-line">今年利息回報 ({{
+            fmtMoney(targetNoteTerms.interest) || '—'
+          }}) +</span>
+          <span class="note-line">今年Pool支出×0.7 ({{
+            fmtMoney(targetNoteTerms.pool) || '—'
+          }})。</span>
+        </span>
+      </p>
+      <p v-if="targetNoteTerms" class="muted">月薪增幅於 年結 → 投資 覆寫</p>
     </div>
 
     <div class="card goals-card">
@@ -862,6 +915,16 @@ onMounted(load)
           >（{{ data.goals.n4_year }}）</template
         >
         · 目標金額及常數於 月結 → 設定 編輯
+      </p>
+      <p class="muted">
+        3rd = 生活預算 ({{ fmtMoney(data.averages.living_budget) || '—' }})
+        × 通脹 ({{ data.goals.goal3_inflation ?? '—' }})
+        × 12 × 年期 ({{ data.goals.goal3_years ?? '—' }})
+      </p>
+      <p class="muted">
+        Final = 薪金 ({{ fmtMoney(data.salary) || '—' }})
+        × 替代率 ({{ fmtPercentShort(data.goals.final_replacement) || '—' }})
+        × 12 ÷ N4 ({{ fmtPercent(data.goals.n4_rate) || '—' }})
       </p>
     </div>
 
@@ -1067,6 +1130,13 @@ onMounted(load)
 }
 .avg {
   color: var(--text);
+}
+.note-formula {
+  display: flex;
+  gap: 0.4ch;
+}
+.note-line {
+  display: block;
 }
 h3 {
   margin: 0 0 0.5rem;

@@ -1136,6 +1136,8 @@ export interface InvestTargetRow {
   year: number
   invested: number | null
   raise: number | null
+  interest: number
+  pool_spend: number
   target: number | null
   remain: number | null
   growth: number | null
@@ -1218,6 +1220,10 @@ export interface OverviewGoals {
   third: FormulaGoal
   /** P14:P16 — salary × replacement × 12 ÷ N4 vs 總數. */
   final_goal: FormulaGoal
+  /** The effective formula constants (defaults while unset). */
+  goal3_inflation: number
+  goal3_years: number
+  final_replacement: number
 }
 
 export interface OverviewResponse {

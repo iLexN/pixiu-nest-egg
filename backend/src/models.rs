@@ -1349,6 +1349,10 @@ pub struct InvestTargetRow {
     pub invested: Option<f64>,
     /// The year's effective 月薪增幅 (override or salary-derived).
     pub raise: Option<f64>,
+    /// The year-review 利息回報 feeding the target formula (0 when none).
+    pub interest: f64,
+    /// The year-review 開心Pool支出 feeding the target formula (0 when none).
+    pub pool_spend: f64,
     /// L column: the year's target; absent without a prior-year `invested`.
     pub target: Option<f64>,
     /// M column: target − invested, on the current year only.
@@ -1460,6 +1464,11 @@ pub struct OverviewGoals {
     pub third: FormulaGoal,
     /// P14:P16 Final Target = salary × replacement × 12 ÷ N4 vs 總數.
     pub final_goal: FormulaGoal,
+    /// The effective formula constants (`1.07`/`30`/`0.7` while unset) —
+    /// echoed so the card can expand O14/P14 without a settings fetch.
+    pub goal3_inflation: f64,
+    pub goal3_years: f64,
+    pub final_replacement: f64,
 }
 
 /// `GET /api/overview`: the sheet's A3:C18 block plus the B1/H1/J1 headline.
