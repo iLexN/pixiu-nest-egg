@@ -1,11 +1,12 @@
 <script setup lang="ts">
 import { computed } from 'vue'
-import type { Dividend } from '../api'
+import type { Dividend, Market } from '../api'
 import { fmtMoney, fmtPercent, fmtPrice, fmtShares } from '../format'
 import RowActions from './RowActions.vue'
 
 const props = defineProps<{
   dividends: Dividend[]
+  market: Market
   /** Show a 收訖 action and the 預期派息 column on pending rows. */
   receivable?: boolean
   emptyText?: string
@@ -17,7 +18,7 @@ const emit = defineEmits<{
   remove: [Dividend]
 }>()
 
-const columns = computed(() => (props.receivable ? 9 : 12))
+const columns = computed(() => (props.receivable ? 9 : props.market === 'US' ? 12 : 11))
 </script>
 
 <template>
@@ -33,7 +34,7 @@ const columns = computed(() => (props.receivable ? 9 : 12))
         <th class="num">息率</th>
         <template v-if="!props.receivable">
           <th class="num">實收派息</th>
-          <th class="num">Tax</th>
+          <th v-if="props.market === 'US'" class="num">Tax</th>
           <th class="num">現價</th>
           <th class="num">息率</th>
         </template>
@@ -52,7 +53,7 @@ const columns = computed(() => (props.receivable ? 9 : 12))
         <td class="num">{{ fmtPercent(dividend.yield_on_cost) }}</td>
         <template v-if="!props.receivable">
           <td class="num">{{ fmtMoney(dividend.received_amount) }}</td>
-          <td class="num">{{ fmtMoney(dividend.withholding_tax) }}</td>
+          <td v-if="props.market === 'US'" class="num">{{ fmtMoney(dividend.withholding_tax) }}</td>
           <td class="num">{{ fmtPrice(dividend.received_price) }}</td>
           <td class="num">{{ fmtPercent(dividend.yield_on_price) }}</td>
         </template>

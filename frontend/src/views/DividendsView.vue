@@ -128,6 +128,7 @@ onMounted(load)
       <h3>待收派息</h3>
       <DividendTable
         :dividends="summary.pending"
+        :market="props.market"
         receivable
         empty-text="沒有待收派息"
         @receive="receiving = $event"
@@ -152,6 +153,7 @@ onMounted(load)
       </h3>
       <DividendTable
         :dividends="received"
+        :market="props.market"
         empty-text="沒有已收派息記錄"
         @edit="startEdit"
         @remove="remove"
