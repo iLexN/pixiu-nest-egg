@@ -782,6 +782,8 @@ export interface AiaSummary {
   rate: number | null
   /** Earliest premium-due date still ahead. */
   next_premium_due: string | null
+  /** Section free-text note. */
+  note: string | null
   totals: AiaTotals
   policies: AiaPolicyWithEvents[]
 }
@@ -1224,6 +1226,9 @@ export interface OverviewGoals {
   goal3_inflation: number
   goal3_years: number
   final_replacement: number
+  /** 'Month Stat' running averages (L8/N8, monthly) — the last two L12 terms. */
+  saved_avg: number | null
+  interest_avg: number | null
 }
 
 export interface OverviewResponse {
@@ -1504,6 +1509,9 @@ export const api = {
   },
   updateAiaRate(rate: number | null): Promise<{ rate: number | null }> {
     return request('/aia/rate', { method: 'PATCH', body: JSON.stringify({ rate }) })
+  },
+  updateAiaNote(note: string | null): Promise<{ note: string | null }> {
+    return request('/aia/note', { method: 'PATCH', body: JSON.stringify({ note }) })
   },
   listAiaEvents(policyId?: number): Promise<AiaEvent[]> {
     return request(`/aia/events${queryString({ policy_id: policyId })}`)

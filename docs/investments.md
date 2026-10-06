@@ -92,10 +92,13 @@ AiaView (AIA → 總覽)
   → GET /api/aia/summary
       → every policy row with its derived balance_pct and event history,
         totals over non-excluded rows, the in-account display value, HKD
-        conversions via the stored rate, and the next premium-due date
+        conversions via the stored rate, the next premium-due date, and
+        the section note
 ```
 
 Two flags reproduce the sheet's two sums: `excluded` rows sit in the AIA account but are not the user's money (the `irene 20%` share), so they drop out of the totals; `in_account` rows feed `display_value`, the figure that should match the AIA portal — rows held in another account (`irene 年金`) count in the totals but not in `display_value`.
+
+The 備註 block saves free text via `PATCH /api/aia/note` into `app_meta` (`aia.note`); clearing it removes the entry.
 
 ## Add or edit a policy, or update the rate
 

@@ -90,6 +90,7 @@ pub fn api_router(state: AppState) -> (Router, utoipa::openapi::OpenApi) {
         .routes(utoipa_axum::routes!(aia::list, aia::create))
         .routes(utoipa_axum::routes!(aia::summary))
         .routes(utoipa_axum::routes!(aia::update_rate))
+        .routes(utoipa_axum::routes!(aia::update_note))
         .routes(utoipa_axum::routes!(aia::update, aia::remove))
         .routes(utoipa_axum::routes!(aia::list_events, aia::create_event))
         .routes(utoipa_axum::routes!(aia::remove_event))
@@ -462,6 +463,7 @@ mod tests {
             ("/api/aia/events", "get"),
             ("/api/aia/events", "post"),
             ("/api/aia/events/{id}", "delete"),
+            ("/api/aia/note", "patch"),
             ("/api/aia/policies", "get"),
             ("/api/aia/policies", "post"),
             ("/api/aia/policies/{id}", "delete"),

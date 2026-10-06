@@ -10,6 +10,7 @@ import {
   type YearlySummary,
   type YearRow,
 } from '../api'
+import IbkrCard from '../components/IbkrCard.vue'
 import {
   compareClass,
   fmtDateTime,
@@ -217,70 +218,6 @@ async function freezeYear(row: YearRow) {
     error.value = err instanceof ApiError ? err.message : String(err)
   } finally {
     freezing.value = false
-  }
-}
-
-// The 美股 sheet's A1:B5 block — four manual inputs; the derived figures
-// (computed total, net vs transferred) come back in the response.
-const editingIbkr = ref(false)
-const ibkrDraft = ref({
-  transferred_delta: '' as number | '',
-  transfer_date: '',
-  now_value: '' as number | '',
-  hkd_cash: '' as number | '',
-  usd_cash: '' as number | '',
-})
-
-// The 轉入 input is a delta; this previews the new cumulative total.
-const ibkrTransferredPreview = computed(() => {
-  const text = String(ibkrDraft.value.transferred_delta).trim()
-  if (text === '') return null
-  const delta = Number(text)
-  if (!Number.isFinite(delta)) return null
-  return (ibkr.value?.transferred_hkd ?? 0) + delta
-})
-
-function startIbkrEdit() {
-  const now = new Date()
-  const todayStr = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}-${String(now.getDate()).padStart(2, '0')}`
-  ibkrDraft.value = {
-    transferred_delta: '',
-    transfer_date: todayStr,
-    now_value: ibkr.value?.now_value ?? '',
-    hkd_cash: ibkr.value?.hkd_cash ?? '',
-    usd_cash: ibkr.value?.usd_cash ?? '',
-  }
-  editingIbkr.value = true
-}
-
-function ibkrField(raw: number | '', label: string): number | null {
-  if (String(raw).trim() === '') return null
-  const parsed = Number(raw)
-  if (!Number.isFinite(parsed) || parsed < 0) {
-    throw new Error(`${label}必須是非負數字`)
-  }
-  return parsed
-}
-
-async function saveIbkr() {
-  try {
-    // Undefined records nothing; a delta appends a dated transfer-log row.
-    const deltaText = String(ibkrDraft.value.transferred_delta).trim()
-    const delta = deltaText === '' ? undefined : Number(deltaText)
-    if (delta !== undefined && !Number.isFinite(delta)) {
-      throw new Error('轉入金額必須是數字')
-    }
-    ibkr.value = await api.updateIbkr({
-      transfer_hkd: delta,
-      transfer_date: ibkrDraft.value.transfer_date || undefined,
-      now_value: ibkrField(ibkrDraft.value.now_value, 'IBKR App 現值'),
-      hkd_cash: ibkrField(ibkrDraft.value.hkd_cash, 'HKD 現金'),
-      usd_cash: ibkrField(ibkrDraft.value.usd_cash, 'USD 現金'),
-    })
-    editingIbkr.value = false
-    error.value = ''
-  } catch (err) {
-    error.value = err instanceof ApiError || err instanceof Error ? err.message : String(err)
   }
 }
 
@@ -612,82 +549,7 @@ watch(() => props.market, load)
     </template>
   </section>
 
-  <section v-if="market === 'US' && ibkr" class="card">
-    <h3>IBKR</h3>
-    <form v-if="editingIbkr" class="ibkr-form" @submit.prevent="saveIbkr">
-      <label>
-        轉入 (HKD)
-        <input
-          v-model="ibkrDraft.transferred_delta"
-          type="number"
-          step="any"
-          inputmode="decimal"
-          placeholder="+金額"
-        />
-      </label>
-      <label>
-        轉入日期
-        <input v-model="ibkrDraft.transfer_date" type="date" />
-      </label>
-      <label>
-        IBKR App 現值 (HKD)
-        <input v-model="ibkrDraft.now_value" type="number" step="any" inputmode="decimal" />
-      </label>
-      <label>
-        HKD 現金
-        <input v-model="ibkrDraft.hkd_cash" type="number" step="any" inputmode="decimal" />
-      </label>
-      <label>
-        USD 現金
-        <input v-model="ibkrDraft.usd_cash" type="number" step="any" inputmode="decimal" />
-      </label>
-      <div class="ibkr-actions">
-        <button type="submit">儲存</button>
-        <button type="button" class="link" @click="editingIbkr = false">取消</button>
-      </div>
-      <p class="muted ibkr-preview">
-        累計轉入 {{ fmtMoney(ibkr?.transferred_hkd) || '0' }}
-        <template v-if="ibkrTransferredPreview !== null">
-          → <strong>{{ fmtMoney(ibkrTransferredPreview) }}</strong>
-        </template>
-      </p>
-    </form>
-    <template v-else>
-      <table>
-        <tbody>
-          <tr>
-            <td>累計轉入 (HKD)</td>
-            <td class="num">{{ fmtMoney(ibkr.transferred_hkd) || '—' }}</td>
-            <td>IBKR App 現值 (HKD)</td>
-            <td class="num">{{ fmtMoney(ibkr.now_value) || '—' }}</td>
-          </tr>
-          <tr>
-            <td>HKD 現金</td>
-            <td class="num">{{ fmtMoney(ibkr.hkd_cash) || '—' }}</td>
-            <td>USD 現金</td>
-            <td class="num">{{ fmtMoney(ibkr.usd_cash) || '—' }}</td>
-          </tr>
-          <tr>
-            <td>美股總市值 (USD)</td>
-            <td class="num">{{ fmtMoney(ibkr.stock_value_usd) || '—' }}</td>
-            <td>計算總值 (HKD)</td>
-            <td class="num">{{ fmtMoney(ibkr.computed_total_hkd) || '—' }}</td>
-          </tr>
-          <tr>
-            <td>淨額 / 回報率</td>
-            <td class="num" :class="signClass(ibkr.net)">
-              {{ fmtMoney(ibkr.net) || '—' }} / {{ fmtPercent(ibkr.net_pct) || '—' }}
-            </td>
-            <td>計算 − App 差異</td>
-            <td class="num" :class="signClass(ibkr.vs_now_value)">
-              {{ fmtMoney(ibkr.vs_now_value) || '—' }}
-            </td>
-          </tr>
-        </tbody>
-      </table>
-      <button type="button" class="link" @click="startIbkrEdit">編輯</button>
-    </template>
-  </section>
+  <IbkrCard v-if="market === 'US' && ibkr" :ibkr="ibkr" @saved="ibkr = $event" />
 </template>
 
 <style scoped>
@@ -749,29 +611,6 @@ watch(() => props.market, load)
 }
 .year-cell.frozen .link {
   text-decoration: underline dotted;
-}
-.ibkr-form {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 0.75rem;
-  align-items: flex-end;
-}
-.ibkr-form label {
-  display: flex;
-  flex-direction: column;
-  font-size: 0.85rem;
-  gap: 0.2rem;
-}
-.ibkr-form input {
-  width: 9rem;
-}
-.ibkr-actions {
-  display: flex;
-  gap: 0.5rem;
-}
-.ibkr-preview {
-  flex-basis: 100%;
-  margin: 0;
 }
 h4 {
   margin: 1.5rem 0 0.5rem;

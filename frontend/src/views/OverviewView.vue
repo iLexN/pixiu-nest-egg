@@ -12,6 +12,7 @@ import {
   type OverviewResponse,
 } from '../api'
 import DepositForm from '../components/DepositForm.vue'
+import IbkrCard from '../components/IbkrCard.vue'
 import { fmtMoney, fmtPercent, fmtPercentShort, fmtPrice, signClass } from '../format'
 
 /** `remain ≤ 0` means the goal is already reached — show 已達成, not years. */
@@ -276,6 +277,30 @@ const targetNoteTerms = computed(() => {
   }
 })
 
+// ----- 目標 存/年 footnote -----
+
+/** The five L12 yearly terms: raw monthly inputs plus their yearly
+ *  contributions (null while absent). */
+const savingYearTerms = computed(() => {
+  const d = data.value
+  if (!d) return null
+  const { saved_avg, interest_avg } = d.goals
+  const saved = d.averages.saved
+  const mm = d.money_master.avg_per_month
+  return {
+    saved,
+    saved12: saved === null ? null : saved * 12,
+    avgInvested: d.invest_targets.avg_invested,
+    mm,
+    mm12: mm === null ? null : mm * 12,
+    savedAvg: saved_avg,
+    running12: saved_avg === null ? null : saved_avg * 12,
+    interestAvg: interest_avg,
+    combined12:
+      saved_avg === null || interest_avg === null ? null : (saved_avg + interest_avg) * 12,
+  }
+})
+
 onMounted(load)
 </script>
 
@@ -509,52 +534,6 @@ onMounted(load)
           </tr>
         </tbody>
       </table>
-    </div>
-
-    <div class="card">
-      <h3>IBKR</h3>
-      <table>
-        <tbody>
-          <tr>
-            <td>累計轉入 (HKD)</td>
-            <td class="num">{{ fmtMoney(data.ibkr.transferred_hkd) || '—' }}</td>
-          </tr>
-          <tr>
-            <td>IBKR App 現值 (HKD)</td>
-            <td class="num">{{ fmtMoney(data.ibkr.now_value) || '—' }}</td>
-          </tr>
-          <tr>
-            <td>HKD 現金</td>
-            <td class="num">{{ fmtMoney(data.ibkr.hkd_cash) || '—' }}</td>
-          </tr>
-          <tr>
-            <td>USD 現金</td>
-            <td class="num">{{ fmtMoney(data.ibkr.usd_cash) || '—' }}</td>
-          </tr>
-          <tr>
-            <td>美股總市值 (USD)</td>
-            <td class="num">{{ fmtMoney(data.ibkr.stock_value_usd) || '—' }}</td>
-          </tr>
-          <tr>
-            <td>計算總值 (HKD)</td>
-            <td class="num">{{ fmtMoney(data.ibkr.computed_total_hkd) || '—' }}</td>
-          </tr>
-          <tr>
-            <td>淨額 / 回報率</td>
-            <td class="num" :class="signClass(data.ibkr.net)">
-              {{ fmtMoney(data.ibkr.net) || '—' }} /
-              {{ fmtPercent(data.ibkr.net_pct) || '—' }}
-            </td>
-          </tr>
-          <tr>
-            <td>計算 − App 差異</td>
-            <td class="num" :class="signClass(data.ibkr.vs_now_value)">
-              {{ fmtMoney(data.ibkr.vs_now_value) || '—' }}
-            </td>
-          </tr>
-        </tbody>
-      </table>
-      <p class="muted">於 股票 → 美股 → 總覽 編輯 IBKR 數字</p>
     </div>
 
     <div v-if="forecast" class="card forecast">
@@ -926,6 +905,29 @@ onMounted(load)
         × 替代率 ({{ fmtPercentShort(data.goals.final_replacement) || '—' }})
         × 12 ÷ N4 ({{ fmtPercent(data.goals.n4_rate) || '—' }})
       </p>
+      <p v-if="savingYearTerms" class="muted note-formula">
+        <span>存/年 = AVERAGE(</span>
+        <span>
+          <span class="note-line">近12月存×12 ({{
+            fmtMoney(savingYearTerms.saved) || '—'
+          }}
+            x 12 = {{ fmtMoney(savingYearTerms.saved12) || '—' }}),</span>
+          <span class="note-line">近3年invested ({{
+            fmtMoney(savingYearTerms.avgInvested) || '—'
+          }}),</span>
+          <span class="note-line">MM月均×12 ({{ fmtMoney(savingYearTerms.mm) || '—' }}
+            x 12 = {{ fmtMoney(savingYearTerms.mm12) || '—' }}),</span>
+          <span class="note-line">歷年存×12 ({{
+            fmtMoney(savingYearTerms.savedAvg) || '—'
+          }}
+            x 12 = {{ fmtMoney(savingYearTerms.running12) || '—' }}),</span>
+          <span class="note-line">(歷年存+息)×12 (({{
+            fmtMoney(savingYearTerms.savedAvg) || '—'
+          }}
+            + {{ fmtMoney(savingYearTerms.interestAvg) || '—' }}) x 12 =
+            {{ fmtMoney(savingYearTerms.combined12) || '—' }}))</span>
+        </span>
+      </p>
     </div>
 
     <div class="card money-master">
@@ -986,6 +988,8 @@ onMounted(load)
       </table>
       <p class="muted">於 總覽 → 月結 → 設定 更新 Money Master 數字</p>
     </div>
+
+    <IbkrCard class="ibkr-card" :ibkr="data.ibkr" @saved="load" />
     </div>
   </template>
 </template>
@@ -1003,7 +1007,8 @@ onMounted(load)
   overflow-x: auto;
 }
 .overview-grid .card.invest-targets,
-.overview-grid .card.goals-card {
+.overview-grid .card.goals-card,
+.overview-grid .card.ibkr-card {
   grid-column: span 2;
 }
 /* A strong rule separates the derived avg pace from the challenge inputs. */

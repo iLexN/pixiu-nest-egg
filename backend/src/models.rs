@@ -877,6 +877,11 @@ pub struct AiaRatePatch {
     pub rate: Option<f64>,
 }
 
+#[derive(Debug, Clone, Deserialize, ToSchema)]
+pub struct AiaNotePatch {
+    pub note: Option<String>,
+}
+
 /// The month-item categories replacing the sheet's opaque sum columns:
 /// `adjustment` is the G column (bank in/out that must not count as 支出),
 /// `extra_spend` the extras subtracted inside J, `income` the extras added
@@ -1469,6 +1474,10 @@ pub struct OverviewGoals {
     pub goal3_inflation: f64,
     pub goal3_years: f64,
     pub final_replacement: f64,
+    /// 'Month Stat' running averages (L8/N8, monthly) — the last two L12
+    /// terms, echoed so the card can expand 存/年.
+    pub saved_avg: Option<f64>,
+    pub interest_avg: Option<f64>,
 }
 
 /// `GET /api/overview`: the sheet's A3:C18 block plus the B1/H1/J1 headline.

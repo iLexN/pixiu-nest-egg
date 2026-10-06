@@ -277,6 +277,27 @@ function policiesWithEvents(): AiaPolicyWithEvents[] {
   return (summary.value?.policies ?? []).filter((policy) => policy.events.length > 0)
 }
 
+// ----- note -----
+
+const noteDraft = ref('')
+const noteLoaded = ref(false)
+
+function startNote() {
+  noteDraft.value = summary.value?.note ?? ''
+  noteLoaded.value = true
+}
+
+async function saveNote() {
+  try {
+    await api.updateAiaNote(noteDraft.value.trim() || null)
+    noteLoaded.value = false
+    message.value = '已儲存備註'
+    await load()
+  } catch (err) {
+    error.value = err instanceof ApiError ? err.message : String(err)
+  }
+}
+
 onMounted(load)
 </script>
 
@@ -535,6 +556,20 @@ onMounted(load)
       </div>
     </div>
 
+    <div v-if="summary" class="card">
+      <h3>備註</h3>
+      <template v-if="noteLoaded">
+        <textarea v-model="noteDraft" rows="3"></textarea>
+        <div>
+          <button type="button" @click="saveNote">儲存</button>
+          <button type="button" class="link" @click="noteLoaded = false">取消</button>
+        </div>
+      </template>
+      <p v-else class="note-text" @click="startNote">
+        {{ summary.note || '按此新增備註' }}
+      </p>
+    </div>
+
     <div class="card hints">
       <h3>手動步驟提醒</h3>
       <p class="muted">
@@ -596,6 +631,16 @@ onMounted(load)
 }
 .event-block {
   margin-top: 0.75rem;
+}
+.note-text {
+  white-space: pre-line;
+  cursor: pointer;
+}
+.note-text:empty::before {
+  content: '';
+}
+textarea {
+  width: 100%;
 }
 .event-block h4 {
   margin: 0.25rem 0;

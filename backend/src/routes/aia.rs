@@ -5,6 +5,7 @@ use serde::{Deserialize, Serialize};
 use sqlx::sqlite::SqliteRow;
 use sqlx::{Row, SqlitePool};
 
+use super::mpf::NoteResponse;
 use super::{AppState, now_timestamp, today};
 use crate::calc::{
     AiaEventInput, AiaPolicyFacts, AiaPolicyInput, AiaTotals, ValidatedAiaPolicy, aia_balance_pct,
@@ -13,12 +14,17 @@ use crate::calc::{
 };
 use crate::error::{ApiError, ErrorBody};
 use crate::models::{
-    AiaEvent, AiaEventKind, AiaPolicy, AiaPolicyPatch, AiaRatePatch, NewAiaEvent, NewAiaPolicy,
+    AiaEvent, AiaEventKind, AiaNotePatch, AiaPolicy, AiaPolicyPatch, AiaRatePatch, NewAiaEvent,
+    NewAiaPolicy,
 };
 
 /// `app_meta` key holding the manual USD→HKD rate (the workbook's
 /// `Overview!N3` GOOGLEFINANCE cell, which the app cannot fetch).
 pub const RATE_KEY: &str = "aia.usd_hkd_rate";
+
+/// `app_meta` key holding the section's free-text note — the same facility
+/// as the MPF page's `mpf.note`.
+pub const NOTE_KEY: &str = "aia.note";
 
 pub const AIA_SELECT: &str = "SELECT p.id, p.label, p.policy_no, p.next_pay_date, \
      p.premium_usd, p.value_usd, p.value_updated_at, p.remaining_years, \
@@ -332,6 +338,8 @@ pub struct AiaSummaryResponse {
     pub rate: Option<f64>,
     /// Earliest premium-due date still ahead — the premium the user owes next.
     pub next_premium_due: Option<String>,
+    /// The section's free-text note (`aia.note` in `app_meta`).
+    pub note: Option<String>,
     pub totals: AiaTotals,
     pub policies: Vec<PolicyWithEvents>,
 }
@@ -369,10 +377,12 @@ pub async fn summary(State(state): State<AppState>) -> Result<Json<AiaSummaryRes
         with_events.push(PolicyWithEvents { policy, events });
     }
 
+    let note = crate::mpf::meta_get(&state.pool, NOTE_KEY).await?;
     Ok(Json(AiaSummaryResponse {
         today: today.to_string(),
         rate,
         next_premium_due: next_due.map(|date| date.to_string()),
+        note,
         totals,
         policies: with_events,
     }))
@@ -381,6 +391,27 @@ pub async fn summary(State(state): State<AppState>) -> Result<Json<AiaSummaryRes
 #[derive(Debug, Serialize, utoipa::ToSchema)]
 pub struct RateResponse {
     pub rate: Option<f64>,
+}
+
+/// The section's free-text note, kept in `app_meta` under `aia.note` — the
+/// same facility as the MPF page note; an empty note deletes the key.
+#[utoipa::path(
+    patch,
+    path = "/api/aia/note",
+    tag = "aia",
+    request_body = AiaNotePatch,
+    responses(
+        (status = 200, description = "Stored AIA page note (null clears it)", body = NoteResponse),
+    )
+)]
+pub async fn update_note(
+    State(state): State<AppState>,
+    Json(body): Json<AiaNotePatch>,
+) -> Result<Json<NoteResponse>, ApiError> {
+    crate::mpf::meta_put(&state.pool, NOTE_KEY, body.note.as_deref()).await?;
+    Ok(Json(NoteResponse {
+        note: crate::mpf::meta_get(&state.pool, NOTE_KEY).await?,
+    }))
 }
 
 /// The workbook keeps a live GOOGLEFINANCE rate in `Overview!N3`; the app keeps

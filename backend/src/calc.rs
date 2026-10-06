@@ -3178,6 +3178,8 @@ pub fn overview_goals(input: &OverviewGoalsInput) -> crate::models::OverviewGoal
         goal3_inflation: input.goal3_inflation,
         goal3_years: input.goal3_years,
         final_replacement: input.final_replacement,
+        saved_avg: input.saved_avg,
+        interest_avg: input.interest_avg,
     }
 }
 
@@ -6743,6 +6745,9 @@ mod tests {
         };
         assert_eq!(goals.n4_year, Some(2025));
         assert!(approx_eq(goals.n4_rate.unwrap(), 0.03851965006));
+        // The running averages echo so the card can expand 存/年.
+        assert_eq!(goals.saved_avg, input.saved_avg);
+        assert_eq!(goals.interest_avg, input.interest_avg);
         assert!(approx_eq(goals.saving_year.unwrap(), 347656.233));
         assert!(approx_eq(goals.saving_month.unwrap(), 28971.35275));
         assert!(approx_eq(goals.passive_return_year.unwrap(), 57608.58002));
@@ -6840,6 +6845,7 @@ mod tests {
         input.interest_avg = None;
         let goals = overview_goals(&input);
         assert!(goals.saving_year.is_none());
+        assert!(goals.saved_avg.is_none() && goals.interest_avg.is_none());
         assert!(goals.milestones[1].years.is_none());
         // The combined running term is absent too, so 3rd years go absent.
         assert!(goals.third.years.is_none());
