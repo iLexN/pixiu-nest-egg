@@ -1,17 +1,14 @@
-use std::collections::BTreeMap;
-
 use axum::Json;
 use axum::extract::{Path, State};
 use serde::Serialize;
-use sqlx::{Row, SqlitePool};
+use sqlx::Row;
+use sqlx::SqlitePool;
 
-use super::{AppState, now_timestamp, today};
-use crate::calc::{
-    BondYearFacts, DepositFacts, YearReviewInputs, YearReviewRecord, YearReviewRow,
-    month_year_summaries, year_review_rows,
-};
+use super::{AppState, today};
+use crate::calc::{YearReviewInputs, YearReviewRow, month_year_summaries, year_review_rows};
 use crate::error::{ApiError, ErrorBody};
 use crate::models::{Market, YearReviewPatch};
+use crate::store::year_review as store;
 
 #[derive(Debug, Serialize, utoipa::ToSchema)]
 pub struct YearReviewResponse {
@@ -36,17 +33,17 @@ pub async fn list(State(state): State<AppState>) -> Result<Json<YearReviewRespon
 
 pub async fn build(pool: &SqlitePool) -> Result<YearReviewResponse, ApiError> {
     let now = today();
-    let (stat_rows, live_tail) = super::months::load_stat_rows_live(pool).await?;
-    let items = super::months::load_all_items(pool).await?;
-    let rates = super::months::pool_rates(pool).await?;
-    let sold_pl = super::yearly::hk_sold_pl(pool).await?;
+    let (stat_rows, live_tail) = crate::service::months::load_stat_rows_live(pool).await?;
+    let items = crate::store::months::load_all_items(pool).await?;
+    let rates = crate::store::months::pool_rates(pool).await?;
+    let sold_pl = crate::store::yearly::hk_sold_pl(pool).await?;
     let summaries = month_year_summaries(&stat_rows, &items, &rates, &sold_pl, live_tail);
-    let hk_years = super::yearly::build(pool, Market::Hk).await?.years;
-    let records = load_records(pool).await?;
-    let bonds = bond_facts(pool).await?;
-    let deposits = deposit_facts(pool).await?;
-    let transfers = ibkr_transfers_by_year(pool).await?;
-    let last_salaries = last_salaries_by_year(pool).await?;
+    let hk_years = crate::service::yearly::build(pool, Market::Hk).await?.years;
+    let records = store::load_records(pool).await?;
+    let bonds = crate::store::bonds::year_facts(pool).await?;
+    let deposits = crate::store::deposits::year_facts(pool).await?;
+    let transfers = crate::store::overview::transfers_by_year(pool).await?;
+    let last_salaries = crate::store::months::last_salaries_by_year(pool).await?;
 
     Ok(YearReviewResponse {
         today: now.to_string(),
@@ -63,131 +60,6 @@ pub async fn build(pool: &SqlitePool) -> Result<YearReviewResponse, ApiError> {
             now,
         ),
     })
-}
-
-/// Each year's last stored month salary — the input the derived 月薪增幅
-/// compares against the prior year's.
-async fn last_salaries_by_year(pool: &SqlitePool) -> Result<BTreeMap<i32, f64>, ApiError> {
-    let rows = sqlx::query(
-        "SELECT month, salary FROM month_stats WHERE salary IS NOT NULL ORDER BY month",
-    )
-    .fetch_all(pool)
-    .await?;
-    let mut map = BTreeMap::new();
-    for row in &rows {
-        let month: String = row.try_get("month")?;
-        let year: i32 = month
-            .get(..4)
-            .and_then(|y| y.parse().ok())
-            .ok_or_else(|| ApiError::Conflict(format!("stored month {month} is not valid")))?;
-        map.insert(year, row.try_get::<f64, _>("salary")?);
-    }
-    Ok(map)
-}
-
-/// Σ `ibkr_transfers` per calendar year — the year's IBKR 轉入.
-async fn ibkr_transfers_by_year(pool: &SqlitePool) -> Result<BTreeMap<i32, f64>, ApiError> {
-    let rows = sqlx::query(
-        "SELECT CAST(strftime('%Y', transfer_date) AS INTEGER) AS year, \
-         SUM(amount_hkd) AS total FROM ibkr_transfers GROUP BY year",
-    )
-    .fetch_all(pool)
-    .await?;
-    let mut map = BTreeMap::new();
-    for row in &rows {
-        map.insert(row.try_get("year")?, row.try_get("total")?);
-    }
-    Ok(map)
-}
-
-/// The stored `year_review` records keyed by year.
-async fn load_records(pool: &SqlitePool) -> Result<BTreeMap<i32, YearReviewRecord>, ApiError> {
-    let rows = sqlx::query(
-        "SELECT year, income, invested_adjustment, salary_raise, bond_principal, bond_interest, \
-         deposit_principal, deposit_interest FROM year_review",
-    )
-    .fetch_all(pool)
-    .await?;
-    let mut records = BTreeMap::new();
-    for row in &rows {
-        records.insert(
-            row.try_get("year")?,
-            YearReviewRecord {
-                income: row.try_get("income")?,
-                invested_adjustment: row.try_get("invested_adjustment")?,
-                raise: row.try_get("salary_raise")?,
-                bond_principal: row.try_get("bond_principal")?,
-                bond_interest: row.try_get("bond_interest")?,
-                deposit_principal: row.try_get("deposit_principal")?,
-                deposit_interest: row.try_get("deposit_interest")?,
-            },
-        );
-    }
-    Ok(records)
-}
-
-/// Bonds reduced to what the year review needs: principal, maturity, the
-/// coupon schedule's first pay year (the purchase proxy), and each received
-/// coupon's (pay year, amount).
-async fn bond_facts(pool: &SqlitePool) -> Result<Vec<BondYearFacts>, ApiError> {
-    let rows = sqlx::query(
-        "SELECT b.id, b.principal, b.maturity_date, c.pay_date, c.received_amount \
-         FROM bonds b LEFT JOIN bond_coupons c ON c.bond_id = b.id \
-         ORDER BY b.sort_order, b.id, c.pay_date",
-    )
-    .fetch_all(pool)
-    .await?;
-
-    let mut facts: Vec<BondYearFacts> = Vec::new();
-    let mut last_id: Option<i64> = None;
-    for row in &rows {
-        let id: i64 = row.try_get("id")?;
-        if last_id != Some(id) {
-            let maturity_date: String = row.try_get("maturity_date")?;
-            facts.push(BondYearFacts {
-                principal: row.try_get("principal")?,
-                first_coupon_year: None,
-                maturity_date: chrono::NaiveDate::parse_from_str(&maturity_date, "%Y-%m-%d")
-                    .map_err(|_| {
-                        ApiError::Conflict(format!(
-                            "stored maturity_date {maturity_date} is not valid"
-                        ))
-                    })?,
-                received: Vec::new(),
-            });
-            last_id = Some(id);
-        }
-        let pay_date: Option<String> = row.try_get("pay_date")?;
-        let Some(pay_date) = pay_date else { continue };
-        let parsed = chrono::NaiveDate::parse_from_str(&pay_date, "%Y-%m-%d")
-            .map_err(|_| ApiError::Conflict(format!("stored pay_date {pay_date} is not valid")))?;
-        let fact = facts.last_mut().expect("just pushed");
-        let year = chrono::Datelike::year(&parsed);
-        fact.first_coupon_year = Some(fact.first_coupon_year.map_or(year, |first| first.min(year)));
-        if let Some(amount) = row.try_get::<Option<f64>, _>("received_amount")? {
-            fact.received.push((year, amount));
-        }
-    }
-    Ok(facts)
-}
-
-async fn deposit_facts(pool: &SqlitePool) -> Result<Vec<DepositFacts<'static>>, ApiError> {
-    let rows = sqlx::query("SELECT principal, interest, end_date FROM deposits")
-        .fetch_all(pool)
-        .await?;
-    let mut facts = Vec::with_capacity(rows.len());
-    for row in &rows {
-        let end_date: String = row.try_get("end_date")?;
-        facts.push(DepositFacts {
-            bank: None,
-            principal: row.try_get("principal")?,
-            interest: row.try_get("interest")?,
-            end_date: chrono::NaiveDate::parse_from_str(&end_date, "%Y-%m-%d").map_err(|_| {
-                ApiError::Conflict(format!("stored end_date {end_date} is not valid"))
-            })?,
-        });
-    }
-    Ok(facts)
 }
 
 fn validate_figure(field: &str, value: Option<f64>) -> Result<Option<f64>, ApiError> {
@@ -250,26 +122,10 @@ pub async fn update(
 
     if patch.sold_pl.is_some() {
         let sold_pl = validate_signed_figure("sold_pl", patch.sold_pl.flatten())?;
-        sqlx::query(
-            "INSERT INTO year_snapshots (market, year, sold_pl, updated_at) \
-             VALUES ('HK', ?, ?, ?) \
-             ON CONFLICT (market, year) DO UPDATE SET \
-             sold_pl = excluded.sold_pl, updated_at = excluded.updated_at",
-        )
-        .bind(year)
-        .bind(sold_pl)
-        .bind(now_timestamp())
-        .execute(&mut *tx)
-        .await?;
+        crate::store::yearly::upsert_hk_sold_pl(&mut tx, year, sold_pl).await?;
         // A snapshot left with nothing stored goes away, like the yearly
         // PATCH's all-cleared case.
-        sqlx::query(
-            "DELETE FROM year_snapshots WHERE market = 'HK' AND year = ? \
-             AND invested IS NULL AND cost IS NULL AND market_value IS NULL AND sold_pl IS NULL",
-        )
-        .bind(year)
-        .execute(&mut *tx)
-        .await?;
+        crate::store::yearly::delete_empty_hk_snapshot(&mut tx, year).await?;
     }
 
     let touches_record = patch.income.is_some()
@@ -280,18 +136,13 @@ pub async fn update(
         || patch.deposit_principal.is_some()
         || patch.deposit_interest.is_some();
     if touches_record {
-        let existing = sqlx::query(
-            "SELECT income, invested_adjustment, salary_raise, bond_principal, bond_interest, \
-             deposit_principal, deposit_interest FROM year_review WHERE year = ?",
-        )
-        .bind(year)
-        .fetch_optional(&mut *tx)
-        .await?;
+        let existing = store::record_row(&mut tx, year).await?;
         let field = |patch: Option<Option<f64>>, column: &str| -> Result<Option<f64>, ApiError> {
             let existing = existing
                 .as_ref()
                 .map(|row| row.try_get::<Option<f64>, _>(column))
-                .transpose()?
+                .transpose()
+                .map_err(crate::store::StoreError::from)?
                 .flatten();
             Ok(patch.unwrap_or(existing))
         };
@@ -330,35 +181,19 @@ pub async fn update(
         .iter()
         .all(Option::is_none)
         {
-            sqlx::query("DELETE FROM year_review WHERE year = ?")
-                .bind(year)
-                .execute(&mut *tx)
-                .await?;
+            store::delete_record(&mut tx, year).await?;
         } else {
-            sqlx::query(
-                "INSERT INTO year_review \
-                 (year, income, invested_adjustment, salary_raise, bond_principal, bond_interest, \
-                  deposit_principal, deposit_interest, updated_at) \
-                 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?) \
-                 ON CONFLICT (year) DO UPDATE SET \
-                 income = excluded.income, invested_adjustment = excluded.invested_adjustment, \
-                 salary_raise = excluded.salary_raise, \
-                 bond_principal = excluded.bond_principal, \
-                 bond_interest = excluded.bond_interest, \
-                 deposit_principal = excluded.deposit_principal, \
-                 deposit_interest = excluded.deposit_interest, \
-                 updated_at = excluded.updated_at",
+            store::upsert_record(
+                &mut tx,
+                year,
+                income,
+                invested_adjustment,
+                raise,
+                bond_principal,
+                bond_interest,
+                deposit_principal,
+                deposit_interest,
             )
-            .bind(year)
-            .bind(income)
-            .bind(invested_adjustment)
-            .bind(raise)
-            .bind(bond_principal)
-            .bind(bond_interest)
-            .bind(deposit_principal)
-            .bind(deposit_interest)
-            .bind(now_timestamp())
-            .execute(&mut *tx)
             .await?;
         }
     }

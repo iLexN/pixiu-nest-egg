@@ -328,9 +328,10 @@ Derived on every read, never stored: `status`, effective `amount`, `yield_on_cos
 
 ```text
 SummaryView loads GET /api/summary/yearly?market=HK|US
-  → routes/yearly.rs reads the market's trades, received dividends and
-    year_snapshots, plus the live market totals
-  → calc.rs::yearly_rows builds one row per year from the earliest activity
+  → store/ reads the market's trades, received dividends and year_snapshots;
+    service/yearly.rs adds the live market totals (routes/yearly.rs only
+    maps it to HTTP)
+  → calc/yearly.rs::yearly_rows builds one row per year from the earliest activity
     year through the current year
   → the frontend formats and displays the rows
 ```

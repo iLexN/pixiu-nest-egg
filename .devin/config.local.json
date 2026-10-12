@@ -50,7 +50,9 @@
       "Exec(WEALTH_ADDR=127.0.0.1:8788 cargo run)",
       "Exec(WEALTH_DB=/tmp/liq-test.db cargo run)",
       "Exec(touch)",
-      "Exec(WEALTH_DB=/tmp/wealth-test.db WEALTH_ADDR=127.0.0.1:8799 cargo run)"
+      "Exec(WEALTH_DB=/tmp/wealth-test.db WEALTH_ADDR=127.0.0.1:8799 cargo run)",
+      "Exec(chmod)",
+      "Exec(tee)"
     ]
   }
 }

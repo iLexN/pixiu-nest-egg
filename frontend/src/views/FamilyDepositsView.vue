@@ -340,7 +340,7 @@ onMounted(load)
         </label>
         <label class="wide">
           note
-          <textarea v-model="draft.note" rows="2" placeholder="分段利率等備註"></textarea>
+          <textarea v-model="draft.note" rows="4" placeholder="分段利率等備註"></textarea>
         </label>
       </div>
       <div class="actions">

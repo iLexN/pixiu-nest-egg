@@ -160,7 +160,7 @@ async fn check_market(
     market: Market,
     report: &mut ParityReport,
 ) -> anyhow::Result<()> {
-    let summary = crate::routes::summary::build(pool, market)
+    let summary = crate::service::summary::build(pool, market)
         .await
         .map_err(|err| anyhow!("computing the {} summary failed: {err}", market.as_str()))?;
 
@@ -416,8 +416,8 @@ async fn check_deposits(
     data: &WorkbookData,
     report: &mut ParityReport,
 ) -> anyhow::Result<()> {
-    let today = crate::routes::today();
-    let deposits = crate::routes::deposits::load_all(pool)
+    let today = crate::store::today();
+    let deposits = crate::store::deposits::load_all(pool)
         .await
         .map_err(|err| anyhow!("loading deposits failed: {err}"))?;
     let facts: Vec<DepositFacts<'_>> = deposits
@@ -598,28 +598,26 @@ async fn check_mpf(
     data: &WorkbookData,
     report: &mut ParityReport,
 ) -> anyhow::Result<()> {
-    use crate::routes::mpf as mpf_routes;
-
-    let today = crate::routes::today();
-    let stored = mpf_routes::load_all_stored(pool)
+    let today = crate::store::today();
+    let stored = crate::store::mpf::load_all_stored(pool)
         .await
         .map_err(|err| anyhow!("loading MPF accounts failed: {err}"))?;
-    let history = mpf_routes::load_history(pool, None)
+    let history = crate::store::mpf::load_history(pool, None)
         .await
         .map_err(|err| anyhow!("loading MPF history failed: {err}"))?;
     let accounts: Vec<crate::models::MpfAccount> = stored
         .iter()
-        .map(|account| mpf_routes::present_account(account, &history, today))
+        .map(|account| crate::service::mpf::present_account(account, &history, today))
         .collect();
     let facts: Vec<crate::calc::MpfAccountFacts> = stored
         .iter()
-        .map(|account| mpf_routes::facts_of(account, &history))
+        .map(|account| crate::store::mpf::facts_of(account, &history))
         .collect();
     let totals = crate::calc::mpf_totals(
         &facts,
         today,
-        mpf_routes::meta_f64(pool, crate::mpf::SEED_MAX_RATE_KEY).await?,
-        mpf_routes::meta_f64(pool, crate::mpf::SEED_MAX_GAIN_KEY).await?,
+        crate::store::meta::meta_f64(pool, crate::store::mpf::SEED_MAX_RATE_KEY).await?,
+        crate::store::meta::meta_f64(pool, crate::store::mpf::SEED_MAX_GAIN_KEY).await?,
     );
 
     for sheet_account in &data.mpf {
@@ -800,7 +798,7 @@ async fn check_bonds(
     data: &WorkbookData,
     report: &mut ParityReport,
 ) -> anyhow::Result<()> {
-    let bonds = crate::routes::bonds::load_all_bonds(pool)
+    let bonds = crate::store::bonds::load_all_bonds(pool)
         .await
         .map_err(|err| anyhow!("loading bonds failed: {err}"))?;
 
@@ -849,7 +847,7 @@ async fn check_bonds(
             );
             continue;
         };
-        let coupons = crate::routes::bonds::load_bond_coupons(pool, computed_bond.id)
+        let coupons = crate::store::bonds::load_bond_coupons(pool, computed_bond.id)
             .await
             .map_err(|err| anyhow!("loading coupons of bond {} failed: {err}", computed_bond.id))?;
         for sheet_coupon in &sheet_bond.coupons {
@@ -917,14 +915,14 @@ async fn check_aia(
     data: &WorkbookData,
     report: &mut ParityReport,
 ) -> anyhow::Result<()> {
-    let policies = crate::routes::aia::load_all_policies(pool)
+    let policies = crate::store::aia::load_all_policies(pool)
         .await
         .map_err(|err| anyhow!("loading aia policies failed: {err}"))?;
-    let rate = crate::mpf::meta_get(pool, crate::routes::aia::RATE_KEY)
+    let rate = crate::store::meta::meta_get(pool, crate::store::aia::RATE_KEY)
         .await?
         .and_then(|raw| raw.parse::<f64>().ok());
     let facts: Vec<crate::calc::AiaPolicyFacts> =
-        policies.iter().map(crate::routes::aia::facts_of).collect();
+        policies.iter().map(crate::store::aia::facts_of).collect();
     let totals = crate::calc::aia_totals(&facts, rate);
     let cached = &data.aia_cached;
 
@@ -1122,7 +1120,7 @@ async fn check_months(
 
     // Live totals fill NULL B/D at/after the current month — same rule as
     // the API — so the live-linked rows produce real numbers here too.
-    let today = crate::routes::today();
+    let today = crate::store::today();
     let live_from = chrono::NaiveDate::from_ymd_opt(today.year(), today.month(), 1)
         .ok_or_else(|| anyhow!("today {today} has no first of month"))?;
     let parse_month = |month: &str| -> anyhow::Result<chrono::NaiveDate> {
@@ -1136,14 +1134,14 @@ async fn check_months(
         .last()
         .is_some_and(|s| parse_month(&s.month).is_ok_and(|month| month == live_from));
     let live = if needs_live {
-        let input = crate::routes::months::live_totals_input(pool).await?;
+        let input = crate::service::months::live_totals_input(pool).await?;
         Some(live_totals(&input))
     } else {
         None
     };
 
     // 利息 is derived: auto events + `interest` items — same rule as the API.
-    let interest_events = crate::routes::months::load_interest_events(pool).await?;
+    let interest_events = crate::service::months::load_interest_events(pool).await?;
     let mut stat_rows = Vec::with_capacity(stored.len());
     for s in &stored {
         let month = parse_month(&s.month)?;
@@ -1177,7 +1175,7 @@ async fn check_months(
         let key: String = row.try_get("key")?;
         let value: String = row.try_get("value")?;
         if let (Some(year), Ok(rate)) = (
-            key.strip_prefix(crate::routes::months::POOL_RATE_PREFIX)
+            key.strip_prefix(crate::store::months::POOL_RATE_PREFIX)
                 .and_then(|year| year.parse::<i32>().ok()),
             value.parse::<f64>(),
         ) {
@@ -1426,9 +1424,10 @@ async fn check_months(
 
     // Settings: Overview!E1 salary, N8 current-year pool rate, and the four
     // manual asset/cash cells against the seeded rows.
-    let salary_meta = crate::mpf::meta_get(pool, crate::routes::months::SALARY_KEY).await?;
+    let salary_meta = crate::store::meta::meta_get(pool, crate::store::months::SALARY_KEY).await?;
     let rate_meta =
-        crate::mpf::meta_get(pool, &crate::routes::months::pool_rate_key(today.year())).await?;
+        crate::store::meta::meta_get(pool, &crate::store::months::pool_rate_key(today.year()))
+            .await?;
     month_compare(
         report,
         "Month Stat settings salary",
@@ -1509,13 +1508,9 @@ async fn check_overview(
     if cached.assets.is_empty() && cached.total_assets.is_none() {
         return Ok(());
     }
-    let response =
-        crate::routes::overview::overview(axum::extract::State(crate::routes::AppState {
-            pool: pool.clone(),
-        }))
+    let response = crate::service::overview::build(pool)
         .await
-        .map_err(|err| anyhow!("computing the overview failed: {err}"))?
-        .0;
+        .map_err(|err| anyhow!("computing the overview failed: {err}"))?;
 
     // Asset rows compare by label; module rows (債券/基金/MPF) are
     // deterministic, price-driven and manual rows report Info.
@@ -1660,7 +1655,7 @@ async fn check_overview(
     }
 
     // The cached cash rows (B16/B17) are manual cells — informational.
-    let manual = crate::routes::months::load_assets(pool).await?;
+    let manual = crate::store::months::load_assets(pool).await?;
     for asset in &cached.manual_assets {
         if asset.kind != crate::models::ManualAssetKind::Cash {
             continue;
@@ -1770,7 +1765,7 @@ async fn check_overview(
     // must reproduce the sheet; the L/M cells and the current-year N differ
     // by design — the sheet's per-year formulas were superseded by the
     // unified one — so they report informational.
-    let current_year = crate::routes::today().year();
+    let current_year = crate::store::today().year();
     overview_compare(
         report,
         "Overview 投資目標平均",
@@ -2001,10 +1996,10 @@ async fn check_year_review(
     data: &WorkbookData,
     report: &mut ParityReport,
 ) -> anyhow::Result<()> {
-    let response = crate::routes::year_review::build(pool)
+    let response = crate::service::year_review::build(pool)
         .await
         .map_err(|err| anyhow!("building the year review failed: {err}"))?;
-    let current_year = crate::routes::today().year();
+    let current_year = crate::store::today().year();
 
     // The sheet's 股票 J column sums every trade-sheet dividend row —
     // received or still pending — so parity compares the effective total

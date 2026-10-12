@@ -2,52 +2,23 @@ use axum::Json;
 use axum::extract::{Path, State};
 use axum::http::StatusCode;
 use chrono::Datelike;
-use sqlx::sqlite::SqliteRow;
-use sqlx::{Row, SqlitePool};
+use sqlx::SqlitePool;
 
-use super::{AppState, deposits, months, mpf, now_timestamp};
+use super::{AppState, parse_ym};
 use crate::calc::{self, FieldError, ForecastItemFacts};
 use crate::error::{ApiError, ErrorBody};
 use crate::models::{
     Deposit, ForecastItem, ForecastItemKind, ForecastItemPatch, ForecastMonth, ForecastPlacement,
     ForecastResponse, NewDeposit, NewForecastItem,
 };
-
-const ITEM_COLUMNS: &str = "id, month, kind, amount, return_month, note, sort_order, created_at";
-
-fn row_to_item(row: &SqliteRow) -> Result<ForecastItem, ApiError> {
-    let kind: String = row.try_get("kind")?;
-    Ok(ForecastItem {
-        id: row.try_get("id")?,
-        month: row.try_get("month")?,
-        kind: ForecastItemKind::parse(&kind)
-            .ok_or_else(|| ApiError::Conflict(format!("stored kind {kind} is not valid")))?,
-        amount: row.try_get("amount")?,
-        return_month: row.try_get("return_month")?,
-        note: row.try_get("note")?,
-        sort_order: row.try_get("sort_order")?,
-        created_at: row.try_get("created_at")?,
-    })
-}
+use crate::store::forecast as store;
 
 async fn load_item(pool: &SqlitePool, id: i64) -> Result<ForecastItem, ApiError> {
-    let row = sqlx::query(sqlx::AssertSqlSafe(format!(
-        "SELECT {ITEM_COLUMNS} FROM forecast_items WHERE id = ?"
-    )))
-    .bind(id)
-    .fetch_optional(pool)
-    .await?
-    .ok_or_else(|| ApiError::NotFound(format!("forecast item {id} not found")))?;
-    row_to_item(&row)
+    store::load_item(pool, id).await.map_err(ApiError::from)
 }
 
 async fn load_all_items(pool: &SqlitePool) -> Result<Vec<ForecastItem>, ApiError> {
-    let rows = sqlx::query(sqlx::AssertSqlSafe(format!(
-        "SELECT {ITEM_COLUMNS} FROM forecast_items ORDER BY month, sort_order, id"
-    )))
-    .fetch_all(pool)
-    .await?;
-    rows.iter().map(row_to_item).collect()
+    store::load_all_items(pool).await.map_err(ApiError::from)
 }
 
 fn parse_stored_ym(value: &str, field: &str) -> Result<chrono::NaiveDate, ApiError> {
@@ -69,7 +40,7 @@ fn validate_return_month(
             "return_month only applies to 定期 plan items",
         )]);
     }
-    months::parse_ym(&value)
+    parse_ym(&value)
         .map(|date| date.to_string())
         .map(Some)
         .map_err(|_| {
@@ -101,26 +72,26 @@ fn validate_amount(amount: f64) -> Result<(), Vec<FieldError>> {
 )]
 pub async fn forecast(State(state): State<AppState>) -> Result<Json<ForecastResponse>, ApiError> {
     let pool = &state.pool;
-    let input = months::live_totals_input(pool).await?;
+    let input = crate::service::months::live_totals_input(pool).await?;
     let totals = calc::live_totals(&input);
-    let salary = mpf::meta_f64(pool, months::SALARY_KEY).await?;
-    let bill_amount = mpf::meta_f64(pool, months::BILL_AMOUNT_KEY)
+    let salary = crate::store::meta::meta_f64(pool, crate::store::months::SALARY_KEY).await?;
+    let bill_amount = crate::store::meta::meta_f64(pool, crate::store::months::BILL_AMOUNT_KEY)
         .await?
-        .unwrap_or(months::DEFAULT_BILL_AMOUNT);
-    let semi_liquid_target = months::semi_liquid_target(pool).await?;
-    let first = months::live_from();
+        .unwrap_or(crate::store::months::DEFAULT_BILL_AMOUNT);
+    let semi_liquid_target = crate::service::months::semi_liquid_target(pool).await?;
+    let first = crate::service::months::live_from();
     // The first column anchors on the current month's 月初(出糧後); while it is
     // unset the live 活期 sum stands in.
-    let start = months::load_month(pool, &first.to_string())
+    let start = crate::store::months::load_month(pool, &first.to_string())
         .await?
         .and_then(|stored| stored.start_cash)
         .or(Some(input.cash_sum));
 
-    let stat_rows = months::load_stat_rows(pool, Some(&totals)).await?;
-    let month_items = months::load_all_items(pool).await?;
+    let stat_rows = crate::service::months::load_stat_rows(pool, Some(&totals)).await?;
+    let month_items = crate::store::months::load_all_items(pool).await?;
     let trailing = calc::trailing_averages(&stat_rows, &month_items, first);
     let spend = trailing.living_budget.map(|budget| -budget);
-    let events = months::load_interest_events(pool).await?;
+    let events = crate::service::months::load_interest_events(pool).await?;
 
     let items = load_all_items(pool).await?;
     let mut facts = Vec::with_capacity(items.len());
@@ -215,7 +186,7 @@ pub async fn create_item(
     Path(ym): Path<String>,
     Json(body): Json<NewForecastItem>,
 ) -> Result<(StatusCode, Json<ForecastItem>), ApiError> {
-    let month = months::parse_ym(&ym)?.to_string();
+    let month = parse_ym(&ym)?.to_string();
 
     let mut errors = Vec::new();
     if let Err(mut fields) = validate_amount(body.amount) {
@@ -236,25 +207,16 @@ pub async fn create_item(
         .note
         .map(|note| note.trim().to_string())
         .filter(|note| !note.is_empty());
-    let sort_order: i64 = sqlx::query_scalar(
-        "SELECT COALESCE(MAX(sort_order), 0) + 1 FROM forecast_items WHERE month = ?",
+    let sort_order = store::next_sort_order(&state.pool, &month).await?;
+    let id = store::insert_item(
+        &state.pool,
+        &month,
+        body.kind.as_str(),
+        body.amount,
+        &return_month,
+        &note,
+        sort_order,
     )
-    .bind(&month)
-    .fetch_one(&state.pool)
-    .await?;
-    let id: i64 = sqlx::query_scalar(
-        "INSERT INTO forecast_items (month, kind, amount, return_month, note, sort_order, \
-         created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?) RETURNING id",
-    )
-    .bind(&month)
-    .bind(body.kind.as_str())
-    .bind(body.amount)
-    .bind(&return_month)
-    .bind(&note)
-    .bind(sort_order)
-    .bind(now_timestamp())
-    .bind(now_timestamp())
-    .fetch_one(&state.pool)
     .await?;
     Ok((StatusCode::CREATED, Json(load_item(&state.pool, id).await?)))
 }
@@ -309,18 +271,7 @@ pub async fn update_item(
         return Err(ApiError::Validation(errors));
     }
 
-    sqlx::query(
-        "UPDATE forecast_items SET kind = ?, amount = ?, return_month = ?, note = ?, \
-         updated_at = ? WHERE id = ?",
-    )
-    .bind(kind.as_str())
-    .bind(amount)
-    .bind(&return_month)
-    .bind(&note)
-    .bind(now_timestamp())
-    .bind(id)
-    .execute(&state.pool)
-    .await?;
+    store::update_item(&state.pool, id, kind.as_str(), amount, &return_month, &note).await?;
     Ok(Json(load_item(&state.pool, id).await?))
 }
 
@@ -338,11 +289,7 @@ pub async fn remove_item(
     State(state): State<AppState>,
     Path(id): Path<i64>,
 ) -> Result<StatusCode, ApiError> {
-    let result = sqlx::query("DELETE FROM forecast_items WHERE id = ?")
-        .bind(id)
-        .execute(&state.pool)
-        .await?;
-    if result.rows_affected() == 0 {
+    if store::delete_item(&state.pool, id).await? == 0 {
         return Err(ApiError::NotFound(format!("forecast item {id} not found")));
     }
     Ok(StatusCode::NO_CONTENT)
@@ -393,19 +340,14 @@ pub async fn convert(
     .map_err(ApiError::Validation)?;
 
     let mut tx = state.pool.begin().await?;
-    let sort_order: i64 =
-        sqlx::query_scalar("SELECT COALESCE(MAX(sort_order), 0) + 1 FROM deposits")
-            .fetch_one(&mut *tx)
-            .await?;
-    let deposit_id = deposits::insert_deposit(&mut *tx, &validated, sort_order, &body).await?;
-    sqlx::query("DELETE FROM forecast_items WHERE id = ?")
-        .bind(id)
-        .execute(&mut *tx)
-        .await?;
+    let sort_order = crate::store::deposits::next_sort_order_tx(&mut tx).await?;
+    let deposit_id =
+        crate::store::deposits::insert_deposit(&mut *tx, &validated, sort_order, &body).await?;
+    store::delete_item_in_tx(&mut tx, id).await?;
     tx.commit().await?;
 
     Ok((
         StatusCode::CREATED,
-        Json(deposits::load_one(&state.pool, deposit_id).await?),
+        Json(crate::store::deposits::load_one(&state.pool, deposit_id).await?),
     ))
 }

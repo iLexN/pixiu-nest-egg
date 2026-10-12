@@ -4,6 +4,7 @@ use axum::response::{IntoResponse, Response};
 use serde::Serialize;
 
 use crate::calc::FieldError;
+use crate::store::StoreError;
 
 #[derive(Debug, thiserror::Error)]
 pub enum ApiError {
@@ -20,6 +21,16 @@ pub enum ApiError {
 impl ApiError {
     pub fn field(field: &str, message: impl Into<String>) -> Self {
         ApiError::Validation(vec![FieldError::new(field, message)])
+    }
+}
+
+impl From<StoreError> for ApiError {
+    fn from(err: StoreError) -> Self {
+        match err {
+            StoreError::Database(err) => ApiError::Database(err),
+            StoreError::NotFound(message) => ApiError::NotFound(message),
+            StoreError::Corrupt(message) => ApiError::Conflict(message),
+        }
     }
 }
 
@@ -80,4 +91,44 @@ impl IntoResponse for ApiError {
 
 fn is_unique_violation(err: &sqlx::Error) -> bool {
     matches!(err, sqlx::Error::Database(db) if db.is_unique_violation())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::db::connect_memory;
+    use axum::response::IntoResponse;
+
+    #[test]
+    fn store_not_found_maps_to_404() {
+        let response =
+            ApiError::from(StoreError::NotFound("stock 42 not found".into())).into_response();
+        assert_eq!(response.status(), StatusCode::NOT_FOUND);
+    }
+
+    #[test]
+    fn store_corrupt_maps_to_409() {
+        let response = ApiError::from(StoreError::Corrupt("stored market XX is not valid".into()))
+            .into_response();
+        assert_eq!(response.status(), StatusCode::CONFLICT);
+    }
+
+    #[tokio::test]
+    async fn store_database_maps_through_and_unique_violation_stays_409() {
+        let pool = connect_memory().await.expect("memory db");
+        sqlx::query("CREATE TABLE uniq (k TEXT PRIMARY KEY)")
+            .execute(&pool)
+            .await
+            .expect("create table");
+        sqlx::query("INSERT INTO uniq (k) VALUES ('a')")
+            .execute(&pool)
+            .await
+            .expect("seed");
+        let err = sqlx::query("INSERT INTO uniq (k) VALUES ('a')")
+            .execute(&pool)
+            .await
+            .expect_err("unique violation");
+        let response = ApiError::from(StoreError::Database(err)).into_response();
+        assert_eq!(response.status(), StatusCode::CONFLICT);
+    }
 }

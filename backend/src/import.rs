@@ -172,7 +172,7 @@ async fn seed_market_history(pool: &SqlitePool) -> anyhow::Result<()> {
 /// a real record (the `WHERE synthetic = 1` guard), and the marks just take
 /// the sheet's latest values.
 async fn seed_market_figures(pool: &SqlitePool, data: &WorkbookData) -> anyhow::Result<()> {
-    let today = crate::routes::today();
+    let today = crate::store::today();
     let first_of_month = chrono::NaiveDate::from_ymd_opt(today.year(), today.month(), 1)
         .ok_or_else(|| anyhow!("today {today} has no first of month"))?;
     let prev_month_end = first_of_month - chrono::Days::new(1);
@@ -218,15 +218,15 @@ async fn seed_market_figures(pool: &SqlitePool, data: &WorkbookData) -> anyhow::
                 .await?;
             }
         }
-        crate::mpf::meta_put(
+        crate::store::meta::meta_put(
             pool,
-            &crate::market_history::seed_max_percent_key(market),
+            &crate::store::market_history::seed_max_percent_key(market),
             cached.max_percent.map(|v| v.to_string()).as_deref(),
         )
         .await?;
-        crate::mpf::meta_put(
+        crate::store::meta::meta_put(
             pool,
-            &crate::market_history::seed_max_amount_key(market),
+            &crate::store::market_history::seed_max_amount_key(market),
             cached.max_amount.map(|v| v.to_string()).as_deref(),
         )
         .await?;
@@ -244,7 +244,7 @@ async fn seed_market_figures(pool: &SqlitePool, data: &WorkbookData) -> anyhow::
 /// `app_meta` — per-account history cannot rebuild them.
 async fn import_mpf(pool: &SqlitePool, data: &WorkbookData) -> anyhow::Result<MpfReport> {
     let mut report = MpfReport::default();
-    let today = crate::routes::today();
+    let today = crate::store::today();
     let first_of_month = chrono::NaiveDate::from_ymd_opt(today.year(), today.month(), 1)
         .ok_or_else(|| anyhow!("today {today} has no first of month"))?;
     let prev_month_end = first_of_month - chrono::Days::new(1);
@@ -282,7 +282,7 @@ async fn import_mpf(pool: &SqlitePool, data: &WorkbookData) -> anyhow::Result<Mp
             )
         })?;
 
-        let now = crate::routes::now_timestamp();
+        let now = crate::store::now_timestamp();
         let id: i64 = sqlx::query_scalar(
             "INSERT INTO mpf_accounts (label, trustee, contributions, balance, plan_name, \
              member_no, sort_order, seed_max_rate, seed_max_gain, created_at, \
@@ -323,8 +323,14 @@ async fn import_mpf(pool: &SqlitePool, data: &WorkbookData) -> anyhow::Result<Mp
     }
 
     for (key, value) in [
-        (crate::mpf::SEED_MAX_RATE_KEY, data.mpf_cached.max_rate),
-        (crate::mpf::SEED_MAX_GAIN_KEY, data.mpf_cached.max_gain),
+        (
+            crate::store::mpf::SEED_MAX_RATE_KEY,
+            data.mpf_cached.max_rate,
+        ),
+        (
+            crate::store::mpf::SEED_MAX_GAIN_KEY,
+            data.mpf_cached.max_gain,
+        ),
     ] {
         if let Some(value) = value {
             sqlx::query("INSERT OR IGNORE INTO app_meta (key, value) VALUES (?, ?)")
@@ -363,7 +369,7 @@ async fn import_year_snapshots(
     pool: &SqlitePool,
     figures: &[SheetYearFigure],
 ) -> anyhow::Result<SnapshotReport> {
-    let current_year = crate::routes::today().year();
+    let current_year = crate::store::today().year();
     let mut report = SnapshotReport::default();
     for figure in figures {
         if figure.year >= current_year
@@ -386,7 +392,7 @@ async fn import_year_snapshots(
         .bind(figure.invested)
         .bind(figure.cost)
         .bind(figure.market_value)
-        .bind(crate::routes::now_timestamp())
+        .bind(crate::store::now_timestamp())
         .execute(pool)
         .await?;
         report.snapshots_seeded += 1;
@@ -446,7 +452,7 @@ async fn import_year_review(
     blocks: &[SheetYearReview],
     overview: &crate::xlsx::OverviewCached,
 ) -> anyhow::Result<YearReviewReport> {
-    let current_year = crate::routes::today().year();
+    let current_year = crate::store::today().year();
     let mut report = YearReviewReport::default();
     for block in blocks {
         if let Some(sold_pl) = block.sold_pl {
@@ -458,7 +464,7 @@ async fn import_year_review(
             )
             .bind(block.year)
             .bind(sold_pl)
-            .bind(crate::routes::now_timestamp())
+            .bind(crate::store::now_timestamp())
             .execute(pool)
             .await?;
             report.sold_pl_seeded += 1;
@@ -518,7 +524,7 @@ async fn import_year_review(
         .bind(bond_interest)
         .bind(deposit_principal)
         .bind(deposit_interest)
-        .bind(crate::routes::now_timestamp())
+        .bind(crate::store::now_timestamp())
         .execute(pool)
         .await?;
         report.years_seeded += 1;
@@ -547,7 +553,7 @@ async fn import_year_review(
         )
         .bind(row.year)
         .bind(invested_adjustment)
-        .bind(crate::routes::now_timestamp())
+        .bind(crate::store::now_timestamp())
         .execute(pool)
         .await?;
         report.years_seeded += 1;
@@ -636,7 +642,7 @@ async fn import_market(pool: &SqlitePool, sheets: &MarketSheets) -> anyhow::Resu
             continue;
         }
 
-        let now = crate::routes::now_timestamp();
+        let now = crate::store::now_timestamp();
         sqlx::query(
             "INSERT INTO trades (stock_id, trade_type, trade_date, shares, unit_price, fee, \
              total, input_mode, note, created_at, updated_at) \
@@ -674,7 +680,7 @@ async fn import_dividends(
     mut next_sort_order: i64,
 ) -> anyhow::Result<()> {
     let market = sheets.market;
-    let today = crate::routes::today();
+    let today = crate::store::today();
 
     // Snapshot facts are per-stock: an unfiltered market-wide sum would
     // inflate every row's 股數.
@@ -792,7 +798,7 @@ async fn import_dividends(
             )
         })?;
 
-        crate::routes::dividends::insert_dividend(
+        crate::store::dividends::insert_dividend(
             pool,
             stock_id,
             &validated,
@@ -1048,11 +1054,11 @@ async fn import_deposits(
             continue;
         }
 
-        let now = crate::routes::now_timestamp();
+        let now = crate::store::now_timestamp();
         // A deposit already past its end date counts as received (its interest
         // fed 利息 all along); future deposits stay unreceived until 收訖.
         let received_at = (validated.end_date.as_str()
-            <= crate::routes::today().to_string().as_str())
+            <= crate::store::today().to_string().as_str())
         .then(|| validated.end_date.clone());
         sqlx::query(
             "INSERT INTO deposits (label, bank, principal, rate, interest, start_date, end_date, \
@@ -1131,7 +1137,7 @@ fn note2_start_date(note2: Option<&str>) -> Option<String> {
 /// cells seed only while unset — after first import the user owns them.
 async fn import_months(pool: &SqlitePool, data: &WorkbookData) -> anyhow::Result<MonthStatReport> {
     let mut report = MonthStatReport::default();
-    let now = crate::routes::now_timestamp();
+    let now = crate::store::now_timestamp();
     let existing: std::collections::HashSet<String> =
         sqlx::query_scalar::<_, String>("SELECT month FROM month_stats")
             .fetch_all(pool)
@@ -1142,7 +1148,7 @@ async fn import_months(pool: &SqlitePool, data: &WorkbookData) -> anyhow::Result
     // 利息 is derived (auto events + `interest` items), so the sheet's N cell
     // imports as a residual item: the part deposits/coupons/dividends do not
     // explain. Events are loaded once — months import after all sources.
-    let interest_events = crate::routes::months::load_interest_events(pool).await?;
+    let interest_events = crate::service::months::load_interest_events(pool).await?;
 
     for month in &data.month_stat.months {
         // A hand-frozen H cell keeps its cached value as an override; the
@@ -1226,15 +1232,15 @@ async fn import_months(pool: &SqlitePool, data: &WorkbookData) -> anyhow::Result
         report.months_imported += 1;
     }
 
-    let current_year = crate::routes::today().year();
-    if crate::mpf::meta_get(pool, crate::routes::months::SALARY_KEY)
+    let current_year = crate::store::today().year();
+    if crate::store::meta::meta_get(pool, crate::store::months::SALARY_KEY)
         .await?
         .is_none()
         && let Some(salary) = data.overview.salary
     {
-        crate::mpf::meta_put(
+        crate::store::meta::meta_put(
             pool,
-            crate::routes::months::SALARY_KEY,
+            crate::store::months::SALARY_KEY,
             Some(&salary.to_string()),
         )
         .await?;
@@ -1244,28 +1250,29 @@ async fn import_months(pool: &SqlitePool, data: &WorkbookData) -> anyhow::Result
     // edits in settings win over re-imports.
     for (key, value) in [
         (
-            crate::routes::months::GOAL1_AMOUNT_KEY,
+            crate::store::months::GOAL1_AMOUNT_KEY,
             data.overview.goals.goal1_amount,
         ),
         (
-            crate::routes::months::GOAL2_AMOUNT_KEY,
+            crate::store::months::GOAL2_AMOUNT_KEY,
             data.overview.goals.goal2_amount,
         ),
     ] {
         if let Some(amount) = value
-            && crate::mpf::meta_get(pool, key).await?.is_none()
+            && crate::store::meta::meta_get(pool, key).await?.is_none()
         {
-            crate::mpf::meta_put(pool, key, Some(&amount.to_string())).await?;
+            crate::store::meta::meta_put(pool, key, Some(&amount.to_string())).await?;
             report.settings_seeded += 1;
         }
     }
-    let rate_key = crate::routes::months::pool_rate_key;
-    if crate::mpf::meta_get(pool, &rate_key(current_year))
+    let rate_key = crate::store::months::pool_rate_key;
+    if crate::store::meta::meta_get(pool, &rate_key(current_year))
         .await?
         .is_none()
         && let Some(rate) = data.overview.pool_rate
     {
-        crate::mpf::meta_put(pool, &rate_key(current_year), Some(&rate.to_string())).await?;
+        crate::store::meta::meta_put(pool, &rate_key(current_year), Some(&rate.to_string()))
+            .await?;
         report.settings_seeded += 1;
     }
     // Past years' rates solve from the sheet's pool chain:
@@ -1278,14 +1285,15 @@ async fn import_months(pool: &SqlitePool, data: &WorkbookData) -> anyhow::Result
         let interest = year.interest_sum.unwrap_or(0.0);
         if year.year < current_year
             && interest != 0.0
-            && crate::mpf::meta_get(pool, &rate_key(year.year))
+            && crate::store::meta::meta_get(pool, &rate_key(year.year))
                 .await?
                 .is_none()
         {
             let rate = (balance - prev_balance + year.entertainment_sum.unwrap_or(0.0)
                 - year.pool_input_sum.unwrap_or(0.0))
                 / interest;
-            crate::mpf::meta_put(pool, &rate_key(year.year), Some(&rate.to_string())).await?;
+            crate::store::meta::meta_put(pool, &rate_key(year.year), Some(&rate.to_string()))
+                .await?;
             report.settings_seeded += 1;
         }
         prev_balance = balance;
@@ -1298,22 +1306,22 @@ async fn import_months(pool: &SqlitePool, data: &WorkbookData) -> anyhow::Result
     // The 美股 sheet's IBKR account cells seed `app_meta` once, like the salary.
     for (key, value) in [
         (
-            crate::routes::overview::IBKR_NOW_VALUE_KEY,
+            crate::store::overview::IBKR_NOW_VALUE_KEY,
             data.us_account.now_value,
         ),
         (
-            crate::routes::overview::IBKR_HKD_CASH_KEY,
+            crate::store::overview::IBKR_HKD_CASH_KEY,
             data.us_account.hkd_cash,
         ),
         (
-            crate::routes::overview::IBKR_USD_CASH_KEY,
+            crate::store::overview::IBKR_USD_CASH_KEY,
             data.us_account.usd_cash,
         ),
     ] {
         if let Some(value) = value
-            && crate::mpf::meta_get(pool, key).await?.is_none()
+            && crate::store::meta::meta_get(pool, key).await?.is_none()
         {
-            crate::mpf::meta_put(pool, key, Some(&value.to_string())).await?;
+            crate::store::meta::meta_put(pool, key, Some(&value.to_string())).await?;
             report.settings_seeded += 1;
         }
     }
@@ -1323,13 +1331,13 @@ async fn import_months(pool: &SqlitePool, data: &WorkbookData) -> anyhow::Result
     // like the other settings; the month_now/coming_save overrides stay unset
     // so the derived figures apply.
     for (key, value) in [
-        (crate::routes::months::MM_START_DATE_KEY, "2023-10-27"),
-        (crate::routes::months::MM_SAVED_KEY, "1094405.06"),
-        (crate::routes::months::MM_TARGET_MONTHS_KEY, "36"),
-        (crate::routes::months::MM_TARGET_AMOUNT_KEY, "1000000"),
+        (crate::store::months::MM_START_DATE_KEY, "2023-10-27"),
+        (crate::store::months::MM_SAVED_KEY, "1094405.06"),
+        (crate::store::months::MM_TARGET_MONTHS_KEY, "36"),
+        (crate::store::months::MM_TARGET_AMOUNT_KEY, "1000000"),
     ] {
-        if crate::mpf::meta_get(pool, key).await?.is_none() {
-            crate::mpf::meta_put(pool, key, Some(value)).await?;
+        if crate::store::meta::meta_get(pool, key).await?.is_none() {
+            crate::store::meta::meta_put(pool, key, Some(value)).await?;
             report.settings_seeded += 1;
         }
     }
@@ -1356,7 +1364,7 @@ async fn import_months(pool: &SqlitePool, data: &WorkbookData) -> anyhow::Result
                 "INSERT INTO ibkr_transfers (transfer_date, amount_hkd, created_at) \
                  VALUES (?, ?, ?)",
             )
-            .bind(first_trade.unwrap_or_else(|| crate::routes::today().to_string()))
+            .bind(first_trade.unwrap_or_else(|| crate::store::today().to_string()))
             .bind(total)
             .bind(&now)
             .execute(pool)
@@ -1453,7 +1461,7 @@ async fn existing_deposit_keys(pool: &SqlitePool) -> anyhow::Result<HashMap<Depo
 /// unreceived, the same heuristic dividends use.
 async fn import_bonds(pool: &SqlitePool, bonds: &[SheetBond]) -> anyhow::Result<BondReport> {
     let mut report = BondReport::default();
-    let today = crate::routes::today();
+    let today = crate::store::today();
     let mut bond_ids = existing_bond_ids(pool).await?;
     let mut coupon_keys = existing_coupon_keys(pool).await?;
 
@@ -1488,7 +1496,7 @@ async fn import_bonds(pool: &SqlitePool, bonds: &[SheetBond]) -> anyhow::Result<
                             .join("; ")
                     )
                 })?;
-                let id = crate::routes::bonds::insert_bond(
+                let id = crate::store::bonds::insert_bond(
                     pool,
                     &validated,
                     bond.sort_order,
@@ -1543,7 +1551,7 @@ async fn import_bonds(pool: &SqlitePool, bonds: &[SheetBond]) -> anyhow::Result<
                         .join("; ")
                 )
             })?;
-            crate::routes::bonds::insert_coupon(
+            crate::store::bonds::insert_coupon(
                 pool,
                 &validated,
                 &crate::models::NewBondCoupon {
@@ -1618,12 +1626,13 @@ async fn import_aia(pool: &SqlitePool, data: &WorkbookData) -> anyhow::Result<Ai
 
     // The manual rate seeds once from Overview!N3 and is never overwritten —
     // after first import the user owns it (PATCH /api/aia/rate).
-    if crate::mpf::meta_get(pool, crate::routes::aia::RATE_KEY)
+    if crate::store::meta::meta_get(pool, crate::store::aia::RATE_KEY)
         .await?
         .is_none()
         && let Some(rate) = data.aia_cached.usd_hkd_rate
     {
-        crate::mpf::meta_put(pool, crate::routes::aia::RATE_KEY, Some(&rate.to_string())).await?;
+        crate::store::meta::meta_put(pool, crate::store::aia::RATE_KEY, Some(&rate.to_string()))
+            .await?;
         report.rate_seeded = 1;
     }
 
@@ -1683,7 +1692,7 @@ async fn import_aia(pool: &SqlitePool, data: &WorkbookData) -> anyhow::Result<Ai
                     .join("; ")
             )
         })?;
-        crate::routes::aia::insert_policy(pool, &validated, policy.sort_order)
+        crate::store::aia::insert_policy(pool, &validated, policy.sort_order)
             .await
             .with_context(|| {
                 format!(
@@ -1803,7 +1812,7 @@ mod tests {
             .expect("seed");
         assert_eq!(seeded, 3);
 
-        let stored = crate::routes::months::load_assets(&pool)
+        let stored = crate::store::months::load_assets(&pool)
             .await
             .expect("load");
         let by_label = |label: &str| {
@@ -1826,7 +1835,7 @@ mod tests {
             .await
             .expect("re-seed");
         assert_eq!(seeded, 0);
-        let stored = crate::routes::months::load_assets(&pool)
+        let stored = crate::store::months::load_assets(&pool)
             .await
             .expect("load");
         assert_eq!(

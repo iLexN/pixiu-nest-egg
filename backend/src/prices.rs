@@ -11,8 +11,8 @@ use sqlx::SqlitePool;
 
 use crate::error::ApiError;
 use crate::models::{InvalidPriceEntry, Market, PriceReport, PriceUpdate, RawPriceEntry, Stock};
-use crate::routes::now_timestamp;
-use crate::routes::stocks::load_stocks;
+use crate::store::now_timestamp;
+use crate::store::stocks::load_stocks;
 
 /// Parsed `{"stocks": [...]}` body shared by the route and the CLI.
 #[derive(Debug, Deserialize)]
@@ -77,12 +77,7 @@ pub async fn apply(pool: &SqlitePool, upload: PriceUpload) -> Result<PriceReport
     let mut updated = Vec::new();
     let mut transaction = pool.begin().await?;
     for entry in &resolved {
-        sqlx::query("UPDATE stocks SET manual_price = ?, price_updated_at = ? WHERE id = ?")
-            .bind(entry.price)
-            .bind(&now)
-            .bind(entry.id)
-            .execute(&mut *transaction)
-            .await?;
+        crate::store::stocks::set_price(&mut transaction, entry.price, &now, entry.id).await?;
         updated_ids.insert(entry.id);
         updated.push(PriceUpdate {
             market: entry.market,
@@ -98,7 +93,7 @@ pub async fn apply(pool: &SqlitePool, upload: PriceUpload) -> Result<PriceReport
     // `import_prices` bin shares this path).
     for market in [Market::Hk, Market::Us] {
         if resolved.iter().any(|entry| entry.market == market) {
-            crate::routes::summary::build(pool, market).await?;
+            crate::service::summary::build(pool, market).await?;
         }
     }
 

@@ -212,7 +212,7 @@ async function submit() {
 
       <label class="wide">
         note2
-        <input v-model="form.note2" type="text" placeholder="分段利率等備註" />
+        <textarea v-model="form.note2" rows="4" placeholder="分段利率等備註"></textarea>
       </label>
     </div>
 
@@ -254,6 +254,10 @@ label {
 }
 .wide {
   grid-column: 1 / -1;
+}
+textarea {
+  font: inherit;
+  resize: vertical;
 }
 .preview {
   display: flex;

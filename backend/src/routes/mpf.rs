@@ -2,145 +2,24 @@ use axum::Json;
 use axum::extract::{Path, State};
 use axum::http::StatusCode;
 use serde::Serialize;
-use sqlx::sqlite::SqliteRow;
-use sqlx::{Row, SqlitePool};
 
-use super::{AppState, now_timestamp, today};
+use super::AppState;
 use crate::calc::{
-    MpfAccountFacts, MpfAccountInput, MpfPoint, MpfTotals, mpf_figures, mpf_last_month, mpf_max,
-    mpf_totals, validate_mpf_account,
+    MpfAccountInput, MpfPoint, MpfTotals, mpf_figures, mpf_last_month, mpf_max, mpf_totals,
+    validate_mpf_account,
 };
 use crate::error::{ApiError, ErrorBody};
 use crate::models::{MpfAccount, MpfAccountPatch, MpfHistoryRow, MpfNotePatch, NewMpfAccount};
-use crate::mpf;
-
-const MPF_COLUMNS: &str = "id, label, trustee, contributions, balance, plan_name, \
-     member_no, sort_order, seed_max_rate, seed_max_gain, created_at";
-
-/// The stored row, before derived figures are attached.
-#[derive(Debug, Clone)]
-pub struct StoredAccount {
-    id: i64,
-    label: String,
-    trustee: Option<String>,
-    contributions: f64,
-    balance: f64,
-    plan_name: Option<String>,
-    member_no: Option<String>,
-    sort_order: i64,
-    seed_max_rate: Option<f64>,
-    seed_max_gain: Option<f64>,
-    created_on: chrono::NaiveDate,
-}
-
-pub fn row_to_stored(row: &SqliteRow) -> Result<StoredAccount, ApiError> {
-    let created_at: String = row.try_get("created_at")?;
-    let created_on = chrono::DateTime::parse_from_rfc3339(&created_at)
-        .map(|stamp| stamp.date_naive())
-        .map_err(|_| ApiError::Conflict(format!("stored created_at {created_at} is not valid")))?;
-    Ok(StoredAccount {
-        id: row.try_get("id")?,
-        label: row.try_get("label")?,
-        trustee: row.try_get("trustee")?,
-        contributions: row.try_get("contributions")?,
-        balance: row.try_get("balance")?,
-        plan_name: row.try_get("plan_name")?,
-        member_no: row.try_get("member_no")?,
-        sort_order: row.try_get("sort_order")?,
-        seed_max_rate: row.try_get("seed_max_rate")?,
-        seed_max_gain: row.try_get("seed_max_gain")?,
-        created_on,
-    })
-}
-
-fn row_to_history(row: &SqliteRow) -> Result<MpfHistoryRow, ApiError> {
-    let contributions: f64 = row.try_get("contributions")?;
-    let balance: f64 = row.try_get("balance")?;
-    let figures = mpf_figures(contributions, balance);
-    Ok(MpfHistoryRow {
-        id: row.try_get("id")?,
-        account_id: row.try_get("account_id")?,
-        recorded_on: row.try_get("recorded_on")?,
-        contributions,
-        balance,
-        synthetic: row.try_get::<i64, _>("synthetic")? != 0,
-        rate: figures.rate,
-        gain: figures.gain,
-    })
-}
-
-pub async fn load_stored(pool: &SqlitePool, id: i64) -> Result<StoredAccount, ApiError> {
-    let row = sqlx::query(sqlx::AssertSqlSafe(format!(
-        "SELECT {MPF_COLUMNS} FROM mpf_accounts WHERE id = ?"
-    )))
-    .bind(id)
-    .fetch_optional(pool)
-    .await?
-    .ok_or_else(|| ApiError::NotFound(format!("mpf account {id} not found")))?;
-    row_to_stored(&row)
-}
-
-pub async fn load_all_stored(pool: &SqlitePool) -> Result<Vec<StoredAccount>, ApiError> {
-    let rows = sqlx::query(sqlx::AssertSqlSafe(format!(
-        "SELECT {MPF_COLUMNS} FROM mpf_accounts ORDER BY sort_order, id"
-    )))
-    .fetch_all(pool)
-    .await?;
-    rows.iter().map(row_to_stored).collect()
-}
-
-pub async fn load_history(
-    pool: &SqlitePool,
-    account_id: Option<i64>,
-) -> Result<Vec<MpfHistoryRow>, ApiError> {
-    let sql = "SELECT id, account_id, recorded_on, contributions, balance, synthetic \
-         FROM mpf_history";
-    let rows = match account_id {
-        Some(id) => {
-            sqlx::query(sqlx::AssertSqlSafe(format!(
-                "{sql} WHERE account_id = ? ORDER BY recorded_on, id"
-            )))
-            .bind(id)
-            .fetch_all(pool)
-            .await?
-        }
-        None => {
-            sqlx::query(sqlx::AssertSqlSafe(format!(
-                "{sql} ORDER BY recorded_on, id"
-            )))
-            .fetch_all(pool)
-            .await?
-        }
-    };
-    rows.iter().map(row_to_history).collect()
-}
-
-pub fn facts_of(account: &StoredAccount, history: &[MpfHistoryRow]) -> MpfAccountFacts {
-    MpfAccountFacts {
-        created_on: account.created_on,
-        contributions: account.contributions,
-        balance: account.balance,
-        seed_max_rate: account.seed_max_rate,
-        seed_max_gain: account.seed_max_gain,
-        history: history
-            .iter()
-            .filter(|row| row.account_id == account.id)
-            .map(|row| MpfPoint {
-                recorded_on: chrono::NaiveDate::parse_from_str(&row.recorded_on, "%Y-%m-%d")
-                    .unwrap_or(account.created_on),
-                contributions: row.contributions,
-                balance: row.balance,
-            })
-            .collect(),
-    }
-}
+use crate::store::meta::{meta_f64, meta_get, meta_put};
+use crate::store::mpf::{self, StoredAccount};
+use crate::store::today;
 
 pub fn present_account(
     account: &StoredAccount,
     history: &[MpfHistoryRow],
     today: chrono::NaiveDate,
 ) -> MpfAccount {
-    let facts = facts_of(account, history);
+    let facts = mpf::facts_of(account, history);
     let current = MpfPoint {
         recorded_on: today,
         contributions: account.contributions,
@@ -168,12 +47,6 @@ pub fn present_account(
     }
 }
 
-pub async fn meta_f64(pool: &SqlitePool, key: &str) -> Result<Option<f64>, ApiError> {
-    Ok(mpf::meta_get(pool, key)
-        .await?
-        .and_then(|raw| raw.parse::<f64>().ok()))
-}
-
 #[derive(Debug, Serialize, utoipa::ToSchema)]
 pub struct MpfResponse {
     pub today: String,
@@ -193,15 +66,15 @@ pub struct MpfResponse {
 )]
 pub async fn overview(State(state): State<AppState>) -> Result<Json<MpfResponse>, ApiError> {
     let today = today();
-    let stored = load_all_stored(&state.pool).await?;
-    let history = load_history(&state.pool, None).await?;
+    let stored = mpf::load_all_stored(&state.pool).await?;
+    let history = mpf::load_history(&state.pool, None).await?;
     let accounts: Vec<MpfAccount> = stored
         .iter()
         .map(|account| present_account(account, &history, today))
         .collect();
-    let facts: Vec<MpfAccountFacts> = stored
+    let facts: Vec<_> = stored
         .iter()
-        .map(|account| facts_of(account, &history))
+        .map(|account| mpf::facts_of(account, &history))
         .collect();
     let totals = mpf_totals(
         &facts,
@@ -209,7 +82,7 @@ pub async fn overview(State(state): State<AppState>) -> Result<Json<MpfResponse>
         meta_f64(&state.pool, mpf::SEED_MAX_RATE_KEY).await?,
         meta_f64(&state.pool, mpf::SEED_MAX_GAIN_KEY).await?,
     );
-    let note = mpf::meta_get(&state.pool, mpf::NOTE_KEY).await?;
+    let note = meta_get(&state.pool, mpf::NOTE_KEY).await?;
     Ok(Json(MpfResponse {
         today: today.to_string(),
         accounts,
@@ -242,29 +115,20 @@ pub async fn create(
     })
     .map_err(ApiError::Validation)?;
 
-    let sort_order: i64 =
-        sqlx::query_scalar("SELECT COALESCE(MAX(sort_order), 0) + 1 FROM mpf_accounts")
-            .fetch_one(&state.pool)
-            .await?;
-    let now = now_timestamp();
-    let id: i64 = sqlx::query_scalar(
-        "INSERT INTO mpf_accounts (label, trustee, contributions, balance, plan_name, \
-         member_no, sort_order, created_at, updated_at) \
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?) RETURNING id",
+    let sort_order = mpf::next_sort_order(&state.pool).await?;
+    let id = mpf::insert_account(
+        &state.pool,
+        body.label.trim(),
+        body.trustee.as_deref(),
+        contributions,
+        balance,
+        body.plan_name.as_deref(),
+        body.member_no.as_deref(),
+        sort_order,
     )
-    .bind(body.label.trim())
-    .bind(body.trustee.as_deref())
-    .bind(contributions)
-    .bind(balance)
-    .bind(body.plan_name.as_deref())
-    .bind(body.member_no.as_deref())
-    .bind(sort_order)
-    .bind(&now)
-    .bind(&now)
-    .fetch_one(&state.pool)
     .await?;
 
-    let stored = load_stored(&state.pool, id).await?;
+    let stored = mpf::load_stored(&state.pool, id).await?;
     Ok((
         StatusCode::CREATED,
         Json(present_account(&stored, &[], today())),
@@ -288,7 +152,7 @@ pub async fn update(
     Path(id): Path<i64>,
     Json(patch): Json<MpfAccountPatch>,
 ) -> Result<Json<MpfAccount>, ApiError> {
-    let existing = load_stored(&state.pool, id).await?;
+    let existing = mpf::load_stored(&state.pool, id).await?;
 
     let merge_text = |patch: Option<Option<String>>, existing: Option<String>| match patch {
         Some(value) => value
@@ -319,19 +183,16 @@ pub async fn update(
     let values_changed = contributions != existing.contributions || balance != existing.balance;
 
     let mut tx = state.pool.begin().await?;
-    sqlx::query(
-        "UPDATE mpf_accounts SET label = ?, trustee = ?, contributions = ?, balance = ?, \
-         plan_name = ?, member_no = ?, updated_at = ? WHERE id = ?",
+    mpf::update_account(
+        &mut tx,
+        id,
+        label.trim(),
+        &trustee,
+        contributions,
+        balance,
+        &plan_name,
+        &member_no,
     )
-    .bind(label.trim())
-    .bind(&trustee)
-    .bind(contributions)
-    .bind(balance)
-    .bind(&plan_name)
-    .bind(&member_no)
-    .bind(now_timestamp())
-    .bind(id)
-    .execute(&mut *tx)
     .await?;
     if values_changed {
         mpf::record_history(
@@ -346,8 +207,8 @@ pub async fn update(
     }
     tx.commit().await?;
 
-    let stored = load_stored(&state.pool, id).await?;
-    let history = load_history(&state.pool, Some(id)).await?;
+    let stored = mpf::load_stored(&state.pool, id).await?;
+    let history = mpf::load_history(&state.pool, Some(id)).await?;
     Ok(Json(present_account(&stored, &history, today())))
 }
 
@@ -366,20 +227,14 @@ pub async fn remove(
     State(state): State<AppState>,
     Path(id): Path<i64>,
 ) -> Result<StatusCode, ApiError> {
-    load_stored(&state.pool, id).await?;
-    let rows: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM mpf_history WHERE account_id = ?")
-        .bind(id)
-        .fetch_one(&state.pool)
-        .await?;
+    mpf::load_stored(&state.pool, id).await?;
+    let rows = mpf::count_history(&state.pool, id).await?;
     if rows > 0 {
         return Err(ApiError::Conflict(format!(
             "mpf account {id} has history records"
         )));
     }
-    sqlx::query("DELETE FROM mpf_accounts WHERE id = ?")
-        .bind(id)
-        .execute(&state.pool)
-        .await?;
+    mpf::delete_account(&state.pool, id).await?;
     Ok(StatusCode::NO_CONTENT)
 }
 
@@ -401,9 +256,9 @@ pub async fn update_note(
     State(state): State<AppState>,
     Json(body): Json<MpfNotePatch>,
 ) -> Result<Json<NoteResponse>, ApiError> {
-    mpf::meta_put(&state.pool, mpf::NOTE_KEY, body.note.as_deref()).await?;
+    meta_put(&state.pool, mpf::NOTE_KEY, body.note.as_deref()).await?;
     Ok(Json(NoteResponse {
-        note: mpf::meta_get(&state.pool, mpf::NOTE_KEY).await?,
+        note: meta_get(&state.pool, mpf::NOTE_KEY).await?,
     }))
 }
 
@@ -422,11 +277,7 @@ pub async fn remove_history(
     State(state): State<AppState>,
     Path(id): Path<i64>,
 ) -> Result<StatusCode, ApiError> {
-    let result = sqlx::query("DELETE FROM mpf_history WHERE id = ?")
-        .bind(id)
-        .execute(&state.pool)
-        .await?;
-    if result.rows_affected() == 0 {
+    if mpf::delete_history(&state.pool, id).await? == 0 {
         return Err(ApiError::NotFound(format!(
             "mpf history row {id} not found"
         )));

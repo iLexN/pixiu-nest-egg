@@ -1,5 +1,5 @@
 //! Per-market totals history: the recording side of the 上月/最高 figures.
-//! Derivation reuses the MPF math in `calc.rs` unchanged — `load` maps each
+//! Derivation reuses the MPF math in `calc/` unchanged — `load` maps each
 //! row to `MpfPoint` with `buy_cost_priced` as `contributions` and
 //! `market_value` as `balance`.
 
@@ -8,6 +8,7 @@ use sqlx::{Row, SqlitePool};
 
 use crate::calc::{MpfPoint, mpf_gap_month_ends};
 use crate::models::Market;
+use crate::store::StoreError;
 
 /// `app_meta` key holding the workbook's seeded max 未實現報酬率 for a
 /// market — a floor for the derived 最高, exactly like `mpf.seed_max_rate`.
@@ -30,7 +31,7 @@ pub async fn record(
     market: Market,
     current: (f64, f64),
     today: NaiveDate,
-) -> Result<(), sqlx::Error> {
+) -> Result<(), StoreError> {
     let anchor = sqlx::query(
         "SELECT recorded_on, buy_cost_priced, market_value FROM market_history \
          WHERE market = ? ORDER BY recorded_on DESC, id DESC LIMIT 1",
@@ -81,7 +82,7 @@ pub async fn record(
 
 /// The market's recorded totals as `MpfPoint`s so `mpf_last_month` and
 /// `mpf_max` apply unchanged.
-pub async fn load(pool: &SqlitePool, market: Market) -> Result<Vec<MpfPoint>, sqlx::Error> {
+pub async fn load(pool: &SqlitePool, market: Market) -> Result<Vec<MpfPoint>, StoreError> {
     let rows = sqlx::query(
         "SELECT recorded_on, buy_cost_priced, market_value FROM market_history \
          WHERE market = ? ORDER BY recorded_on, id",

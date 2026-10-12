@@ -5,15 +5,16 @@ use chrono::Datelike;
 use serde::{Deserialize, Serialize};
 use sqlx::SqlitePool;
 
-use super::{
-    AppState, DIVIDEND_SELECT, now_timestamp, record_receipt_item, row_to_dividend, today,
-};
+use super::AppState;
 use crate::calc::{
-    DividendFacts, DividendInput, DividendYearRollup, TradeFacts, ValidatedDividend,
-    dividend_year_rollups, holdings_snapshot, net_from_gross, validate_dividend,
+    DividendFacts, DividendInput, DividendYearRollup, dividend_year_rollups, holdings_snapshot,
+    net_from_gross, validate_dividend,
 };
 use crate::error::{ApiError, ErrorBody};
-use crate::models::{Dividend, DividendPatch, Market, NewDividend, TradeType};
+use crate::models::{Dividend, DividendPatch, Market, NewDividend};
+use crate::store::dividends as store;
+use crate::store::months as months_store;
+use crate::store::{now_timestamp, today};
 
 #[derive(Debug, Deserialize, utoipa::ToSchema, utoipa::IntoParams)]
 pub struct ListQuery {
@@ -40,95 +41,37 @@ pub async fn list(
     State(state): State<AppState>,
     Query(query): Query<ListQuery>,
 ) -> Result<Json<Vec<Dividend>>, ApiError> {
-    let mut sql = DIVIDEND_SELECT.to_string();
-    let mut conditions: Vec<&str> = Vec::new();
-    if query.market.is_some() {
-        conditions.push("s.market = ?");
-    }
-    if query.stock_id.is_some() {
-        conditions.push("d.stock_id = ?");
-    }
-    if let Some(status) = query.status.as_deref() {
-        match status.to_ascii_lowercase().as_str() {
-            "pending" => conditions.push("d.received_amount IS NULL"),
-            "received" => conditions.push("d.received_amount IS NOT NULL"),
+    let received = match query.status.as_deref() {
+        Some(status) => match status.to_ascii_lowercase().as_str() {
+            "pending" => Some(false),
+            "received" => Some(true),
             _ => {
                 return Err(ApiError::field(
                     "status",
                     "status must be pending or received",
                 ));
             }
-        }
-    }
-    if query.year.is_some() {
-        conditions.push("d.pay_date >= ? AND d.pay_date <= ?");
-    }
-    if !conditions.is_empty() {
-        sql.push_str(" WHERE ");
-        sql.push_str(&conditions.join(" AND "));
-    }
+        },
+        None => None,
+    };
+    let market = query
+        .market
+        .as_deref()
+        .map(super::parse_market)
+        .transpose()?;
     let descending =
         matches!(query.order.as_deref(), Some(order) if order.eq_ignore_ascii_case("desc"));
-    sql.push_str(if descending {
-        " ORDER BY d.pay_date DESC, d.id DESC"
-    } else {
-        " ORDER BY d.pay_date ASC, d.id ASC"
-    });
-
-    let mut statement = sqlx::query(sqlx::AssertSqlSafe(sql));
-    if let Some(market) = query.market.as_deref() {
-        statement = statement.bind(super::parse_market(market)?.as_str());
-    }
-    if let Some(stock_id) = query.stock_id {
-        statement = statement.bind(stock_id);
-    }
-    if let Some(year) = query.year {
-        statement = statement
-            .bind(format!("{year:04}-01-01"))
-            .bind(format!("{year:04}-12-31"));
-    }
-
-    statement
-        .fetch_all(&state.pool)
-        .await?
-        .iter()
-        .map(row_to_dividend)
-        .collect::<Result<Vec<_>, _>>()
-        .map(Json)
-}
-
-/// The stock's trades reduced to what the snapshot derivation needs.
-async fn dated_trade_facts(
-    pool: &SqlitePool,
-    stock_id: i64,
-) -> Result<Vec<(chrono::NaiveDate, TradeFacts)>, ApiError> {
-    let rows = sqlx::query(
-        "SELECT trade_type, trade_date, shares, total FROM trades \
-         WHERE stock_id = ? ORDER BY trade_date, id",
+    store::list(
+        &state.pool,
+        market,
+        query.stock_id,
+        received,
+        query.year,
+        descending,
     )
-    .bind(stock_id)
-    .fetch_all(pool)
-    .await?;
-    let mut facts = Vec::with_capacity(rows.len());
-    for row in &rows {
-        use sqlx::Row;
-        let trade_type: String = row.try_get("trade_type")?;
-        let trade_date: String = row.try_get("trade_date")?;
-        let parsed = chrono::NaiveDate::parse_from_str(&trade_date, "%Y-%m-%d").map_err(|_| {
-            ApiError::Conflict(format!("stored trade_date {trade_date} is not valid"))
-        })?;
-        facts.push((
-            parsed,
-            TradeFacts {
-                trade_type: TradeType::parse(&trade_type).ok_or_else(|| {
-                    ApiError::Conflict(format!("stored trade type {trade_type} is not valid"))
-                })?,
-                shares: row.try_get("shares")?,
-                total: row.try_get("total")?,
-            },
-        ));
-    }
-    Ok(facts)
+    .await
+    .map(Json)
+    .map_err(ApiError::from)
 }
 
 /// Derive the point-in-time snapshots for a stock as of `pay_date`.
@@ -143,7 +86,7 @@ async fn derive_snapshots(
             "派息日 must be a calendar date in YYYY-MM-DD form",
         )
     })?;
-    let facts = dated_trade_facts(pool, stock_id).await?;
+    let facts = store::dated_trade_facts(pool, stock_id).await?;
     Ok(holdings_snapshot(&facts, as_of))
 }
 
@@ -162,7 +105,7 @@ pub async fn create(
     State(state): State<AppState>,
     Json(body): Json<NewDividend>,
 ) -> Result<(StatusCode, Json<Dividend>), ApiError> {
-    let (stock_id, _market) = super::trades::resolve_stock(
+    let (stock_id, _market) = super::resolve_stock(
         &state.pool,
         body.stock_id,
         body.market,
@@ -196,8 +139,12 @@ pub async fn create(
     })
     .map_err(ApiError::Validation)?;
 
-    let id = insert_dividend(&state.pool, stock_id, &validated, body.note.as_deref()).await?;
-    Ok((StatusCode::CREATED, Json(load_one(&state.pool, id).await?)))
+    let id =
+        store::insert_dividend(&state.pool, stock_id, &validated, body.note.as_deref()).await?;
+    Ok((
+        StatusCode::CREATED,
+        Json(store::load_one(&state.pool, id).await?),
+    ))
 }
 
 #[utoipa::path(
@@ -217,12 +164,10 @@ pub async fn update(
     Path(id): Path<i64>,
     Json(patch): Json<DividendPatch>,
 ) -> Result<Json<Dividend>, ApiError> {
-    let existing = load_one(&state.pool, id).await?;
+    let existing = store::load_one(&state.pool, id).await?;
 
     let (stock_id, stock_market) = match patch.stock_id {
-        Some(stock_id) => {
-            super::trades::resolve_stock(&state.pool, Some(stock_id), None, None).await?
-        }
+        Some(stock_id) => super::resolve_stock(&state.pool, Some(stock_id), None, None).await?,
         None => (existing.stock_id, existing.market),
     };
     let pay_date = patch.pay_date.unwrap_or(existing.pay_date);
@@ -272,10 +217,7 @@ pub async fn update(
     // 收訖 with no price supplied snapshots the stock's current 現價;
     // clearing the price on an already-received record stays cleared.
     if existing.received_amount.is_none() && received_amount.is_some() && received_price.is_none() {
-        received_price = sqlx::query_scalar("SELECT manual_price FROM stocks WHERE id = ?")
-            .bind(stock_id)
-            .fetch_one(&state.pool)
-            .await?;
+        received_price = crate::store::stocks::manual_price(&state.pool, stock_id).await?;
     }
     let note = merge_text(patch.note, existing.note.clone());
 
@@ -294,34 +236,12 @@ pub async fn update(
 
     let now = now_timestamp();
     let mut tx = state.pool.begin().await?;
-    sqlx::query(
-        "UPDATE dividends SET stock_id = ?, pay_date = ?, per_share = ?, shares_held = ?, \
-         buy_cost = ?, estimated_amount = ?, received_amount = ?, \
-         received_price = ?, withholding_tax = ?, note = ?, updated_at = ? WHERE id = ?",
-    )
-    .bind(stock_id)
-    .bind(&validated.pay_date)
-    .bind(validated.per_share)
-    .bind(validated.shares_held)
-    .bind(validated.buy_cost)
-    .bind(validated.estimated_amount)
-    .bind(validated.received_amount)
-    .bind(validated.received_price)
-    .bind(validated.withholding_tax)
-    .bind(note)
-    .bind(&now)
-    .bind(id)
-    .execute(&mut *tx)
-    .await?;
+    store::update_dividend(&mut tx, id, stock_id, &validated, note, &now).await?;
 
     // 收訖: received_amount NULL → set banks the amount (HK → the HS cash
     // row; US → the IBKR USD cash meta value, already USD) and, for HK,
     // records the div:<id> month item. Clearing received_amount reverses.
-    let credited_before: Option<f64> =
-        sqlx::query_scalar("SELECT credited_amount FROM dividends WHERE id = ?")
-            .bind(id)
-            .fetch_one(&mut *tx)
-            .await?;
+    let credited_before = store::credited_amount(&mut tx, id).await?;
     let auto_key = format!("div:{id}");
     let month = format!("{}-01", &validated.pay_date[..7]);
     match (existing.received_amount, validated.received_amount) {
@@ -330,16 +250,9 @@ pub async fn update(
             if patch.bank_in.unwrap_or(true) {
                 match stock_market {
                     Market::Hk => {
-                        if let Some(asset_id) = super::hs_cash_asset_id(&mut tx).await? {
-                            sqlx::query(
-                                "UPDATE manual_assets SET amount = amount + ?, \
-                                 updated_at = ? WHERE id = ?",
-                            )
-                            .bind(amount)
-                            .bind(&now)
-                            .bind(asset_id)
-                            .execute(&mut *tx)
-                            .await?;
+                        if let Some(asset_id) = months_store::hs_cash_asset_id(&mut tx).await? {
+                            months_store::add_manual_asset_amount(&mut tx, amount, &now, asset_id)
+                                .await?;
                             credited = Some(amount);
                         }
                     }
@@ -349,70 +262,55 @@ pub async fn update(
                     }
                 }
             }
-            sqlx::query("UPDATE dividends SET credited_amount = ? WHERE id = ?")
-                .bind(credited)
-                .bind(id)
-                .execute(&mut *tx)
-                .await?;
+            store::set_credited_amount(&mut tx, id, credited).await?;
             // US dividends land in IBKR, not 活期 — no adjustment item.
             if stock_market == Market::Hk {
-                record_receipt_item(&mut tx, &month, &auto_key, &existing.code, amount).await?;
+                months_store::record_receipt_item(
+                    &mut tx,
+                    &month,
+                    &auto_key,
+                    &existing.code,
+                    amount,
+                )
+                .await?;
             }
         }
         (Some(_), None) => {
             if let Some(amount) = credited_before {
                 match stock_market {
                     Market::Hk => {
-                        if let Some(asset_id) = super::hs_cash_asset_id(&mut tx).await? {
-                            sqlx::query(
-                                "UPDATE manual_assets SET amount = amount - ?, \
-                                 updated_at = ? WHERE id = ?",
-                            )
-                            .bind(amount)
-                            .bind(&now)
-                            .bind(asset_id)
-                            .execute(&mut *tx)
-                            .await?;
+                        if let Some(asset_id) = months_store::hs_cash_asset_id(&mut tx).await? {
+                            months_store::add_manual_asset_amount(&mut tx, -amount, &now, asset_id)
+                                .await?;
                         }
                     }
                     Market::Us => credit_ibkr_usd(&mut tx, -amount, &now).await?,
                 }
             }
-            sqlx::query("UPDATE dividends SET credited_amount = NULL WHERE id = ?")
-                .bind(id)
-                .execute(&mut *tx)
-                .await?;
-            sqlx::query("DELETE FROM month_items WHERE month = ? AND auto_key = ?")
-                .bind(&month)
-                .bind(&auto_key)
-                .execute(&mut *tx)
-                .await?;
+            store::set_credited_amount(&mut tx, id, None).await?;
+            months_store::delete_auto_item(&mut tx, &month, &auto_key).await?;
         }
         _ => {}
     }
     tx.commit().await?;
 
-    Ok(Json(load_one(&state.pool, id).await?))
+    Ok(Json(store::load_one(&state.pool, id).await?))
 }
 
 /// `ibkr.usd_cash += amount` — a US dividend receipt lands there directly.
 async fn credit_ibkr_usd(
-    tx: &mut sqlx::Transaction<'_, sqlx::Sqlite>,
+    conn: &mut sqlx::SqliteConnection,
     amount: f64,
     _now: &str,
 ) -> Result<(), ApiError> {
-    let current: Option<String> = sqlx::query_scalar("SELECT value FROM app_meta WHERE key = ?")
-        .bind(crate::routes::overview::IBKR_USD_CASH_KEY)
-        .fetch_optional(&mut **tx)
-        .await?;
+    let current =
+        crate::store::meta::meta_get(&mut *conn, crate::store::overview::IBKR_USD_CASH_KEY).await?;
     let total = current.and_then(|v| v.parse::<f64>().ok()).unwrap_or(0.0) + amount;
-    sqlx::query(
-        "INSERT INTO app_meta (key, value) VALUES (?, ?) \
-         ON CONFLICT (key) DO UPDATE SET value = excluded.value",
+    crate::store::meta::meta_put(
+        &mut *conn,
+        crate::store::overview::IBKR_USD_CASH_KEY,
+        Some(&total.to_string()),
     )
-    .bind(crate::routes::overview::IBKR_USD_CASH_KEY)
-    .bind(total.to_string())
-    .execute(&mut **tx)
     .await?;
     Ok(())
 }
@@ -431,11 +329,7 @@ pub async fn remove(
     State(state): State<AppState>,
     Path(id): Path<i64>,
 ) -> Result<StatusCode, ApiError> {
-    let result = sqlx::query("DELETE FROM dividends WHERE id = ?")
-        .bind(id)
-        .execute(&state.pool)
-        .await?;
-    if result.rows_affected() == 0 {
+    if store::delete_dividend(&state.pool, id).await? == 0 {
         return Err(ApiError::NotFound(format!("dividend {id} not found")));
     }
     Ok(StatusCode::NO_CONTENT)
@@ -467,21 +361,12 @@ pub async fn summary(
     State(state): State<AppState>,
     Query(query): Query<ListQuery>,
 ) -> Result<Json<DividendSummaryResponse>, ApiError> {
-    let mut sql = DIVIDEND_SELECT.to_string();
-    if query.market.is_some() {
-        sql.push_str(" WHERE s.market = ?");
-    }
-    sql.push_str(" ORDER BY d.pay_date ASC, d.id ASC");
-    let mut statement = sqlx::query(sqlx::AssertSqlSafe(sql));
-    if let Some(market) = query.market.as_deref() {
-        statement = statement.bind(super::parse_market(market)?.as_str());
-    }
-    let dividends: Vec<Dividend> = statement
-        .fetch_all(&state.pool)
-        .await?
-        .iter()
-        .map(row_to_dividend)
-        .collect::<Result<Vec<_>, _>>()?;
+    let market = query
+        .market
+        .as_deref()
+        .map(super::parse_market)
+        .transpose()?;
+    let dividends = store::list_for_market(&state.pool, market).await?;
 
     let mut facts = Vec::with_capacity(dividends.len());
     for dividend in &dividends {
@@ -520,44 +405,4 @@ pub async fn summary(
         years: dividend_year_rollups(&facts),
         history_years,
     }))
-}
-
-pub async fn insert_dividend(
-    pool: &SqlitePool,
-    stock_id: i64,
-    dividend: &ValidatedDividend,
-    note: Option<&str>,
-) -> Result<i64, ApiError> {
-    let now = now_timestamp();
-    let id: i64 = sqlx::query_scalar(
-        "INSERT INTO dividends (stock_id, pay_date, per_share, shares_held, buy_cost, \
-         estimated_amount, received_amount, received_price, note, \
-         created_at, updated_at) \
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?) RETURNING id",
-    )
-    .bind(stock_id)
-    .bind(&dividend.pay_date)
-    .bind(dividend.per_share)
-    .bind(dividend.shares_held)
-    .bind(dividend.buy_cost)
-    .bind(dividend.estimated_amount)
-    .bind(dividend.received_amount)
-    .bind(dividend.received_price)
-    .bind(note)
-    .bind(&now)
-    .bind(&now)
-    .fetch_one(pool)
-    .await?;
-    Ok(id)
-}
-
-pub async fn load_one(pool: &SqlitePool, id: i64) -> Result<Dividend, ApiError> {
-    let row = sqlx::query(sqlx::AssertSqlSafe(format!(
-        "{DIVIDEND_SELECT} WHERE d.id = ?"
-    )))
-    .bind(id)
-    .fetch_optional(pool)
-    .await?
-    .ok_or_else(|| ApiError::NotFound(format!("dividend {id} not found")))?;
-    row_to_dividend(&row)
 }

@@ -3,15 +3,17 @@ use axum::extract::{Path, Query, State};
 use axum::http::StatusCode;
 use chrono::Datelike;
 use serde::{Deserialize, Serialize};
-use sqlx::SqlitePool;
 
-use super::{AppState, DEPOSIT_COLUMNS, now_timestamp, record_receipt_item, row_to_deposit, today};
+use super::AppState;
 use crate::calc::{
-    ActiveMonthBucket, ActiveTotals, BankRollup, DepositFacts, DepositInput, ValidatedDeposit,
-    YearRollup, active_month_rollup, active_totals, bank_rollup, validate_deposit, year_rollups,
+    ActiveMonthBucket, ActiveTotals, BankRollup, DepositFacts, DepositInput, YearRollup,
+    active_month_rollup, active_totals, bank_rollup, validate_deposit, year_rollups,
 };
 use crate::error::{ApiError, ErrorBody};
 use crate::models::{Deposit, DepositPatch, NewDeposit};
+use crate::store::deposits as store;
+use crate::store::months as months_store;
+use crate::store::{now_timestamp, today};
 
 #[derive(Debug, Deserialize, utoipa::ToSchema, utoipa::IntoParams)]
 pub struct ListQuery {
@@ -36,45 +38,20 @@ pub async fn list(
     State(state): State<AppState>,
     Query(query): Query<ListQuery>,
 ) -> Result<Json<Vec<Deposit>>, ApiError> {
-    let mut sql = format!("SELECT {DEPOSIT_COLUMNS} FROM deposits");
-    let mut conditions: Vec<&str> = Vec::new();
-    if let Some(status) = query.status.as_deref() {
-        match status.to_ascii_lowercase().as_str() {
-            "active" => conditions.push("received_at IS NULL"),
-            "ended" => conditions.push("received_at IS NOT NULL"),
+    let received = match query.status.as_deref() {
+        Some(status) => match status.to_ascii_lowercase().as_str() {
+            "active" => Some(false),
+            "ended" => Some(true),
             _ => return Err(ApiError::field("status", "status must be active or ended")),
-        }
-    }
-    if query.year.is_some() {
-        conditions.push("end_date >= ? AND end_date <= ?");
-    }
-    if !conditions.is_empty() {
-        sql.push_str(" WHERE ");
-        sql.push_str(&conditions.join(" AND "));
-    }
+        },
+        None => None,
+    };
     let descending =
         matches!(query.order.as_deref(), Some(order) if order.eq_ignore_ascii_case("desc"));
-    sql.push_str(if descending {
-        " ORDER BY end_date DESC, sort_order DESC, id DESC"
-    } else {
-        " ORDER BY end_date ASC, sort_order ASC, id ASC"
-    });
-
-    let mut statement = sqlx::query(sqlx::AssertSqlSafe(sql));
-    if let Some(year) = query.year {
-        statement = statement
-            .bind(format!("{year:04}-01-01"))
-            .bind(format!("{year:04}-12-31"));
-    }
-
-    let today = today();
-    statement
-        .fetch_all(&state.pool)
-        .await?
-        .iter()
-        .map(|row| row_to_deposit(row, today))
-        .collect::<Result<Vec<_>, _>>()
+    store::list(&state.pool, received, query.year, descending)
+        .await
         .map(Json)
+        .map_err(ApiError::from)
 }
 
 #[utoipa::path(
@@ -102,12 +79,12 @@ pub async fn create(
     })
     .map_err(ApiError::Validation)?;
 
-    let sort_order: i64 =
-        sqlx::query_scalar("SELECT COALESCE(MAX(sort_order), 0) + 1 FROM deposits")
-            .fetch_one(&state.pool)
-            .await?;
-    let id = insert_deposit(&state.pool, &validated, sort_order, &body).await?;
-    Ok((StatusCode::CREATED, Json(load_one(&state.pool, id).await?)))
+    let sort_order = store::next_sort_order(&state.pool).await?;
+    let id = store::insert_deposit(&state.pool, &validated, sort_order, &body).await?;
+    Ok((
+        StatusCode::CREATED,
+        Json(store::load_one(&state.pool, id).await?),
+    ))
 }
 
 #[utoipa::path(
@@ -127,7 +104,7 @@ pub async fn update(
     Path(id): Path<i64>,
     Json(patch): Json<DepositPatch>,
 ) -> Result<Json<Deposit>, ApiError> {
-    let existing = load_one(&state.pool, id).await?;
+    let existing = store::load_one(&state.pool, id).await?;
 
     let merge_text = |patch: Option<Option<String>>, existing: Option<String>| match patch {
         Some(value) => value
@@ -161,25 +138,9 @@ pub async fn update(
     })
     .map_err(ApiError::Validation)?;
 
-    sqlx::query(
-        "UPDATE deposits SET label = ?, bank = ?, principal = ?, rate = ?, interest = ?, \
-         start_date = ?, end_date = ?, note1 = ?, note2 = ?, updated_at = ? WHERE id = ?",
-    )
-    .bind(&validated.label)
-    .bind(&validated.bank)
-    .bind(validated.principal)
-    .bind(validated.rate)
-    .bind(validated.interest)
-    .bind(&validated.start_date)
-    .bind(&validated.end_date)
-    .bind(&note1)
-    .bind(&note2)
-    .bind(now_timestamp())
-    .bind(id)
-    .execute(&state.pool)
-    .await?;
+    store::update_deposit(&state.pool, id, &validated, &note1, &note2).await?;
 
-    Ok(Json(load_one(&state.pool, id).await?))
+    Ok(Json(store::load_one(&state.pool, id).await?))
 }
 
 #[utoipa::path(
@@ -196,11 +157,7 @@ pub async fn remove(
     State(state): State<AppState>,
     Path(id): Path<i64>,
 ) -> Result<StatusCode, ApiError> {
-    let result = sqlx::query("DELETE FROM deposits WHERE id = ?")
-        .bind(id)
-        .execute(&state.pool)
-        .await?;
-    if result.rows_affected() == 0 {
+    if store::delete_deposit(&state.pool, id).await? == 0 {
         return Err(ApiError::NotFound(format!("deposit {id} not found")));
     }
     Ok(StatusCode::NO_CONTENT)
@@ -239,7 +196,7 @@ pub async fn receive(
     Path(id): Path<i64>,
     Json(body): Json<ReceiveDeposit>,
 ) -> Result<Json<Deposit>, ApiError> {
-    let existing = load_one(&state.pool, id).await?;
+    let existing = store::load_one(&state.pool, id).await?;
     if existing.received_at.is_some() {
         return Err(ApiError::Conflict(format!(
             "deposit {id} is already received"
@@ -268,11 +225,7 @@ pub async fn receive(
         ));
     }
     if let Some(asset_id) = body.credit_asset_id {
-        let kind: Option<String> =
-            sqlx::query_scalar("SELECT kind FROM manual_assets WHERE id = ?")
-                .bind(asset_id)
-                .fetch_optional(&state.pool)
-                .await?;
+        let kind = months_store::manual_asset_kind(&state.pool, asset_id).await?;
         match kind.as_deref() {
             Some("cash") => {}
             Some(_) => {
@@ -294,32 +247,25 @@ pub async fn receive(
     let total = existing.principal.unwrap_or(0.0) + interest.unwrap_or(0.0);
     let now = now_timestamp();
     let mut tx = state.pool.begin().await?;
-    sqlx::query(
-        "UPDATE deposits SET received_at = ?, interest = ?, credited_asset_id = ?, \
-         credited_amount = ?, updated_at = ? WHERE id = ?",
+    store::mark_received(
+        &mut tx,
+        id,
+        &received_at,
+        interest,
+        body.credit_asset_id,
+        body.credit_asset_id.map(|_| credit_amount),
+        &now,
     )
-    .bind(&received_at)
-    .bind(interest)
-    .bind(body.credit_asset_id)
-    .bind(body.credit_asset_id.map(|_| credit_amount))
-    .bind(&now)
-    .bind(id)
-    .execute(&mut *tx)
     .await?;
     if let Some(asset_id) = body.credit_asset_id {
-        sqlx::query("UPDATE manual_assets SET amount = amount + ?, updated_at = ? WHERE id = ?")
-            .bind(credit_amount)
-            .bind(&now)
-            .bind(asset_id)
-            .execute(&mut *tx)
-            .await?;
+        months_store::add_manual_asset_amount(&mut tx, credit_amount, &now, asset_id).await?;
     }
     // The dep-end inflow item the suggestion would have created.
     let label = existing.label.as_deref().unwrap_or("定期");
-    record_receipt_item(&mut tx, &month, &auto_key, label, total).await?;
+    months_store::record_receipt_item(&mut tx, &month, &auto_key, label, total).await?;
     tx.commit().await?;
 
-    Ok(Json(load_one(&state.pool, id).await?))
+    Ok(Json(store::load_one(&state.pool, id).await?))
 }
 
 /// Undo a 收訖: reverse the stored cash credit, drop the auto-created dep-end
@@ -339,43 +285,23 @@ pub async fn unreceive(
     State(state): State<AppState>,
     Path(id): Path<i64>,
 ) -> Result<Json<Deposit>, ApiError> {
-    let existing = load_one(&state.pool, id).await?;
+    let existing = store::load_one(&state.pool, id).await?;
     if existing.received_at.is_none() {
         return Err(ApiError::Conflict(format!("deposit {id} is not received")));
     }
-    let credited: Option<(Option<i64>, Option<f64>)> =
-        sqlx::query_as("SELECT credited_asset_id, credited_amount FROM deposits WHERE id = ?")
-            .bind(id)
-            .fetch_optional(&state.pool)
-            .await?;
+    let credited = store::credited_of(&state.pool, id).await?;
 
     let month = format!("{}-01", &existing.end_date[..7]);
     let now = now_timestamp();
     let mut tx = state.pool.begin().await?;
     if let Some((Some(asset_id), Some(amount))) = credited {
-        sqlx::query("UPDATE manual_assets SET amount = amount - ?, updated_at = ? WHERE id = ?")
-            .bind(amount)
-            .bind(&now)
-            .bind(asset_id)
-            .execute(&mut *tx)
-            .await?;
+        months_store::add_manual_asset_amount(&mut tx, -amount, &now, asset_id).await?;
     }
-    sqlx::query("DELETE FROM month_items WHERE month = ? AND auto_key = ?")
-        .bind(&month)
-        .bind(format!("dep-end:{id}"))
-        .execute(&mut *tx)
-        .await?;
-    sqlx::query(
-        "UPDATE deposits SET received_at = NULL, credited_asset_id = NULL, \
-         credited_amount = NULL, updated_at = ? WHERE id = ?",
-    )
-    .bind(&now)
-    .bind(id)
-    .execute(&mut *tx)
-    .await?;
+    months_store::delete_auto_item(&mut tx, &month, &format!("dep-end:{id}")).await?;
+    store::clear_receipt(&mut tx, id, &now).await?;
     tx.commit().await?;
 
-    Ok(Json(load_one(&state.pool, id).await?))
+    Ok(Json(store::load_one(&state.pool, id).await?))
 }
 
 #[derive(Debug, Serialize, utoipa::ToSchema)]
@@ -408,7 +334,7 @@ pub async fn summary(
     State(state): State<AppState>,
 ) -> Result<Json<DepositSummaryResponse>, ApiError> {
     let today = today();
-    let deposits = load_all(&state.pool).await?;
+    let deposits = store::load_all(&state.pool).await?;
 
     let mut facts = Vec::with_capacity(deposits.len());
     for deposit in &deposits {
@@ -457,66 +383,4 @@ pub async fn summary(
         years: year_rollups(&fact_refs),
         history_years,
     }))
-}
-
-/// `exec` may be the pool or a transaction — `POST /api/forecast-items/{id}/convert`
-/// inserts inside its own transaction.
-pub async fn insert_deposit<'e, E>(
-    exec: E,
-    deposit: &ValidatedDeposit,
-    sort_order: i64,
-    body: &NewDeposit,
-) -> Result<i64, ApiError>
-where
-    E: sqlx::Executor<'e, Database = sqlx::Sqlite>,
-{
-    let now = now_timestamp();
-    // A deposit entered already past its end date is recorded as received —
-    // its interest fed 利息 all along. 收訖 only applies to future deposits.
-    let received_at = (deposit.end_date.as_str() <= today().to_string().as_str())
-        .then(|| deposit.end_date.clone());
-    let id: i64 = sqlx::query_scalar(
-        "INSERT INTO deposits (label, bank, principal, rate, interest, start_date, end_date, \
-         received_at, note1, note2, sort_order, created_at, updated_at) \
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?) RETURNING id",
-    )
-    .bind(deposit.label.as_deref())
-    .bind(deposit.bank.as_deref())
-    .bind(deposit.principal)
-    .bind(deposit.rate)
-    .bind(deposit.interest)
-    .bind(deposit.start_date.as_deref())
-    .bind(&deposit.end_date)
-    .bind(&received_at)
-    .bind(body.note1.as_deref())
-    .bind(body.note2.as_deref())
-    .bind(sort_order)
-    .bind(&now)
-    .bind(&now)
-    .fetch_one(exec)
-    .await?;
-    Ok(id)
-}
-
-pub async fn load_one(pool: &SqlitePool, id: i64) -> Result<Deposit, ApiError> {
-    let row = sqlx::query(sqlx::AssertSqlSafe(format!(
-        "SELECT {DEPOSIT_COLUMNS} FROM deposits WHERE id = ?"
-    )))
-    .bind(id)
-    .fetch_optional(pool)
-    .await?
-    .ok_or_else(|| ApiError::NotFound(format!("deposit {id} not found")))?;
-    row_to_deposit(&row, today())
-}
-
-pub async fn load_all(pool: &SqlitePool) -> Result<Vec<Deposit>, ApiError> {
-    let rows = sqlx::query(sqlx::AssertSqlSafe(format!(
-        "SELECT {DEPOSIT_COLUMNS} FROM deposits ORDER BY sort_order, id"
-    )))
-    .fetch_all(pool)
-    .await?;
-    let today = today();
-    rows.iter()
-        .map(|row| row_to_deposit(row, today))
-        .collect::<Result<Vec<_>, _>>()
 }

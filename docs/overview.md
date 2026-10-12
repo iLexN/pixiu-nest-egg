@@ -6,9 +6,9 @@ Part of the [data-flow guide](DATA_FLOW.md). Table definitions: [`month_stats`, 
 
 ```text
 OverviewView loads GET /api/overview
-  → routes/overview.rs reuses the live-totals components, reads the manual
-    asset rows, and builds the IBKR block from the ibkr.* app_meta keys and
-    the ibkr_transfers log
+  → routes/overview.rs hands off to service/overview.rs, which reuses the
+    live-totals components; store/ reads the manual asset rows and builds the
+    IBKR block from the ibkr.* app_meta keys and the ibkr_transfers log
   → the response carries the B1/H1/J1 headline, the asset table with each
     row's share of the Sum, the 半流動資金 block, and the IBKR block
 ```
@@ -41,7 +41,8 @@ The `Money Master` card mirrors `Overview!J29:N35` — the bank app's savings ch
 ```text
 OverviewView loads GET /api/forecast together with GET /api/overview
   → routes/forecast.rs derives seven month columns (current .. +6) from the
-    stored rows: nothing in the grid is persisted except forecast_items
+    stored rows (store/): nothing in the grid is persisted except
+    forecast_items
 ```
 
 The card mirrors the sheet's row order — `ref check`, `半流動`, `活期`, `定期 + SC`, `start`, `salary`, `支出`, `定期 finish`, `定期 HS`, `SC高息馬拉松`, `利息`, `Tax/基金/醫療保險`, `股票`, `繳費`, `TBC - 定期 end`, `TBC` — with months as columns and `—` for absent figures. The sheet's monthly ritual (re-anchor `B22`/`B24`/`B25`, copy `C28:H36` left, fix `H`) disappears: the window rolls by itself and every line derives:
@@ -79,7 +80,7 @@ The same `IbkrCard` component renders on 總覽 and on 美股 → 總覽 — sam
 ```text
 Click 編輯 on the IBKR card → PATCH /api/ibkr with the transfer delta/date and
     the three account fields
-  → routes/overview.rs validates non-negative finite numbers, appends
+  → routes/overview.rs validates non-negative finite numbers; store/ appends
     `transfer_hkd` (any finite delta; negative undoes an entry) to
     `ibkr_transfers` dated `transfer_date` (default today), writes each
     provided account field to its ibkr.* app_meta key (null clears), and
@@ -95,7 +96,7 @@ Click 編輯 on the IBKR card → PATCH /api/ibkr with the transfer delta/date a
 ```text
 MonthStatView loads GET /api/months/summary + /api/months?year=YYYY
   + /api/months/settings + /api/manual-assets
-  → routes/months.rs derives every stored row first, then filters by year,
+  → service/months.rs derives every stored row first, then filters by year,
     so December still gets its end_cash from January
   → NULL total_assets/liquid_assets fill from live totals — only for months
     at/after the current month — with total_assets_live/liquid_assets_live set
@@ -113,10 +114,10 @@ MonthStatView loads GET /api/months/summary + /api/months?year=YYYY
 
 ```text
 YearReviewView loads GET /api/year-review
-  → routes/year_review.rs loads month_stats + items + pool rates,
-    year_snapshots, the year_review records, HK trades + dividends,
-    deposits, bonds + coupons, and manual_assets
-  → calc.rs::year_review_rows builds one row per year from the union of
+  → store/ loads month_stats + items + pool rates, year_snapshots, the
+    year_review records, HK trades + dividends, deposits, bonds + coupons,
+    and manual_assets; service/year_review.rs assembles them into rows
+  → calc/year_review.rs::year_review_rows builds one row per year from the union of
     years present in those inputs
   → the frontend renders one block per year mirroring the sheet's
     A–D ledger, E–G investment and H–M asset groups

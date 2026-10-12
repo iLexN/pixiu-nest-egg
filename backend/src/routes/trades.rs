@@ -2,12 +2,12 @@ use axum::Json;
 use axum::extract::{Path, Query, State};
 use axum::http::StatusCode;
 use serde::Deserialize;
-use sqlx::SqlitePool;
 
-use super::{AppState, TRADE_SELECT, now_timestamp, parse_market, row_to_trade};
-use crate::calc::{TradeInput, ValidatedTrade, validate_trade};
+use super::{AppState, parse_market, resolve_stock};
+use crate::calc::{TradeInput, validate_trade};
 use crate::error::{ApiError, ErrorBody};
-use crate::models::{InputMode, Market, NewTrade, Trade, TradePatch};
+use crate::models::{InputMode, NewTrade, Trade, TradePatch};
+use crate::store::trades as store;
 
 #[derive(Debug, Deserialize, utoipa::ToSchema, utoipa::IntoParams)]
 pub struct ListQuery {
@@ -36,59 +36,21 @@ pub async fn list(
     State(state): State<AppState>,
     Query(query): Query<ListQuery>,
 ) -> Result<Json<Vec<Trade>>, ApiError> {
-    let mut sql = TRADE_SELECT.to_string();
-    let mut conditions: Vec<&str> = Vec::new();
-    if query.market.is_some() {
-        conditions.push("s.market = ?");
-    }
-    if query.stock_id.is_some() {
-        conditions.push("t.stock_id = ?");
-    }
-    if query.code.is_some() {
-        conditions.push("s.code = ?");
-    }
-    if query.from.is_some() {
-        conditions.push("t.trade_date >= ?");
-    }
-    if query.to.is_some() {
-        conditions.push("t.trade_date <= ?");
-    }
-    if !conditions.is_empty() {
-        sql.push_str(" WHERE ");
-        sql.push_str(&conditions.join(" AND "));
-    }
+    let market = query.market.as_deref().map(parse_market).transpose()?;
     let descending =
         matches!(query.order.as_deref(), Some(order) if order.eq_ignore_ascii_case("desc"));
-    sql.push_str(if descending {
-        " ORDER BY t.trade_date DESC, t.id DESC"
-    } else {
-        " ORDER BY t.trade_date ASC, t.id ASC"
-    });
-
-    let mut statement = sqlx::query(sqlx::AssertSqlSafe(sql));
-    if let Some(market) = query.market.as_deref() {
-        statement = statement.bind(parse_market(market)?.as_str());
-    }
-    if let Some(stock_id) = query.stock_id {
-        statement = statement.bind(stock_id);
-    }
-    if let Some(code) = query.code.as_deref() {
-        statement = statement.bind(code.to_string());
-    }
-    if let Some(from) = query.from.as_deref() {
-        statement = statement.bind(from.to_string());
-    }
-    if let Some(to) = query.to.as_deref() {
-        statement = statement.bind(to.to_string());
-    }
-
-    statement
-        .fetch_all(&state.pool)
-        .await?
-        .iter()
-        .map(row_to_trade)
-        .collect::<Result<Vec<_>, _>>()
-        .map(Json)
+    store::list(
+        &state.pool,
+        market,
+        query.stock_id,
+        query.code.as_deref(),
+        query.from.as_deref(),
+        query.to.as_deref(),
+        descending,
+    )
+    .await
+    .map(Json)
+    .map_err(ApiError::from)
 }
 
 #[utoipa::path(
@@ -127,8 +89,11 @@ pub async fn create(
     })
     .map_err(ApiError::Validation)?;
 
-    let id = insert_trade(&state.pool, stock_id, &validated, body.note.as_deref()).await?;
-    Ok((StatusCode::CREATED, Json(load_one(&state.pool, id).await?)))
+    let id = store::insert_trade(&state.pool, stock_id, &validated, body.note.as_deref()).await?;
+    Ok((
+        StatusCode::CREATED,
+        Json(store::load_one(&state.pool, id).await?),
+    ))
 }
 
 #[utoipa::path(
@@ -148,7 +113,7 @@ pub async fn update(
     Path(id): Path<i64>,
     Json(patch): Json<TradePatch>,
 ) -> Result<Json<Trade>, ApiError> {
-    let existing = load_one(&state.pool, id).await?;
+    let existing = store::load_one(&state.pool, id).await?;
 
     let (stock_id, market) = match patch.stock_id {
         Some(stock_id) => resolve_stock(&state.pool, Some(stock_id), None, None).await?,
@@ -191,25 +156,9 @@ pub async fn update(
     })
     .map_err(ApiError::Validation)?;
 
-    sqlx::query(
-        "UPDATE trades SET stock_id = ?, trade_type = ?, trade_date = ?, shares = ?, \
-         unit_price = ?, fee = ?, total = ?, input_mode = ?, note = ?, updated_at = ? WHERE id = ?",
-    )
-    .bind(stock_id)
-    .bind(validated.trade_type.as_str())
-    .bind(&validated.trade_date)
-    .bind(validated.shares)
-    .bind(validated.unit_price)
-    .bind(validated.fee)
-    .bind(validated.total)
-    .bind(validated.input_mode.as_str())
-    .bind(note)
-    .bind(now_timestamp())
-    .bind(id)
-    .execute(&state.pool)
-    .await?;
+    store::update_trade(&state.pool, id, stock_id, &validated, note).await?;
 
-    Ok(Json(load_one(&state.pool, id).await?))
+    Ok(Json(store::load_one(&state.pool, id).await?))
 }
 
 #[utoipa::path(
@@ -226,88 +175,8 @@ pub async fn remove(
     State(state): State<AppState>,
     Path(id): Path<i64>,
 ) -> Result<StatusCode, ApiError> {
-    let result = sqlx::query("DELETE FROM trades WHERE id = ?")
-        .bind(id)
-        .execute(&state.pool)
-        .await?;
-    if result.rows_affected() == 0 {
+    if store::delete_trade(&state.pool, id).await? == 0 {
         return Err(ApiError::NotFound(format!("trade {id} not found")));
     }
     Ok(StatusCode::NO_CONTENT)
-}
-
-pub async fn insert_trade(
-    pool: &SqlitePool,
-    stock_id: i64,
-    trade: &ValidatedTrade,
-    note: Option<&str>,
-) -> Result<i64, ApiError> {
-    let now = now_timestamp();
-    let id: i64 = sqlx::query_scalar(
-        "INSERT INTO trades (stock_id, trade_type, trade_date, shares, unit_price, fee, total, \
-         input_mode, note, created_at, updated_at) \
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?) RETURNING id",
-    )
-    .bind(stock_id)
-    .bind(trade.trade_type.as_str())
-    .bind(&trade.trade_date)
-    .bind(trade.shares)
-    .bind(trade.unit_price)
-    .bind(trade.fee)
-    .bind(trade.total)
-    .bind(trade.input_mode.as_str())
-    .bind(note)
-    .bind(&now)
-    .bind(&now)
-    .fetch_one(pool)
-    .await?;
-    Ok(id)
-}
-
-pub async fn load_one(pool: &SqlitePool, id: i64) -> Result<Trade, ApiError> {
-    let row = sqlx::query(sqlx::AssertSqlSafe(format!(
-        "{TRADE_SELECT} WHERE t.id = ?"
-    )))
-    .bind(id)
-    .fetch_optional(pool)
-    .await?
-    .ok_or_else(|| ApiError::NotFound(format!("trade {id} not found")))?;
-    row_to_trade(&row)
-}
-
-pub async fn resolve_stock(
-    pool: &SqlitePool,
-    stock_id: Option<i64>,
-    market: Option<Market>,
-    code: Option<&str>,
-) -> Result<(i64, Market), ApiError> {
-    if let Some(stock_id) = stock_id {
-        let stock = super::stocks::load_one(pool, stock_id)
-            .await
-            .map_err(|err| match err {
-                ApiError::NotFound(_) => {
-                    ApiError::field("stock_id", format!("stock {stock_id} is not registered"))
-                }
-                other => other,
-            })?;
-        return Ok((stock.id, stock.market));
-    }
-
-    match (market, code.map(str::trim).filter(|c| !c.is_empty())) {
-        (Some(market), Some(code)) => {
-            let stock = super::stocks::find_by_code(pool, market, code)
-                .await?
-                .ok_or_else(|| {
-                    ApiError::field(
-                        "code",
-                        format!("{code} is not registered in market {}", market.as_str()),
-                    )
-                })?;
-            Ok((stock.id, stock.market))
-        }
-        _ => Err(ApiError::field(
-            "stock_id",
-            "either stock_id, or market and 股票代碼, is required",
-        )),
-    }
 }
