@@ -665,6 +665,7 @@ mod tests {
                 principal: Some(573266.77),
                 interest: Some(6199.51),
                 end_date: ym("2026-06-01"),
+                received: true,
             },
             // Ends after `today` — the sheet's End filter skips it.
             DepositFacts {
@@ -672,6 +673,7 @@ mod tests {
                 principal: Some(10000.0),
                 interest: Some(300.0),
                 end_date: ym("2027-01-01"),
+                received: false,
             },
         ];
         let today = ym("2026-09-22");

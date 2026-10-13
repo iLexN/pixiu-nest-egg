@@ -114,6 +114,10 @@ pub struct DepositFacts<'a> {
     pub principal: Option<f64>,
     pub interest: Option<f64>,
     pub end_date: chrono::NaiveDate,
+    /// Receipt flag: the caller decides what "received" means — live callers
+    /// pass `received_at.is_some()`; parity passes `end_date <= today` to
+    /// reproduce the sheet's rule.
+    pub received: bool,
 }
 
 /// The sheet's total column: `利息 + input`, blanks counting as 0.
@@ -121,9 +125,11 @@ pub fn deposit_total(principal: Option<f64>, interest: Option<f64>) -> f64 {
     principal.unwrap_or(0.0) + interest.unwrap_or(0.0)
 }
 
-/// The sheet's status rule: `End` when `TODAY() >= end date`.
-pub fn deposit_active(end_date: chrono::NaiveDate, today: chrono::NaiveDate) -> bool {
-    end_date > today
+/// The receipt rule: a deposit counts until 收訖, whatever its `end_date`.
+/// Parity reproduces the sheet's end-date rule (`End` when `TODAY() >= end
+/// date`) by passing `received = end_date <= today`.
+pub fn deposit_active(deposit: &DepositFacts<'_>) -> bool {
+    !deposit.received
 }
 
 /// The label prefix used by the sheet's `SUMIF("SC-*")` bank rows: the text
@@ -192,17 +198,15 @@ pub struct YearRollup {
     pub months: Vec<YearMonthRow>,
 }
 
-/// Σ principal/interest/total over the active deposits.
-pub fn active_totals(deposits: &[DepositFacts<'_>], today: chrono::NaiveDate) -> ActiveTotals {
+/// Σ principal/interest/total over the unreceived deposits — the same set
+/// the 未到期定期 list shows.
+pub fn active_totals(deposits: &[DepositFacts<'_>]) -> ActiveTotals {
     let mut totals = ActiveTotals {
         principal: 0.0,
         interest: 0.0,
         total: 0.0,
     };
-    for deposit in deposits
-        .iter()
-        .filter(|deposit| deposit_active(deposit.end_date, today))
-    {
+    for deposit in deposits.iter().filter(|deposit| deposit_active(deposit)) {
         totals.principal += deposit.principal.unwrap_or(0.0);
         totals.interest += deposit.interest.unwrap_or(0.0);
         totals.total += deposit_total(deposit.principal, deposit.interest);
@@ -210,18 +214,12 @@ pub fn active_totals(deposits: &[DepositFacts<'_>], today: chrono::NaiveDate) ->
     totals
 }
 
-/// Active deposits grouped by end (year, month), in chronological order.
+/// Unreceived deposits grouped by end (year, month), in chronological order.
 /// The sheet buckets by month number only; grouping by (year, month) gives the
 /// same result while the active span is under a year.
-pub fn active_month_rollup(
-    deposits: &[DepositFacts<'_>],
-    today: chrono::NaiveDate,
-) -> Vec<ActiveMonthBucket> {
+pub fn active_month_rollup(deposits: &[DepositFacts<'_>]) -> Vec<ActiveMonthBucket> {
     let mut buckets: Vec<ActiveMonthBucket> = Vec::new();
-    for deposit in deposits
-        .iter()
-        .filter(|deposit| deposit_active(deposit.end_date, today))
-    {
+    for deposit in deposits.iter().filter(|deposit| deposit_active(deposit)) {
         let (year, month) = (deposit.end_date.year(), deposit.end_date.month());
         let bucket = match buckets
             .iter_mut()
@@ -247,15 +245,12 @@ pub fn active_month_rollup(
     buckets
 }
 
-/// Active deposits grouped by bank, ordered by descending principal.
+/// Unreceived deposits grouped by bank, ordered by descending principal.
 /// Deposits without a bank land in their own bucket, matching how the sheet's
 /// `SUMIF` rows only count labelled deposits.
-pub fn bank_rollup(deposits: &[DepositFacts<'_>], today: chrono::NaiveDate) -> Vec<BankRollup> {
+pub fn bank_rollup(deposits: &[DepositFacts<'_>]) -> Vec<BankRollup> {
     let mut groups: Vec<BankRollup> = Vec::new();
-    for deposit in deposits
-        .iter()
-        .filter(|deposit| deposit_active(deposit.end_date, today))
-    {
+    for deposit in deposits.iter().filter(|deposit| deposit_active(deposit)) {
         let bank = deposit
             .bank
             .map(str::trim)
@@ -342,12 +337,14 @@ mod tests {
         principal: Option<f64>,
         interest: Option<f64>,
         end_date: &str,
+        received: bool,
     ) -> DepositFacts<'a> {
         DepositFacts {
             bank,
             principal,
             interest,
             end_date: day(end_date),
+            received,
         }
     }
 
@@ -428,11 +425,21 @@ mod tests {
     }
 
     #[test]
-    fn deposit_status_follows_the_sheets_today_rule() {
-        let today = day("2026-09-15");
-        assert!(deposit_active(day("2026-10-12"), today));
-        assert!(!deposit_active(day("2026-09-15"), today));
-        assert!(!deposit_active(day("2026-01-05"), today));
+    fn deposit_status_follows_receipt_not_the_end_date() {
+        assert!(deposit_active(&deposit(
+            None,
+            Some(110000.0),
+            None,
+            "2026-01-05",
+            false
+        )));
+        assert!(!deposit_active(&deposit(
+            None,
+            Some(110000.0),
+            None,
+            "2027-01-05",
+            true
+        )));
     }
 
     #[test]
@@ -453,22 +460,64 @@ mod tests {
     /// The workbook's current active set: SC-9632 + SC-7006 ending 2026-10-12,
     /// SC-0044 ending 2026-11-02, HS-88 ending 2026-11-17, SC-3615 ending
     /// 2027-01-04, plus ended and interest-only rows that must not appear.
+    /// The fixture marks rows ended by the workbook's 2026-09-15 snapshot as
+    /// received, reproducing the sheet's end-date filter.
     fn workbook_deposits<'a>() -> Vec<DepositFacts<'a>> {
+        let snapshot = day("2026-09-15");
+        let row = |bank, principal, interest, end_date: &str| {
+            deposit(
+                bank,
+                principal,
+                interest,
+                end_date,
+                day(end_date) <= snapshot,
+            )
+        };
         vec![
-            deposit(Some("HS"), Some(60000.0), Some(362.96), "2026-01-05"),
-            deposit(None, None, Some(15.27), "2026-04-20"),
-            deposit(Some("SC"), Some(110000.0), Some(993.0), "2026-10-12"),
-            deposit(Some("SC"), Some(35000.0), Some(285.0), "2026-10-12"),
-            deposit(Some("SC"), Some(140000.0), None, "2026-11-02"),
-            deposit(Some("HS"), Some(80000.0), Some(604.93), "2026-11-17"),
-            deposit(None, None, Some(2097.0), "2026-08-18"),
-            deposit(Some("SC"), Some(80000.0), Some(807.0), "2027-01-04"),
+            row(Some("HS"), Some(60000.0), Some(362.96), "2026-01-05"),
+            row(None, None, Some(15.27), "2026-04-20"),
+            row(Some("SC"), Some(110000.0), Some(993.0), "2026-10-12"),
+            row(Some("SC"), Some(35000.0), Some(285.0), "2026-10-12"),
+            row(Some("SC"), Some(140000.0), None, "2026-11-02"),
+            row(Some("HS"), Some(80000.0), Some(604.93), "2026-11-17"),
+            row(None, None, Some(2097.0), "2026-08-18"),
+            row(Some("SC"), Some(80000.0), Some(807.0), "2027-01-04"),
         ]
     }
 
     #[test]
+    fn matured_unreceived_deposit_counts_in_every_aggregate() {
+        let deposits = vec![
+            deposit(Some("SC"), Some(110000.0), Some(993.0), "2026-01-05", false),
+            deposit(Some("SC"), Some(80000.0), Some(807.0), "2027-01-04", false),
+        ];
+        let totals = active_totals(&deposits);
+        assert!(approx_eq(totals.principal, 190000.0));
+        let months = active_month_rollup(&deposits);
+        assert_eq!(months.len(), 2);
+        assert!(approx_eq(months[0].principal, 110000.0));
+        let banks = bank_rollup(&deposits);
+        assert_eq!(banks.len(), 1);
+        assert!(approx_eq(banks[0].principal, 190000.0));
+    }
+
+    #[test]
+    fn received_deposit_with_a_future_end_date_counts_in_no_aggregate() {
+        let deposits = vec![deposit(
+            Some("SC"),
+            Some(110000.0),
+            Some(993.0),
+            "2027-01-04",
+            true,
+        )];
+        assert_eq!(active_totals(&deposits).principal, 0.0);
+        assert!(active_month_rollup(&deposits).is_empty());
+        assert!(bank_rollup(&deposits).is_empty());
+    }
+
+    #[test]
     fn active_totals_match_the_workbook() {
-        let totals = active_totals(&workbook_deposits(), day("2026-09-15"));
+        let totals = active_totals(&workbook_deposits());
         assert!(approx_eq(totals.principal, 445000.0));
         assert!(approx_eq(totals.interest, 2689.93));
         assert!(approx_eq(totals.total, 447689.93));
@@ -476,7 +525,7 @@ mod tests {
 
     #[test]
     fn active_month_rollup_matches_the_workbook() {
-        let months = active_month_rollup(&workbook_deposits(), day("2026-09-15"));
+        let months = active_month_rollup(&workbook_deposits());
         assert_eq!(months.len(), 3);
         assert_eq!((months[0].year, months[0].month), (2026, 10));
         assert!(approx_eq(months[0].principal, 145000.0));
@@ -490,7 +539,7 @@ mod tests {
 
     #[test]
     fn bank_rollup_matches_the_workbook() {
-        let banks = bank_rollup(&workbook_deposits(), day("2026-09-15"));
+        let banks = bank_rollup(&workbook_deposits());
         assert_eq!(banks.len(), 2);
         assert_eq!(banks[0].bank, "SC");
         assert!(approx_eq(banks[0].principal, 365000.0));

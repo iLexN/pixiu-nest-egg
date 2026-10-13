@@ -429,13 +429,16 @@ async fn check_deposits(
                     principal: deposit.principal,
                     interest: deposit.interest,
                     end_date,
+                    // The sheet has no receipt concept: reproduce its rule
+                    // (`End` when TODAY() >= end date) as the received flag.
+                    received: end_date <= today,
                 })
                 .map_err(|_| anyhow!("stored end_date {} is not valid", deposit.end_date))
         })
         .collect::<Result<Vec<_>, _>>()?;
 
     let cached = &data.deposit_cached;
-    let totals = active_totals(&facts, today);
+    let totals = active_totals(&facts);
     match cached.active_principal {
         Some(sheet) if approx_eq(totals.principal, sheet) => {
             deposit_row(report, "定期 active principal", Outcome::Match)
@@ -458,7 +461,7 @@ async fn check_deposits(
 
     // The sheet's month table buckets by month number only, so the computed
     // (year, month) buckets are merged by month before comparing.
-    let computed_months = active_month_rollup(&facts, today);
+    let computed_months = active_month_rollup(&facts);
     for (month, sheet) in &cached.months {
         let mut computed = SheetActiveSums {
             total: 0.0,
@@ -484,7 +487,7 @@ async fn check_deposits(
         compare_active_sums(report, "定期 month-table total", &computed, sheet);
     }
 
-    let computed_banks = bank_rollup(&facts, today);
+    let computed_banks = bank_rollup(&facts);
     for (prefix, sheet) in &cached.banks {
         let computed = computed_banks
             .iter()

@@ -134,7 +134,7 @@ pub async fn live_totals_input(pool: &SqlitePool) -> Result<LiveTotalsInput, Sto
 
     let facts = crate::store::deposits::active_facts(pool).await?;
     // 定期!B1 counts principal only; the interest lands in 活期 at maturity.
-    let deposits_active_principal = active_totals(&facts, today).principal;
+    let deposits_active_principal = active_totals(&facts).principal;
 
     let bonds_active_principal = super::bonds::active_principal(pool).await?;
 

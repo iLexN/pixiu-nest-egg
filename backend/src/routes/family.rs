@@ -310,7 +310,7 @@ pub struct FamilyHolderSummary {
     pub note: Option<String>,
     /// Unreceived deposits, earliest maturity first.
     pub upcoming: Vec<FamilyDeposit>,
-    /// Σ principal over this holder's deposits ending in the future.
+    /// Σ principal over this holder's unreceived deposits.
     pub active_principal: f64,
 }
 
@@ -383,6 +383,7 @@ pub async fn summary(
                     principal: deposit.principal,
                     interest: deposit.interest,
                     end_date,
+                    received: deposit.received_at.is_some(),
                 })
             })
             .collect::<Result<_, ApiError>>()?;
@@ -390,7 +391,7 @@ pub async fn summary(
             note: meta_get(&state.pool, &store::note_key(&holder)).await?,
             holder,
             upcoming,
-            active_principal: active_totals(&facts, today).principal,
+            active_principal: active_totals(&facts).principal,
         });
     }
 
@@ -404,4 +405,37 @@ pub async fn summary(
         holders: summaries,
         history_years,
     }))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::db::connect_memory;
+
+    #[tokio::test]
+    async fn matured_unreceived_deposit_counts_in_the_holders_active_principal() {
+        let pool = connect_memory().await.expect("memory db");
+        let validated = validate_deposit(DepositInput {
+            label: Some("SC-9179"),
+            bank: Some("SC"),
+            principal: Some(100000.0),
+            rate: None,
+            interest: Some(500.0),
+            start_date: None,
+            end_date: "2020-01-01",
+        })
+        .expect("valid");
+        store::insert_family_deposit(&pool, "媽媽", &validated, None, 1)
+            .await
+            .unwrap();
+
+        let response = summary(State(AppState { pool })).await.expect("summary").0;
+        let holder = response
+            .holders
+            .iter()
+            .find(|holder| holder.holder == "媽媽")
+            .expect("holder");
+        assert_eq!(holder.active_principal, 100000.0);
+        assert_eq!(holder.upcoming.len(), 1);
+    }
 }

@@ -251,7 +251,7 @@ pub async fn load_all(pool: &SqlitePool) -> Result<Vec<Deposit>, StoreError> {
 /// The deposits reduced to principal/interest/end_date for the year review —
 /// unordered, exactly as the original `deposit_facts` loader.
 pub async fn year_facts(pool: &SqlitePool) -> Result<Vec<DepositFacts<'static>>, StoreError> {
-    let rows = sqlx::query("SELECT principal, interest, end_date FROM deposits")
+    let rows = sqlx::query("SELECT principal, interest, end_date, received_at FROM deposits")
         .fetch_all(pool)
         .await?;
     rows_to_facts(&rows)
@@ -259,10 +259,12 @@ pub async fn year_facts(pool: &SqlitePool) -> Result<Vec<DepositFacts<'static>>,
 
 /// The same facts in `sort_order` — the live totals path used that ordering.
 pub async fn active_facts(pool: &SqlitePool) -> Result<Vec<DepositFacts<'static>>, StoreError> {
-    let rows =
-        sqlx::query("SELECT principal, interest, end_date FROM deposits ORDER BY sort_order, id")
-            .fetch_all(pool)
-            .await?;
+    let rows = sqlx::query(
+        "SELECT principal, interest, end_date, received_at FROM deposits \
+         ORDER BY sort_order, id",
+    )
+    .fetch_all(pool)
+    .await?;
     rows_to_facts(&rows)
 }
 
@@ -270,6 +272,7 @@ fn rows_to_facts(rows: &[SqliteRow]) -> Result<Vec<DepositFacts<'static>>, Store
     let mut facts = Vec::with_capacity(rows.len());
     for row in rows {
         let end_date: String = row.try_get("end_date")?;
+        let received_at: Option<String> = row.try_get("received_at")?;
         facts.push(DepositFacts {
             bank: None,
             principal: row.try_get("principal")?,
@@ -277,6 +280,7 @@ fn rows_to_facts(rows: &[SqliteRow]) -> Result<Vec<DepositFacts<'static>>, Store
             end_date: chrono::NaiveDate::parse_from_str(&end_date, "%Y-%m-%d").map_err(|_| {
                 StoreError::Corrupt(format!("stored end_date {end_date} is not valid"))
             })?,
+            received: received_at.is_some(),
         });
     }
     Ok(facts)

@@ -308,12 +308,12 @@ pub async fn unreceive(
 pub struct DepositSummaryResponse {
     /// The date `status` was derived against.
     pub today: String,
-    /// Active deposits (end date in the future), earliest maturity first.
+    /// Unreceived deposits, earliest maturity first.
     pub upcoming: Vec<Deposit>,
     pub active_totals: ActiveTotals,
-    /// Active deposits grouped by end (year, month).
+    /// Unreceived deposits grouped by end (year, month).
     pub months: Vec<ActiveMonthBucket>,
-    /// Active deposits grouped by label prefix.
+    /// Unreceived deposits grouped by bank.
     pub banks: Vec<BankRollup>,
     /// Per-year month tables over every deposit ending that year.
     pub years: Vec<YearRollup>,
@@ -349,13 +349,13 @@ pub async fn summary(
                 principal: deposit.principal,
                 interest: deposit.interest,
                 end_date,
+                received: deposit.received_at.is_some(),
             },
         ));
     }
 
-    // The 未到期定期 list shows deposits until 收訖 — an end_date in the past
-    // without receipt means "matured, awaiting confirmation". The totals and
-    // rollups below still follow the sheet's end_date rule.
+    // List, totals, and rollups all follow receipt: an end_date in the past
+    // without 收訖 means "matured, awaiting confirmation" and still counts.
     let mut upcoming: Vec<Deposit> = facts
         .iter()
         .filter(|(deposit, _)| deposit.received_at.is_none())
@@ -377,10 +377,72 @@ pub async fn summary(
     Ok(Json(DepositSummaryResponse {
         today: today.to_string(),
         upcoming,
-        active_totals: active_totals(&fact_refs, today),
-        months: active_month_rollup(&fact_refs, today),
-        banks: bank_rollup(&fact_refs, today),
+        active_totals: active_totals(&fact_refs),
+        months: active_month_rollup(&fact_refs),
+        banks: bank_rollup(&fact_refs),
         years: year_rollups(&fact_refs),
         history_years,
     }))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::db::connect_memory;
+    use sqlx::SqlitePool;
+
+    /// A matured deposit inserted straight into the table stays unreceived —
+    /// `insert_deposit` would auto-receive the past end_date.
+    async fn seed_matured_unreceived(pool: &SqlitePool) -> i64 {
+        sqlx::query_scalar(
+            "INSERT INTO deposits (label, bank, principal, interest, end_date, \
+             sort_order, created_at, updated_at) \
+             VALUES ('SC-9999', 'SC', 110000, 993, '2020-01-01', 1, \
+             '2026-01-01T00:00:00', '2026-01-01T00:00:00') RETURNING id",
+        )
+        .fetch_one(pool)
+        .await
+        .unwrap()
+    }
+
+    #[tokio::test]
+    async fn matured_unreceived_deposit_counts_until_received() {
+        let pool = connect_memory().await.expect("memory db");
+        let id = seed_matured_unreceived(&pool).await;
+        let state = AppState { pool: pool.clone() };
+
+        let response = summary(State(state.clone())).await.expect("summary").0;
+        assert_eq!(response.active_totals.principal, 110000.0);
+        assert_eq!(response.upcoming.len(), 1);
+
+        // Live totals count it too — liquid_assets includes the principal.
+        let input = crate::service::months::live_totals_input(&pool)
+            .await
+            .unwrap();
+        let liquid_before = crate::calc::live_totals(&input).liquid_assets;
+
+        let _received = receive(
+            State(state.clone()),
+            Path(id),
+            Json(ReceiveDeposit {
+                received_at: None,
+                interest: None,
+                credit_asset_id: None,
+                credit_amount: None,
+            }),
+        )
+        .await
+        .expect("received");
+
+        let response = summary(State(state)).await.expect("summary").0;
+        assert_eq!(response.active_totals.principal, 0.0);
+        assert!(response.upcoming.is_empty());
+
+        // No 存入活期 was picked, so the principal leaves liquid_assets whole.
+        let input = crate::service::months::live_totals_input(&pool)
+            .await
+            .unwrap();
+        let liquid_after = crate::calc::live_totals(&input).liquid_assets;
+        assert!((liquid_before - liquid_after - 110000.0).abs() < 1e-6);
+    }
 }

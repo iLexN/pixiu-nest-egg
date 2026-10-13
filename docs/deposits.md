@@ -35,8 +35,8 @@ DepositsView (定期 → 總覽)
   → GET /api/deposits/summary
       → upcoming list (unreceived deposits, earliest end first — an
         end_date in the past without 收訖 shows 已到期未收)
-      → active totals, month buckets, bank rollups (all by end_date,
-        matching the sheet's own 定期 formulas)
+      → active totals, month buckets, bank rollups (all receipt-based —
+        the same unreceived deposits the list shows)
       → year tables for every end year present, plus the current year
   → 收訖 on an upcoming row → POST /api/deposits/:id/receive
       → UPDATE deposits SET received_at (+ interest correction and
@@ -54,7 +54,7 @@ DepositHistoryView (定期 → 記錄)
       → history rows for the selected year
 ```
 
-The list split is receipt-based: a deposit leaves 未到期定期 on 收訖 (a stored `received_at`), while the totals and rollups stay point-in-time — they derive from `end_date` like the sheet, so an overdue-but-unreceived deposit shows 已到期未收 in the list yet no longer counts in active principal.
+The list and every total/rollup are receipt-based: a deposit counts while it is not 收訖, whatever its `end_date`, and leaves on 收訖 (a stored `received_at`) — including a deposit 收訖'd early. An overdue-but-unreceived deposit shows 已到期未收 in the list and still counts in active principal, 已定期, and live 流動資產 until the user runs 收訖 → 存入活期, which moves the money into a cash row. Only the parity check keeps the workbook's end-date rule (`End` when today ≥ end date), since the sheet has no receipt concept.
 
 The 手動步驟提醒 checklists (定期 start step / 定期 end step) are static hints for the still-unmigrated `Month Stat`, `回報率`, `Overview`, and money-master bookkeeping in the workbook.
 
@@ -66,7 +66,8 @@ FamilyDepositsView (家人 → 定期)
       → one section per holder (anyone with deposits or a stored note):
         their note, the unreceived 未到期 list ordered by end date
         (flagging 已到期未收 where past due), 活躍本金 = Σ principal over
-        deposits ending in the future
+        the holder's unreceived deposits (a matured one keeps counting
+        until 收訖)
       → history_years for the year selector
   → GET /api/family/deposits?year=YYYY&order=desc
       → 記錄 rows for the selected year
