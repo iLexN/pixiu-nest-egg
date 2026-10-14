@@ -52,7 +52,9 @@
       "Exec(touch)",
       "Exec(WEALTH_DB=/tmp/wealth-test.db WEALTH_ADDR=127.0.0.1:8799 cargo run)",
       "Exec(chmod)",
-      "Exec(tee)"
+      "Exec(tee)",
+      "Exec(command)",
+      "Exec(read)"
     ]
   }
 }

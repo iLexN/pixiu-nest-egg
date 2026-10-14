@@ -2,7 +2,7 @@
 
 ## Purpose
 
-Replaces the workbook's `YearInReview` sheet: a per-year cross-domain review block combining the month ledger's yearly aggregates, the investment summary (interest, sold P/L, invested, pool), and per-asset-class returns (債券/股票/定期) with blended rates, income, savings rate, and year-over-year deltas — derived from stored data except for the figures the sheet always entered by hand.
+Replaces the workbook's `YearInReview` sheet: a per-year cross-domain review block combining the month ledger's yearly aggregates, the investment summary (interest, sold P/L, invested, pool), and per-asset-class returns (債券/港股/定期) with blended rates, income, savings rate, and year-over-year deltas — derived from stored data except for the figures the sheet always entered by hand.
 
 ## Requirements
 
@@ -72,9 +72,9 @@ Each year row SHALL carry `raise` (月薪增幅 — the monthly salary increment
 Each year row SHALL carry a per-asset-class block with `bonds`, `stocks`, and `deposits` entries plus blended rates, income, and savings figures:
 
 - `bonds`: `principal` = Σ principal of bonds held in the year — a bond counts when `min(first coupon pay year, maturity year) ≤ year ≤ maturity year` — and `interest` = Σ `received_amount` of coupons with `pay_date` in the year; a seeded override replaces either value when present. `rate` = `interest ÷ principal`.
-- `stocks` (HK only, matching the sheet — US figures enter through `transferred`/`invested_adjustment`): `cost` = the year's 年末總成本 (snapshot or live cumulative Σ BUY), `dividends` = Σ `received_amount` of HK dividends with `pay_date` in the year, `rate` = `dividends ÷ cost`, `now_value` = the year's 總市值 (snapshot or live), `value_rate` = `dividends ÷ now_value`.
+- `stocks` (labeled 港股 — HK only, matching the sheet; US figures enter through `transferred`/`invested_adjustment`): `cost` = the year's 年末總成本 (snapshot or live cumulative Σ BUY), `dividends` = Σ `received_amount` of HK dividends with `pay_date` in the year, `rate` = `dividends ÷ cost`, `now_value` = the year's 總市值 (snapshot or live), `value_rate` = `dividends ÷ now_value`.
 - `deposits`: `principal`/`interest` = Σ over 定期 rows whose `end_date` falls in the year and is not after today (the sheet's `End` filter); a seeded override replaces either value when present.
-- Blended `rates`: `income_cost_rate` = `(債券 interest + 股票 dividends) ÷ (債券 principal + 股票 cost)`; `total_value_rate` = `(債券 + 股票 + 定期 interest) ÷ (債券 principal + 股票 now_value)`; `income_value_rate` = `(債券 interest + 股票 dividends) ÷ (債券 principal + 股票 now_value)` — each absent when its denominator is missing or zero.
+- Blended `rates`: `income_cost_rate` = `(債券 interest + 港股 dividends) ÷ (債券 principal + 港股 cost)`; `total_value_rate` = `(債券 + 港股 + 定期 interest) ÷ (債券 principal + 港股 now_value)`; `income_value_rate` = `(債券 interest + 港股 dividends) ÷ (債券 principal + 港股 now_value)` — each absent when its denominator is missing or zero.
 - `income` (收入) = the stored manual figure, `income_avg` = `income ÷ 12`, and its YoY delta; `saved` (存) = `income − spend`, `saved_avg` = `saved ÷ 12`, `saved_pct` = `saved ÷ income` — each absent while `income` is missing or zero.
 
 #### Scenario: Asset rows derive for the live year
@@ -111,42 +111,9 @@ The system SHALL persist one record per year carrying `income` (收入, manual),
 - **WHEN** the user patches 2026 with `raise` `2500`
 - **THEN** the 2026 row reports `raise` `2500` and the Overview 投資目標 `target`/`remain`/`growth` reflect it on the next read
 
-### Requirement: Workbook seeding
-
-The workbook importer SHALL seed `year_review` records from `YearInReview`'s year blocks: `income` from the 收入 cell and `invested_adjustment` = the sheet's `invested` figure minus the HK net invested computed from trades and the year's `ibkr_transfers` sum, for every block year; `sold_pl` from each block's 投資P/L cell into the HK `year_snapshots` row; and the four bond/deposit overrides only for years before the current year (the current year derives live). The importer SHALL also seed `invested_adjustment` by the same sheet-figure-minus-derived formula from the `Overview` `J23:K26` year/invested cells, covering years the `YearInReview` sheet has no block for. Seeding SHALL NOT overwrite existing stored values, and a repeated import SHALL create no duplicates — matching the `year_snapshots` convention.
-
-#### Scenario: Import seeds past-year overrides
-
-- **WHEN** the workbook's 2024 block carries bond principal `130000` and interest `5728.26`, and deposit principal `795095.92` and interest `10208.01`
-- **THEN** import stores those four values on the 2024 record
-
-#### Scenario: Current-year manual inputs still seed
-
-- **WHEN** the workbook's current-year block carries `income` `737020` and `invested` `182935.39`, trades derive HK net invested `161935.39`, and the seeded transfer log sums `131000` for the year
-- **THEN** import stores `income` `737020` and `invested_adjustment` `-110000` for the current year, while its bond/deposit cells stay NULL
-
-#### Scenario: Overview-only year seeds its adjustment
-
-- **WHEN** the `Overview` block lists 2023 with `invested` `206523.15`, the HK snapshot invests `96523.15`, and no 2023 transfers exist
-- **THEN** import stores a 2023 `year_review` record with `invested_adjustment` `110000` and the 2023 year row reports `invested` `206523.15`
-
-#### Scenario: Re-import keeps edits
-
-- **WHEN** the user edited the seeded 2025 `income` and the workbook is imported again
-- **THEN** the edited value is unchanged
-
-### Requirement: Parity check
-
-The parity check SHALL compare, per `YearInReview` block year, the derived/effective figures against the sheet's cached cells — ledger aggregates, interest, 投資純利, invested, pool figures, asset-class principal/interest/rates, income and 存% — reporting matches and differences like the other sections; figures whose sheet cell was a hand-frozen literal that legitimately differs from derived data SHALL report as informational.
-
-#### Scenario: Seeded blocks match
-
-- **WHEN** the workbook's 2025 block froze income `718290` and bond principal `160000` and the stored overrides carry the same
-- **THEN** the 2025 comparison reports matches for those cells
-
 ### Requirement: Year review page
 
-The frontend SHALL show a 總覽 → 年結 view listing one block per year reproducing the sheet's three groups — ledger aggregates, investment summary, and per-asset-class returns — with their YoY columns, the derived `IBKR 轉入` figure, the effective `raise` per year, inline editing for `income`, `invested_adjustment`, `raise`, `sold_pl`, and the four overrides (clearing restores derived figures), and a reload after every mutation.
+The frontend SHALL show a 總覽 → 年結 view listing one block per year reproducing the sheet's three groups — ledger aggregates, investment summary, and per-asset-class returns (the asset rows labeled 債券/港股/定期, 港股 figures being HK-only) — with their YoY columns, the derived `IBKR 轉入` figure, the effective `raise` per year, inline editing for `income`, `invested_adjustment`, `raise`, `sold_pl`, and the four overrides (clearing restores derived figures), and a reload after every mutation.
 
 #### Scenario: Edit a manual figure
 

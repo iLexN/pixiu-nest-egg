@@ -54,9 +54,9 @@ DepositHistoryView (定期 → 記錄)
       → history rows for the selected year
 ```
 
-The list and every total/rollup are receipt-based: a deposit counts while it is not 收訖, whatever its `end_date`, and leaves on 收訖 (a stored `received_at`) — including a deposit 收訖'd early. An overdue-but-unreceived deposit shows 已到期未收 in the list and still counts in active principal, 已定期, and live 流動資產 until the user runs 收訖 → 存入活期, which moves the money into a cash row. Only the parity check keeps the workbook's end-date rule (`End` when today ≥ end date), since the sheet has no receipt concept.
+The list and every total/rollup are receipt-based: a deposit counts while it is not 收訖, whatever its `end_date`, and leaves on 收訖 (a stored `received_at`) — including a deposit 收訖'd early. An overdue-but-unreceived deposit shows 已到期未收 in the list and still counts in active principal, 已定期, and live 流動資產 until the user runs 收訖 → 存入活期, which moves the money into a cash row.
 
-The 手動步驟提醒 checklists (定期 start step / 定期 end step) are static hints for the still-unmigrated `Month Stat`, `回報率`, `Overview`, and money-master bookkeeping in the workbook.
+The 手動步驟提醒 checklists (定期 start step / 定期 end step) are static hints for the `Month Stat`, `回報率`, `Overview`, and money-master bookkeeping that used to live in the workbook.
 
 ## Load the 家人 → 定期 view
 
@@ -101,4 +101,4 @@ FamilyDepositsView (家人 → 定期)
   → the note survives deleting the holder's last deposit
 ```
 
-Isolation: `family_deposits` rows are records only — they never enter 定期!B1, Overview 已定期/半流動資金/總數/流動資產, Month Stat 利息/`interest_auto`/suggestions, or the 回顧 figures, and neither the importer nor the parity check touches the `Mum`/`Dad` sheets.
+Isolation: `family_deposits` rows are records only — they never enter 定期!B1, Overview 已定期/半流動資金/總數/流動資產, Month Stat 利息/`interest_auto`/suggestions, or the 回顧 figures.

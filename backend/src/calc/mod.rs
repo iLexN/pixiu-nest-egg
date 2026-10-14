@@ -55,7 +55,7 @@ fn has_note(note: Option<&str>) -> bool {
     note.map(|n| !n.trim().is_empty()).unwrap_or(false)
 }
 
-/// Relative comparison used by the parity check and the tests.
+/// Relative comparison used by the tests.
 pub fn approx_eq(left: f64, right: f64) -> bool {
     let scale = left.abs().max(right.abs()).max(1.0);
     (left - right).abs() <= TOLERANCE * scale

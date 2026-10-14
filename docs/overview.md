@@ -1,6 +1,6 @@
 # 總覽 flows — Overview, Month Stat, Year in Review, IBKR
 
-Part of the [data-flow guide](DATA_FLOW.md). Table definitions: [`month_stats`, `month_items`, `year_review`, `manual_assets`, `ibkr_transfers`, `app_meta`](database.md). See also [MONTH_STAT_OVERVIEW.md](MONTH_STAT_OVERVIEW.md) for the workbook analysis behind these flows.
+Part of the [data-flow guide](DATA_FLOW.md). Table definitions: [`month_stats`, `month_items`, `year_review`, `manual_assets`, `ibkr_transfers`, `app_meta`](database.md).
 
 ## Load the 總覽 view
 
@@ -127,7 +127,7 @@ Each row reproduces the workbook block:
 
 - Ledger group — 總數+/平均總數+ (Σ `total_change` and ÷12), 支出/平均支出 (Σ `month_spend`), 生活平均支出 (the sheet's `AVERAGE` over recorded living spends), 開心 Pool 收入/支出/結餘 (chained `pool_balances`), plus the D-column YoY ratios.
 - Investment group — 利息回報 and 平均回報 (`interest ÷ 12` flat, even mid-year), 投資P/L (HK `sold_pl`), 投資純利 (`interest + sold_pl`), IBKR 轉入 (Σ the year's `ibkr_transfers`), invested (`HK net invested + 當年轉入 + invested_adjustment`), invested % (`invested ÷ (收入 + 利息回報)`), Irene + 開心 Pool (`pool_input_sum + pool_balance`), plus the G-column YoY ratios.
-- Asset group — 債券 (principal held in the year + coupons received), 股票 (yearly HK row: cost/dividends/rates/year-end value; 派息 counts received only), 定期 (deposits ending in the year, `End ≤ today`), the three blended 回報率 rates (income-returns ÷ bond+cost, all-returns ÷ bond+市值, income-returns ÷ bond+市值), 收入, 平均收入 (÷12), and 存/平均存/存% (`income − spend`, ÷income), plus the 收入 YoY.
+- Asset group — 債券 (principal held in the year + coupons received), 港股 (yearly HK row: cost/dividends/rates/year-end value; 派息 counts received only), 定期 (deposits ending in the year, `End ≤ today`), the three blended 回報率 rates (income-returns ÷ bond+cost, all-returns ÷ bond+市值, income-returns ÷ bond+市值), 收入, 平均收入 (÷12), and 存/平均存/存% (`income − spend`, ÷income), plus the 收入 YoY.
 
 `pool_income`/`pool_spend`/`pool_balance`, `interest`, `interest_avg` and `irene_pool` always read 0 without month data — the sheet's own formulas do the same.
 

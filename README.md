@@ -1,6 +1,6 @@
 # Wealth report tracker
 
-A local, single-user web app that replaces the hand-maintained sections of `財富分析報告.xlsx` — a personal wealth-tracking workbook — with a Rust + SQLite backend and a Vue frontend. It imports the existing workbook once, keeps the same calculation rules the spreadsheet used, and lets you verify the two agree.
+A local, single-user web app that replaces a personal wealth-tracking workbook (`財富分析報告.xlsx`) with a Rust + SQLite backend and a Vue frontend. The workbook has been fully migrated and retired; the app keeps the same calculation rules the spreadsheet used.
 
 Everything runs on your machine. The backend binds to loopback only, accepts cross-origin requests only from the Vite dev server, and makes no outbound network calls (the optional `/scalar` API playground loads its UI from a CDN, version-pinned and integrity-checked).
 
@@ -12,13 +12,11 @@ Everything runs on your machine. The backend binds to loopback only, accepts cro
 | 定期 | Time deposits, 收訖 with optional bank-in, rollups; 家人 record-only deposits |
 | 投資 | MPF accounts and history, 債券 with coupon schedule, AIA policies and events |
 | 總覽 | Asset table, 半流動資金, 投資目標 cards, IBKR block, monthly 月結 with itemised suggestions, 年結 year-in-review |
-| 工具 | Workbook import, parity check against the workbook's cached values, OpenAPI docs with an interactive playground |
-
-Sections of the workbook not listed here (the `YYYY回報率` projection sheets, 開心Pool ledger, 香港年金, FIRE, ref1) are not migrated; the spreadsheet stays the source of truth for those.
+| 工具 | Bulk 現價 import (`import_prices`), OpenAPI docs with an interactive playground |
 
 ## Stack
 
-- **Backend** — Rust 2024, [axum](https://github.com/tokio-rs/axum), [sqlx](https://github.com/launchbadge/sqlx) with SQLite, [calamine](https://github.com/tafia/calamine) for reading `.xlsx`, [utoipa](https://github.com/juhaku/utoipa) for OpenAPI.
+- **Backend** — Rust 2024, [axum](https://github.com/tokio-rs/axum), [sqlx](https://github.com/launchbadge/sqlx) with SQLite, [utoipa](https://github.com/juhaku/utoipa) for OpenAPI.
 - **Frontend** — Vue 3, TypeScript, Vite, pnpm.
 - **Database** — a single SQLite file, `data/wealth.db`, with numbered migrations in `backend/migrations/` applied automatically at startup.
 
@@ -30,10 +28,7 @@ Prerequisites: a Rust toolchain, Node.js, and pnpm.
 # 1. Build the frontend
 cd frontend && pnpm install && pnpm build && cd ..
 
-# 2. Import the workbook (creates data/wealth.db)
-cargo run -p wealth-backend --bin import_xlsx -- "財富分析報告.xlsx"
-
-# 3. Run the server
+# 2. Run the server (migrations create an empty data/wealth.db on first start)
 cargo run -p wealth-backend --bin wealth-backend
 ```
 
@@ -56,17 +51,11 @@ cd frontend && pnpm dev     # http://127.0.0.1:5173, /api proxied to :8787
 ## Command-line tools
 
 ```sh
-# Import the workbook. Idempotent: re-running skips rows that already exist.
-cargo run -p wealth-backend --bin import_xlsx -- "財富分析報告.xlsx"
-
 # Bulk-update 現價 from {"stocks": [{"symbol": "0005.HK", "price": 60.5}, ...]}
 cargo run -p wealth-backend --bin import_prices -- current-price.json
-
-# Compare the database's derived summary against the workbook's cached values
-cargo run -p wealth-backend --bin check_parity -- "財富分析報告.xlsx"
 ```
 
-All three honor `WEALTH_DB` and open the workbook read-only; the app never writes to the spreadsheet.
+`import_prices` honors `WEALTH_DB`.
 
 ## Development
 
@@ -87,16 +76,16 @@ WEALTH_DB=/tmp/wealth-test.db WEALTH_ADDR=127.0.0.1:8790 cargo run -p wealth-bac
 
 - The backend owns all validation and financial calculations; the frontend only collects input and formats output.
 - Money is stored as `REAL`/`f64`, unrounded, matching the spreadsheet. Rounding happens at display time only.
-- Where the spreadsheet's rules are quirky (e.g. 加權平均買入單價 divides by shares *bought*, not held), the app reproduces them deliberately so the parity check stays meaningful.
+- Where the spreadsheet's rules are quirky (e.g. 加權平均買入單價 divides by shares *bought*, not held), the app reproduces them deliberately — the workbook's formulas were the specification.
 - Behavior changes go through [OpenSpec](https://github.com/Fission-AI/OpenSpec): a proposal and delta spec in `openspec/changes/`, implemented, then archived into `openspec/specs/`.
 
 ## Documentation
 
 - `openspec/specs/` — normative specification of every migrated capability.
-- `docs/DATA_FLOW.md` — how the pieces fit: UI action → API → table → calculation, with per-topic guides for stocks, deposits, investments, overview, import/parity, and the database schema.
+- `docs/DATA_FLOW.md` — how the pieces fit: UI action → API → table → calculation, with per-topic guides for stocks, deposits, investments, overview, and the database schema.
 - `openspec/changes/archive/` — design history for each migration step.
 - `AGENTS.md` — working rules for AI coding assistants.
 
 ## Privacy
 
-`data/`, `財富分析報告.xlsx`, and `portfolio.csv` are gitignored because they contain personal financial data. Do not commit them, and do not point `WEALTH_DB` at a path inside the repository other than `data/`.
+`data/` and `portfolio.csv` are gitignored because they contain personal financial data. Do not commit them, and do not point `WEALTH_DB` at a path inside the repository other than `data/`. Back up `data/wealth.db` — it is the only copy of the data.

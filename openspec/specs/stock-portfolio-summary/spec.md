@@ -73,21 +73,6 @@ For each market the system SHALL report totals across stocks — total buy cost,
 - **WHEN** a stock has no sector recorded
 - **THEN** it is grouped under an explicit "未分類" row rather than being omitted from the rollup
 
-### Requirement: Manual stock display order
-For each market the system SHALL persist a user-controlled stock display order. Imported stocks SHALL initially use their row order on the workbook's `港股` or `美股` summary sheet. The summary SHALL let the user drag a stock row to a new position and persist that order without changing any trade or calculation data.
-
-#### Scenario: Initial order after import
-- **WHEN** the workbook is imported
-- **THEN** each market's stock list initially follows the order of the corresponding summary sheet
-
-#### Scenario: Reordering a stock
-- **WHEN** the user drags a stock above or below another stock in 持倉總覽
-- **THEN** the new order is saved, survives a reload, and applies only to that market
-
-#### Scenario: Incomplete reorder request
-- **WHEN** a reorder request omits, duplicates, or includes an unknown stock id for the selected market
-- **THEN** the system rejects the request and leaves the existing order unchanged
-
 ### Requirement: Separation of markets
 The system SHALL keep HK and US summaries separate and SHALL NOT mix their currencies in any total.
 
@@ -207,7 +192,7 @@ When a market summary is computed and at least one stock is priced, the system S
 - **THEN** both markets have a history row for that day, even if only one market's summary is viewed afterward
 
 ### Requirement: Last-month and max unrealized figures
-For each market the system SHALL derive, on read: the 上月 figures from the latest history row in the previous calendar month (empty when no such row exists), and the 最高 figures as the maxima over the market's imported seed marks (stored per market in `app_meta`), every history row, plus the market's current values. Each figure pair carries 未實現報酬率 as `(market_value − buy_cost_priced) ÷ buy_cost_priced`, reported empty when `buy_cost_priced` is 0, and 未實現金額 as `market_value − buy_cost_priced`. The max 未實現報酬率 and max 未實現金額 SHALL be tracked independently — they may come from different moments. When a new record sets a new high, the reported 最高 SHALL rise automatically without any manual copy step.
+For each market the system SHALL derive, on read: the 上月 figures from the latest history row in the previous calendar month (empty when no such row exists), and the 最高 figures as the maxima over the market's stored seed marks (per market in `app_meta`, absent when none were ever stored), every history row, plus the market's current values. Each figure pair carries 未實現報酬率 as `(market_value − buy_cost_priced) ÷ buy_cost_priced`, reported empty when `buy_cost_priced` is 0, and 未實現金額 as `market_value − buy_cost_priced`. The max 未實現報酬率 and max 未實現金額 SHALL be tracked independently — they may come from different moments. When a new record sets a new high, the reported 最高 SHALL rise automatically without any manual copy step.
 
 #### Scenario: Last month from history
 - **WHEN** HK's latest history row in August 2026 carries `buy_cost_priced` 500000 and `market_value` 600000, viewed in September 2026
@@ -230,7 +215,7 @@ For each market the system SHALL derive, on read: the 上月 figures from the la
 - **THEN** 最高 未實現金額 reflects the current value even before a history row is written for it
 
 #### Scenario: Seed mark floors the max
-- **WHEN** HK's imported seed marks are `0.3641` / `362869.79` and no history row or current value exceeds them
+- **WHEN** HK's stored seed marks are `0.3641` / `362869.79` and no history row or current value exceeds them
 - **THEN** 最高 reports `0.3641` and `362869.79`, and a new record above either mark raises that figure automatically
 
 ### Requirement: 上月/最高 on the summary
@@ -265,3 +250,18 @@ The 美股 持倉總覽 page SHALL show an IBKR account card (the 美股 sheet's
 
 - **WHEN** the user opens the 港股 持倉總覽
 - **THEN** no IBKR card is shown
+
+### Requirement: Stock display order
+For each market the system SHALL persist a user-controlled stock display order. A newly created stock SHALL be placed after the market's existing stocks. The summary SHALL let the user drag a stock row to a new position and persist that order without changing any trade or calculation data.
+
+#### Scenario: New stock appends
+- **WHEN** the user creates a stock in a market that already lists stocks
+- **THEN** it appears last in that market's order until the user moves it
+
+#### Scenario: Reordering a stock
+- **WHEN** the user drags a stock above or below another stock in 持倉總覽
+- **THEN** the new order is saved, survives a reload, and applies only to that market
+
+#### Scenario: Incomplete reorder request
+- **WHEN** a reorder request omits, duplicates, or includes an unknown stock id for the selected market
+- **THEN** the system rejects the request and leaves the existing order unchanged

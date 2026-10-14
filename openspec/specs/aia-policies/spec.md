@@ -64,7 +64,7 @@ Each policy SHALL carry two boolean flags: `excluded` (default false — the row
 
 ### Requirement: Manual USD→HKD rate
 
-The system SHALL keep a manual USD→HKD exchange rate (`aia.usd_hkd_rate`) used to derive the HKD totals. The rate SHALL be seeded from the workbook's cached `Overview!N3` at import and SHALL be updatable through `PATCH /api/aia/rate`. When no rate is stored, HKD figures SHALL be absent from the summary.
+The system SHALL keep a manual USD→HKD exchange rate (`aia.usd_hkd_rate`) used to derive the HKD totals. The rate SHALL be updatable through `PATCH /api/aia/rate`. When no rate is stored, HKD figures SHALL be absent from the summary.
 
 #### Scenario: Update the rate
 
@@ -73,7 +73,7 @@ The system SHALL keep a manual USD→HKD exchange rate (`aia.usd_hkd_rate`) used
 
 #### Scenario: No rate stored
 
-- **WHEN** no rate has been seeded or set
+- **WHEN** no rate has been set
 - **THEN** the summary reports USD figures only
 
 ### Requirement: AIA summary

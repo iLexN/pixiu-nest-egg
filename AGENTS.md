@@ -1,11 +1,11 @@
 # Wealth report stock tracker
 
-Local Rust + SQLite + Vue app for migrating the stock-trade sections of `財富分析報告.xlsx` out of the spreadsheet. The workbook remains the source of truth for sections that have not been migrated yet.
+Local Rust + SQLite + Vue app that replaced the stock-trade and other sections of `財富分析報告.xlsx`. The migration is complete and the workbook is retired — `data/wealth.db` is the only source of truth.
 
 ## Documentation map
 
 - `openspec/specs/` — normative behavior: what the app SHALL do, per capability. Authoritative for "is this correct?" questions; update it through an OpenSpec change, not by editing specs directly.
-- `docs/DATA_FLOW.md` — mechanics index for human readers: UI action → API → table → calculation. The detail lives in topic files: `docs/stocks.md`, `docs/deposits.md`, `docs/investments.md`, `docs/overview.md`, `docs/import-parity.md`, `docs/database.md`, plus `docs/MONTH_STAT_OVERVIEW.md` (workbook analysis).
+- `docs/DATA_FLOW.md` — mechanics index for human readers: UI action → API → table → calculation. The detail lives in topic files: `docs/stocks.md`, `docs/deposits.md`, `docs/investments.md`, `docs/overview.md`, `docs/database.md`.
 - `openspec/changes/archive/` — archived designs, delta specs, and checklists per migration step.
 - `http://127.0.0.1:8787/scalar` (running backend) — live OpenAPI playground; the fastest way to inspect the API surface.
 - This file — AI work rules only. Do not add behavior descriptions or flow narratives here; they belong in specs or docs.
@@ -17,10 +17,10 @@ Local Rust + SQLite + Vue app for migrating the stock-trade sections of `財富�
 
 ## Layout
 
-- `backend/` — axum HTTP API, SQLite persistence via sqlx, workbook importer, parity checker. `backend/src/routes/` holds thin HTTP adapters (extract input, validate, map errors); `backend/src/service/` composes across stores; `backend/src/store/` owns all SQL and returns `StoreError`; `backend/src/calc/` is pure calculation. Workbook reading lives in `xlsx.rs`/`import.rs`.
+- `backend/` — axum HTTP API, SQLite persistence via sqlx. `backend/src/routes/` holds thin HTTP adapters (extract input, validate, map errors); `backend/src/service/` composes across stores; `backend/src/store/` owns all SQL and returns `StoreError`; `backend/src/calc/` is pure calculation.
 - `backend/migrations/` — numbered sqlx migrations, applied automatically on startup.
 - `frontend/` — Vue 3 + TypeScript + Vite UI. Pages in `src/views/`, shared widgets in `src/components/`, API client in `src/api.ts`, display formatting in `src/format.ts`.
-- `data/wealth.db` — default local SQLite database with real personal financial data. `data/` and `財富分析報告.xlsx` are gitignored; a fresh clone must be given the workbook manually before import/parity can run.
+- `data/wealth.db` — the local SQLite database with real personal financial data. `data/` is gitignored; a fresh clone gets an empty database created by migrations.
 
 ## Run locally
 
@@ -44,17 +44,15 @@ Environment variables:
 - `WEALTH_DB=/path/to/wealth.db` — override the database path.
 - `WEALTH_ADDR=127.0.0.1:8787` — override the backend bind address; keep it loopback-only.
 
-Never run experiments, seeded servers, or throwaway imports against `data/wealth.db`. Use a scratch database, e.g. `WEALTH_DB=/tmp/wealth-test.db cargo run ...`, and a spare port via `WEALTH_ADDR` if the real backend is already running.
+Never run experiments or seeded servers against `data/wealth.db`. Use a scratch database, e.g. `WEALTH_DB=/tmp/wealth-test.db cargo run ...`, and a spare port via `WEALTH_ADDR` if the real backend is already running.
 
-## Import and parity check
+## Bulk price import
 
 ```sh
-cargo run -p wealth-backend --bin import_xlsx -- "財富分析報告.xlsx"      # workbook → database, idempotent
 cargo run -p wealth-backend --bin import_prices -- current-price.json     # bulk 現價 update
-cargo run -p wealth-backend --bin check_parity -- "財富分析報告.xlsx"     # database summary vs workbook cached values
 ```
 
-All honor `WEALTH_DB` and open the workbook read-only. Formats, ticker mapping, seeding heuristics, and what a re-import may and may not overwrite are specified in `docs/import-parity.md` and `openspec/specs/spreadsheet-trade-import/`.
+Honors `WEALTH_DB`.
 
 ## Verification
 
@@ -80,10 +78,9 @@ Backend tests are inline `#[cfg(test)]` modules next to the code they cover. The
   - HK trade input derives `fee = buy total − 股數 × 單價`; US input derives `buy total = 股數 × 單價 + fee`.
   - `加權平均買入單價 = 總買入成本 ÷ Σ BUY 股數` divides by shares **bought**, not shares held; a SELL never reduces 總買入成本.
   - Stocks with no 現價, zero holdings, or no derived market value are excluded from market-value totals; the summary lists them in `totals.excluded_codes`.
-- Import and parity never write to the workbook. Import writes settings and seeded marks once and never overwrites them on re-import.
 - Layer rules: no SQL in `routes/` outside tests; nothing outside `routes/` imports `routes`; `ApiError` only in `routes/`, `error.rs`, and `prices.rs` (upload validation shared by the route and the `import_prices` bin); `calc/` has no sqlx/axum; `store/` doesn't import `service`.
 - When behavior or wiring changes, update the specs and/or `docs/` — not this file.
 
 ## Migration status
 
-Migrated capabilities are exactly the directories in `openspec/specs/`. Not yet migrated and still maintained by hand in the workbook: the `YYYY回報率` projection sheets, the 開心Pool independent ledger, 香港年金, FIRE, ref1.
+Migration out of the workbook is complete and the workbook is retired. The `YYYY回報率` projection sheets, 開心Pool independent ledger, 香港年金, FIRE, and ref1 were dropped, not migrated.

@@ -122,7 +122,7 @@ The system SHALL present a summary grouped by holder — every holder that has d
 
 ### Requirement: Isolation from the user's own figures
 
-Family deposits SHALL NOT be counted in any figure derived from the user's own deposits: the 定期 summary (active principal, month/bank/year rollups), Overview 已定期 / 半流動資金 / 總數 / 流動資產, Month Stat 利息, `interest_auto`, and deposit suggestions, and the 年結 回顧 定期 figures. Workbook import SHALL NOT read the `Mum`/`Dad` sheets and the parity check SHALL NOT compare them.
+Family deposits SHALL NOT be counted in any figure derived from the user's own deposits: the 定期 summary (active principal, month/bank/year rollups), Overview 已定期 / 半流動資金 / 總數 / 流動資產, Month Stat 利息, `interest_auto`, and deposit suggestions, and the 年結 回顧 定期 figures.
 
 #### Scenario: User figures unchanged
 

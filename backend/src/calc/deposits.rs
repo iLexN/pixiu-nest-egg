@@ -114,9 +114,9 @@ pub struct DepositFacts<'a> {
     pub principal: Option<f64>,
     pub interest: Option<f64>,
     pub end_date: chrono::NaiveDate,
-    /// Receipt flag: the caller decides what "received" means — live callers
-    /// pass `received_at.is_some()`; parity passes `end_date <= today` to
-    /// reproduce the sheet's rule.
+    /// Receipt flag: live callers pass `received_at.is_some()`. The retired
+    /// parity checker passed `end_date <= today` to reproduce the sheet's
+    /// end-date rule.
     pub received: bool,
 }
 
@@ -126,26 +126,8 @@ pub fn deposit_total(principal: Option<f64>, interest: Option<f64>) -> f64 {
 }
 
 /// The receipt rule: a deposit counts until 收訖, whatever its `end_date`.
-/// Parity reproduces the sheet's end-date rule (`End` when `TODAY() >= end
-/// date`) by passing `received = end_date <= today`.
 pub fn deposit_active(deposit: &DepositFacts<'_>) -> bool {
     !deposit.received
-}
-
-/// The label prefix used by the sheet's `SUMIF("SC-*")` bank rows: the text
-/// before the first `-`, so `HS-Irene-53` lands in `HS`. Used at import time
-/// to fill the `bank` column; rollups group by the column, not the label.
-pub fn label_prefix(label: Option<&str>) -> Option<String> {
-    let label = label?.trim();
-    if label.is_empty() {
-        return None;
-    }
-    let prefix = label.split('-').next().unwrap_or("").trim();
-    if prefix.is_empty() {
-        None
-    } else {
-        Some(prefix.to_string())
-    }
 }
 
 /// One month bucket of the 定期 active-month table.
@@ -447,14 +429,6 @@ mod tests {
         assert!(approx_eq(deposit_total(Some(140000.0), None), 140000.0));
         assert!(approx_eq(deposit_total(None, Some(539.25)), 539.25));
         assert!(approx_eq(deposit_total(None, None), 0.0));
-    }
-
-    #[test]
-    fn label_prefix_takes_the_text_before_the_first_dash() {
-        assert_eq!(label_prefix(Some("SC-9632")).as_deref(), Some("SC"));
-        assert_eq!(label_prefix(Some("HS-Irene-53")).as_deref(), Some("HS"));
-        assert_eq!(label_prefix(None), None);
-        assert_eq!(label_prefix(Some("  ")), None);
     }
 
     /// The workbook's current active set: SC-9632 + SC-7006 ending 2026-10-12,

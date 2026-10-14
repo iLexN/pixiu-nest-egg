@@ -4,48 +4,13 @@ use axum::http::StatusCode;
 use serde::Serialize;
 
 use super::AppState;
-use crate::calc::{
-    MpfAccountInput, MpfPoint, MpfTotals, mpf_figures, mpf_last_month, mpf_max, mpf_totals,
-    validate_mpf_account,
-};
+use crate::calc::{MpfAccountInput, MpfTotals, mpf_totals, validate_mpf_account};
 use crate::error::{ApiError, ErrorBody};
 use crate::models::{MpfAccount, MpfAccountPatch, MpfHistoryRow, MpfNotePatch, NewMpfAccount};
+use crate::service::mpf::present_account;
 use crate::store::meta::{meta_f64, meta_get, meta_put};
-use crate::store::mpf::{self, StoredAccount};
+use crate::store::mpf;
 use crate::store::today;
-
-pub fn present_account(
-    account: &StoredAccount,
-    history: &[MpfHistoryRow],
-    today: chrono::NaiveDate,
-) -> MpfAccount {
-    let facts = mpf::facts_of(account, history);
-    let current = MpfPoint {
-        recorded_on: today,
-        contributions: account.contributions,
-        balance: account.balance,
-    };
-    let figures = mpf_figures(account.contributions, account.balance);
-    MpfAccount {
-        id: account.id,
-        label: account.label.clone(),
-        trustee: account.trustee.clone(),
-        contributions: account.contributions,
-        balance: account.balance,
-        plan_name: account.plan_name.clone(),
-        member_no: account.member_no.clone(),
-        sort_order: account.sort_order,
-        rate: figures.rate,
-        gain: figures.gain,
-        last_month: mpf_last_month(&facts.history, today),
-        max: mpf_max(
-            &facts.history,
-            Some(current),
-            account.seed_max_rate,
-            account.seed_max_gain,
-        ),
-    }
-}
 
 #[derive(Debug, Serialize, utoipa::ToSchema)]
 pub struct MpfResponse {

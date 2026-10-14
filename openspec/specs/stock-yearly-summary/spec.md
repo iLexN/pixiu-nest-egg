@@ -65,14 +65,3 @@ For each year row the system SHALL derive: `yield_on_cost` (報酬率 1) = divid
 #### Scenario: YoY of cumulative cost
 - **WHEN** cost is 338658.64 in 2024 and 834664.82 in 2025
 - **THEN** the 2025 row reports invested_yoy ≈ 1.4647
-
-### Requirement: Workbook seeding
-The workbook importer SHALL seed `year_snapshots` from year-end figures found in the workbook (the `港股`/`美股` year blocks and the `YearInReview` 股票 cost and "now value" rows) when it can attribute a value to a single market and year. Importing SHALL NOT overwrite an existing snapshot row; a repeated import skips seeded values like other imported data.
-
-#### Scenario: Seed from workbook
-- **WHEN** the workbook's YearInReview records a 2024 year-end stock value attributable to HK and the database has no HK 2024 snapshot
-- **THEN** import creates the HK 2024 snapshot with that market value
-
-#### Scenario: Re-import preserves snapshots
-- **WHEN** the workbook is imported a second time after the user edited a snapshot
-- **THEN** the edited snapshot is unchanged and no duplicate rows exist

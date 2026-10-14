@@ -49,7 +49,7 @@ One row per 定期 deposit (from 定期Info's 表_定期List). Nullable columns 
 |---|---|
 | `id` | Internal deposit ID |
 | `label` | The sheet's `id` column: bank reference like `SC-9632` |
-| `bank` | Bank code (SC = 渣打, HS = 恒生); derived from the label prefix on import |
+| `bank` | Bank code (SC = 渣打, HS = 恒生); free text on the form, typically the label prefix |
 | `principal` | The sheet's `input` column |
 | `rate` | Annual rate as a fraction (0.03 = 3%) |
 | `interest` | 利息 (expected; the 收訖 form can correct it to the amount actually received) |
@@ -57,12 +57,12 @@ One row per 定期 deposit (from 定期Info's 表_定期List). Nullable columns 
 | `received_at` | 收訖日 (`YYYY-MM-DD`); NULL while the deposit is still on the books — it stays in 未到期定期 until 收訖 and its interest counts in Month Stat 利息 only once received |
 | `credited_asset_id`, `credited_amount` | The cash `manual_assets` row and amount the 收訖 action credited (optional); stored so 取消收訖 reverses exactly |
 | `note1`, `note2` | Optional notes |
-| `sort_order` | Workbook row order; new entries append |
+| `sort_order` | Display order; new entries append |
 | `created_at`, `updated_at` | Audit timestamps |
 
 ### `family_deposits`
 
-One row per 定期 held on behalf of a family member (the workbook's `Mum`/`Dad` sheets — entered by hand, never imported). Record-only: the money is outside the user's own totals, so no figure derived from `deposits`, `manual_assets`, or `month_items` ever reads this table, and 收訖 has no side effects.
+One row per 定期 held on behalf of a family member (the workbook's `Mum`/`Dad` sheets — entered by hand). Record-only: the money is outside the user's own totals, so no figure derived from `deposits`, `manual_assets`, or `month_items` ever reads this table, and 收訖 has no side effects.
 
 | Column | Meaning |
 |---|---|
@@ -96,7 +96,7 @@ One row per 派息 event per stock (from the trade sheets' J–O block). The sna
 | `credited_amount` | What the 收訖 bank-in credited (HS cash for HK, `ibkr.usd_cash` for US); NULL = nothing credited, so clearing the receipt reverses exactly |
 | `received_price` | 現價 snapshot at receipt, optional |
 | `withholding_tax` | Tax withheld from the gross 派息 (US dividends), optional |
-| `note` | Optional free-text note (imported rows keep the sheet's M formula) |
+| `note` | Optional free-text note (rows migrated from the workbook keep the sheet's M formula) |
 | `created_at`, `updated_at` | Audit timestamps |
 
 ### `year_snapshots`
@@ -125,8 +125,8 @@ One row per MPF account (from the `MPF` sheet's account table).
 | `contributions` | 總供款額, the monthly-edited input |
 | `balance` | 帳戶結存, the monthly-edited input |
 | `plan_name`, `member_no` | Optional account metadata |
-| `sort_order` | Workbook row order |
-| `seed_max_rate`, `seed_max_gain` | The workbook's all-time marks, written once at import and never raised; the reported max is `MAX(seed, history, current)` |
+| `sort_order` | Display order |
+| `seed_max_rate`, `seed_max_gain` | Stored all-time marks (from the retired workbook import), never raised; the reported max is `MAX(seed, history, current)` |
 | `created_at`, `updated_at` | Audit timestamps |
 
 ### `mpf_history`
@@ -139,20 +139,20 @@ One row per account per recorded day — `UNIQUE(account_id, recorded_on)`, so a
 | `account_id` | Links to `mpf_accounts.id` |
 | `recorded_on` | `YYYY-MM-DD` text date |
 | `contributions`, `balance` | The account's values on that date |
-| `synthetic` | `1` for month-end rows the backend backfilled automatically or seeded at import; `0` for real updates |
+| `synthetic` | `1` for month-end rows the backend backfilled automatically or that came from the retired workbook import; `0` for real updates |
 
 When a contributions/balance update arrives in a later month and whole calendar months passed with no rows, the update backfills a synthetic month-end row per empty month carrying the pre-update values — the values that actually stood during those months.
 
 ### `app_meta`
 
-A generic key-value table for section-level state that no account row can hold. Currently: `mpf.note` (the MPF page's free-text note), the portfolio-level seeded maxima `mpf.seed_max_rate` / `mpf.seed_max_gain`, the Overview settings `overview.salary` / `overview.pool_rate.<year>` / `overview.semi_liquid_target` (the 半流動資金 buffer's target share of 流動資產, `0.25` while unset), the 目標 settings `overview.goal1_amount` / `overview.goal2_amount` (the 1st/2nd milestone targets, seeded from `Overview!K12`/`K18`, unset blanks the milestone) / `overview.goal3_inflation` / `overview.goal3_years` / `overview.final_replacement` (the 3rd/Final formula constants, `1.07` / `30` / `0.7` while unset), the forecast's 差餉 charge `forecast.bill_amount` (2158 while unset), the manual USD→HKD rate `aia.usd_hkd_rate` and the AIA page's free-text note `aia.note`, and the 美股 sheet's IBKR account cells `ibkr.now_value` / `ibkr.hkd_cash` / `ibkr.usd_cash`.
+A generic key-value table for section-level state that no account row can hold. Currently: `mpf.note` (the MPF page's free-text note), the portfolio-level stored maxima `mpf.seed_max_rate` / `mpf.seed_max_gain`, the Overview settings `overview.salary` / `overview.pool_rate.<year>` / `overview.semi_liquid_target` (the 半流動資金 buffer's target share of 流動資產, `0.25` while unset), the 目標 settings `overview.goal1_amount` / `overview.goal2_amount` (the 1st/2nd milestone targets, mirroring `Overview!K12`/`K18`, unset blanks the milestone) / `overview.goal3_inflation` / `overview.goal3_years` / `overview.final_replacement` (the 3rd/Final formula constants, `1.07` / `30` / `0.7` while unset), the forecast's 差餉 charge `forecast.bill_amount` (2158 while unset), the manual USD→HKD rate `aia.usd_hkd_rate` and the AIA page's free-text note `aia.note`, and the 美股 sheet's IBKR account cells `ibkr.now_value` / `ibkr.hkd_cash` / `ibkr.usd_cash`.
 
 | Column | Meaning |
 |---|---|
 | `key` | The entry's name, unique |
 | `value` | Free-text value |
 
-The market sheets' cached `max Balance %` / `max net` cells seed `market.HK.seed_max_percent`, `market.HK.seed_max_amount`, `market.US.seed_max_percent`, `market.US.seed_max_amount` — per-market maxima marks that floor the derived 最高, exactly like the MPF seeds.
+`market.HK.seed_max_percent`, `market.HK.seed_max_amount`, `market.US.seed_max_percent`, `market.US.seed_max_amount` hold per-market all-time marks (stored from the retired workbook import's `max Balance %` / `max net` cells) that floor the derived 最高, exactly like the MPF marks.
 
 Family holder notes live here too: `family.note.<holder>` holds one free-text note per 家人 定期 holder (e.g. Mum's AIA policy lines). The key survives deleting the holder's last deposit, and clearing the note deletes the key.
 
@@ -166,9 +166,9 @@ One row per market per day a summary is computed — `UNIQUE(market, recorded_on
 | `market` | `HK` or `US` |
 | `recorded_on` | `YYYY-MM-DD` text date |
 | `buy_cost_priced`, `market_value` | The market totals' priced cost basis and market value on that date |
-| `synthetic` | `1` for month-end rows backfilled automatically or seeded at import; `0` for real records |
+| `synthetic` | `1` for month-end rows backfilled automatically or that came from the retired workbook import; `0` for real records |
 
-When a summary is computed and whole calendar months passed with no rows, the build backfills a synthetic month-end row per empty month carrying the last-recorded values — the values that actually stood during those months. `import_xlsx` also seeds a synthetic `YYYY-12-31` row per market per `year_snapshots` year that has both 成本 and 總市值, so 最高 has real history from day one, plus one synthetic previous-month-end row per market reconstructed from the sheet's cached `last month` rate and the market's Σ BUY total (the rate matches the sheet exactly; the amount approximates). A market with no priced stock records nothing.
+When a summary is computed and whole calendar months passed with no rows, the build backfills a synthetic month-end row per empty month carrying the last-recorded values — the values that actually stood during those months. Rows migrated from the workbook include a `YYYY-12-31` mark per market per `year_snapshots` year with both 成本 and 總市值, so 最高 has history from day one. A market with no priced stock records nothing.
 
 ### `bonds`
 
@@ -178,13 +178,13 @@ One row per 債券 (from the `債券` sheet's registry table). The sheet only ev
 |---|---|
 | `id` | Internal bond ID |
 | `label` | The sheet's label, e.g. `silver bond` |
-| `issue_no` | 發行編號, e.g. `03GB2710R` — the dedupe key on import |
+| `issue_no` | 發行編號, e.g. `03GB2710R` |
 | `principal` | Face value, e.g. 50000 |
 | `maturity_date` | `YYYY-MM-DD` text date (the sheet's `end` column) |
 | `received_at` | 本金收訖日 (`YYYY-MM-DD`); NULL while the matured bond's principal return is unconfirmed |
 | `credited_asset_id`, `credited_amount` | The cash `manual_assets` row and amount the 收訖 action credited (optional); stored so 取消收訖 reverses exactly |
 | `note` | Optional free-text note |
-| `sort_order` | Workbook row order; new entries append |
+| `sort_order` | Display order; new entries append |
 | `created_at`, `updated_at` | Audit timestamps |
 
 Deleting a bond cascades to its `bond_coupons` rows.
@@ -229,15 +229,15 @@ One row per year, keyed by `year`, holding the YearInReview figures that cannot 
 |---|---|
 | `year` | Calendar year; unique |
 | `income` | The sheet's 收入 cell — hand-entered salary total |
-| `invested_adjustment` | `invested = HK net invested + 當年 IBKR 轉入 + invested_adjustment`; seeded as `sheet invested − app HK net invested − year transfers` so the total reproduces the workbook while the transfer part derives live (it folded in US principal, bond purchases, etc.) |
+| `invested_adjustment` | `invested = HK net invested + 當年 IBKR 轉入 + invested_adjustment`; rows migrated from the workbook hold the residual so the total reproduces the sheet while the transfer part derives live (the sheet folded in US principal, bond purchases, etc.) |
 | `salary_raise` | 月薪增幅 override for the 投資目標 target; NULL derives `max(0, last month salary of the year − last of the prior year)`; negative allowed |
-| `bond_principal`, `bond_interest` | Year-end 債券 principal held and coupons received; seeded for past years only |
-| `deposit_principal`, `deposit_interest` | 定期 principal/interest of deposits ending in the year; seeded for past years only |
+| `bond_principal`, `bond_interest` | Year-end 債券 principal held and coupons received; stored overrides for past years only |
+| `deposit_principal`, `deposit_interest` | 定期 principal/interest of deposits ending in the year; stored overrides for past years only |
 | `updated_at` | When the record was last written |
 
 ### `month_items` and `month_item_dismissals`
 
-`month_items` holds the month's line items — `adjustment` (G 調整: bank flows that are not spending), `extra_spend` (I−J extras like tax or premiums), `income` (L tail beyond `salary − spend`), `interest` (the manual part of N 利息: bank 活期 interest, promo rebates — the rest derives from deposit/coupon/dividend events), `entertainment` (O 娛樂支出). An `entertainment` item may carry `exclude_from_living`, which also subtracts it from 生活支出 — one entry then serves both the O total and the J exclusion (the sheet typed such amounts in both formulas). Imported items keep the sheet's formula text in `note` (e.g. `=47850-I23+24675`) and have no `auto_key`. Suggested items carry a stable `auto_key` (e.g. `dep-start:<id>`, `div:<id>`); a partial unique index prevents double-accepting, and `month_item_dismissals` (month + auto_key) records ignored suggestions so they stay gone.
+`month_items` holds the month's line items — `adjustment` (G 調整: bank flows that are not spending), `extra_spend` (I−J extras like tax or premiums), `income` (L tail beyond `salary − spend`), `interest` (the manual part of N 利息: bank 活期 interest, promo rebates — the rest derives from deposit/coupon/dividend events), `entertainment` (O 娛樂支出). An `entertainment` item may carry `exclude_from_living`, which also subtracts it from 生活支出 — one entry then serves both the O total and the J exclusion (the sheet typed such amounts in both formulas). Items migrated from the workbook keep the sheet's formula text in `note` (e.g. `=47850-I23+24675`) and have no `auto_key`. Suggested items carry a stable `auto_key` (e.g. `dep-start:<id>`, `div:<id>`); a partial unique index prevents double-accepting, and `month_item_dismissals` (month + auto_key) records ignored suggestions so they stay gone.
 
 ### `manual_assets`
 
@@ -245,7 +245,7 @@ The manual Overview cells as rows: `label`, `kind` (`cash` = 活期 like HS/渣�
 
 ### `ibkr_transfers`
 
-One row per bank→IBKR transfer (negative amounts record a withdrawal/correction): `transfer_date`, `amount_hkd`, `created_at`. 累計轉入 (美股!B1) is the log's sum, and each year's sum joins the year review's `invested`. The import seeds it with the workbook's cumulative B1 value as one row dated to the first US trade; saving the IBKR form's 轉入 delta appends a dated row.
+One row per bank→IBKR transfer (negative amounts record a withdrawal/correction): `transfer_date`, `amount_hkd`, `created_at`. 累計轉入 (美股!B1) is the log's sum, and each year's sum joins the year review's `invested`. The log begins with one row carrying the workbook's cumulative B1 value dated to the first US trade; saving the IBKR form's 轉入 delta appends a dated row.
 
 ### `forecast_items`
 

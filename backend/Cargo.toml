@@ -6,7 +6,6 @@ edition = "2024"
 [dependencies]
 anyhow = "1.0.104"
 axum = "0.8.9"
-calamine = { version = "0.36.1", features = ["dates"] }
 chrono = { version = "0.4.45", default-features = false, features = ["clock", "std"] }
 serde = { version = "1.0.229", features = ["derive"] }
 serde_json = "1.0.151"

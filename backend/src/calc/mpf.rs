@@ -80,27 +80,6 @@ pub fn mpf_figures(contributions: f64, balance: f64) -> MpfFigures {
     }
 }
 
-/// Recover last month-end per-account contributions from the sheet's frozen
-/// figures. Two accounts' last-month rates plus the portfolio rate and gain
-/// pin down the split exactly:
-///   c1·r1 + c2·r2 = total_gain,  c1 + c2 = total_gain ÷ total_rate.
-/// Returns None when the inputs are missing or degenerate, so the caller
-/// falls back to the current contributions.
-pub fn mpf_last_month_contributions(
-    rates: (f64, f64),
-    total_rate: f64,
-    total_gain: f64,
-) -> Option<(f64, f64)> {
-    let (r1, r2) = rates;
-    if total_rate <= 0.0 || (r1 - r2).abs() < TOLERANCE {
-        return None;
-    }
-    let total = total_gain / total_rate;
-    let c1 = (total_gain - total * r2) / (r1 - r2);
-    let c2 = total - c1;
-    (c1 >= 0.0 && c2 >= 0.0 && c1.is_finite() && c2.is_finite()).then_some((c1, c2))
-}
-
 fn month_end(date: chrono::NaiveDate) -> chrono::NaiveDate {
     first_of_month(date) + chrono::Months::new(1) - chrono::Days::new(1)
 }

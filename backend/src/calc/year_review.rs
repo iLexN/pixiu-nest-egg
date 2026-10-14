@@ -112,7 +112,7 @@ pub struct YearReviewAssets {
     pub bond_interest: Option<f64>,
     /// 債券 interest ÷ principal.
     pub bond_rate: Option<f64>,
-    /// 股票 (HK only, matching the sheet — US enters only through the
+    /// 港股 (HK only, matching the sheet — US enters only through the
     /// invested adjustment): year-end 成本 / 當年派息 / 總市值.
     pub stock_cost: Option<f64>,
     pub stock_dividends: Option<f64>,

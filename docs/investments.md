@@ -53,7 +53,7 @@ BondsView (債券 → 總覽)
       the bond-end item, and clears received_at
 ```
 
-Coupon receipt is per-coupon (each 付息日's `received_amount`); bond 收訖 covers only the principal return. The Active/已到期 split stays maturity-date based — an unreceived matured bond sits in 已到期 flagged 本金未收 until confirmed, and 債券!B1 parity is untouched since the sheet drops matured rows outright.
+Coupon receipt is per-coupon (each 付息日's `received_amount`); bond 收訖 covers only the principal return. The Active/已到期 split stays maturity-date based — an unreceived matured bond sits in 已到期 flagged 本金未收 until confirmed.
 
 ## Add or edit a bond or coupon
 
@@ -110,9 +110,9 @@ The 備註 block saves free text via `PATCH /api/aia/note` into `app_meta` (`aia
 
 編輯 on the USD → HKD card
   → PATCH /api/aia/rate
-  → writes app_meta key aia.usd_hkd_rate — a manual copy of the
-    workbook's Overview!N3 GOOGLEFINANCE cell; all HKD figures derive
-    from it and are absent while unset
+  → writes app_meta key aia.usd_hkd_rate — entered manually (it mirrors
+    the workbook's Overview!N3 GOOGLEFINANCE cell); all HKD figures
+    derive from it and are absent while unset
 ```
 
 ## Record a premium payment or withdrawal

@@ -39,9 +39,6 @@ When adding an endpoint, annotate the handler with `#[utoipa::path]` and registe
 | [deposits.md](deposits.md) | 定期: deposit CRUD, 收訖/取消收訖 with optional bank-in, summary/rollups; 家人 → 定期 (isolated record-only deposits + holder notes) |
 | [investments.md](investments.md) | MPF accounts + history + last-month/max derivation, 債券 + coupons (待定 → pending → received, principal 收訖), AIA policies + events + USD rate |
 | [overview.md](overview.md) | 總覽: asset table, 半流動資金, B1/H1/J1, averages + 投資目標 + 目標 + Money Master cards, 預測 forecast grid (items, convert to deposit, bill setting), IBKR block, Month Stat 月結 (items/suggestions/recapture + settings incl. money_master.*, goal amounts/constants), 年結 + year-end actions |
-| [import-parity.md](import-parity.md) | Workbook import (per-sheet detail, idempotency, seeding heuristics) and the parity check |
-
-Related: [MONTH_STAT_OVERVIEW.md](MONTH_STAT_OVERVIEW.md) — the workbook analysis and decisions behind the Month Stat / Overview migration.
 
 ## Frontend vs backend responsibilities
 
@@ -68,8 +65,6 @@ Related: [MONTH_STAT_OVERVIEW.md](MONTH_STAT_OVERVIEW.md) — the workbook analy
 | MPF last-month/max figures | Displays them | Derives them from history + seeds |
 | AIA policies + events | Forms | Yes, validates; events update policies atomically |
 | AIA totals/HKD figures | Displays them | Calculates them from the stored rate |
-| Workbook import | — | Yes |
-| Parity check | — | Yes |
 
 ## Common questions
 
@@ -105,6 +100,3 @@ No. `received_price` is stored on the dividend only — leaving 當時現價 bla
 
 No. It changes only `sort_order`.
 
-### Does the app modify the Excel workbook?
-
-No. Import and parity open it read-only.
