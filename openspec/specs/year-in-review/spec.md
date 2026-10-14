@@ -31,12 +31,17 @@ For each year row the system SHALL derive, from the same month-row data as the M
 
 ### Requirement: Investment summary figures
 
-For each year row the system SHALL derive: `interest` (利息回報) = Σ the year's derived month `interest`; `interest_avg` (平均回報) = `interest ÷ 12`; `sold_pl` (投資P/L) = the year's stored HK `sold_pl`, reported absent when none is stored; `net_investment` (投資純利) = `interest + sold_pl`, absent without `sold_pl`; `transferred` (IBKR 轉入) = Σ the year's `ibkr_transfers`, absent while none; `invested` = the HK yearly row's `invested` (Σ BUY total − Σ SELL total of the year) + `transferred` + the year's `invested_adjustment`, absent while none of the three exists; `invested_pct` = `invested ÷ (income + interest)`, absent when `income` is missing; and `irene_pool` (Irene + 開心 Pool) = Σ `pool_input`. The row SHALL carry YoY deltas for `interest_avg` and `invested`.
+For each year row the system SHALL derive: `interest` (利息回報) = Σ the year's derived month `interest`; `interest_avg` (平均回報) = `interest ÷ 12`; `sold_pl` (投資P/L) = the year's stored HK `sold_pl`, reported absent when none is stored; `net_investment` (投資純利) = `interest + sold_pl`, absent without `sold_pl`; `us_sold_pl` (美股P/L) = the year's stored US `sold_pl`, reported absent when none is stored and never feeding `net_investment`; `transferred` (IBKR 轉入) = Σ the year's `ibkr_transfers`, absent while none; `invested` = the HK yearly row's `invested` (Σ BUY total − Σ SELL total of the year) + `transferred` + the year's `invested_adjustment`, absent while none of the three exists; `invested_pct` = `invested ÷ (income + interest)`, absent when `income` is missing; and `irene_pool` (Irene + 開心 Pool) = Σ `pool_input`. The row SHALL carry YoY deltas for `interest_avg` and `invested`.
 
 #### Scenario: 投資純利 needs stored sold P/L
 
 - **WHEN** 2026 derives interest `62033.15` and the stored HK `sold_pl` is `0`
 - **THEN** the row reports `sold_pl` `0` and `net_investment` `62033.15`
+
+#### Scenario: 美股P/L stays out of 投資純利
+
+- **WHEN** 2026 derives interest `62033.15`, the stored HK `sold_pl` is `0`, and the stored US `sold_pl` is `500`
+- **THEN** the row reports `us_sold_pl` `500` and `net_investment` `62033.15`
 
 #### Scenario: invested adds 轉入 and the manual adjustment
 
@@ -69,18 +74,29 @@ Each year row SHALL carry `raise` (月薪增幅 — the monthly salary increment
 
 ### Requirement: Per-asset-class returns
 
-Each year row SHALL carry a per-asset-class block with `bonds`, `stocks`, and `deposits` entries plus blended rates, income, and savings figures:
+Each year row SHALL carry a per-asset-class block with `bonds`, `stocks` (港股), `us_stocks` (美股), and `deposits` entries plus blended rates, income, and savings figures:
 
 - `bonds`: `principal` = Σ principal of bonds held in the year — a bond counts when `min(first coupon pay year, maturity year) ≤ year ≤ maturity year` — and `interest` = Σ `received_amount` of coupons with `pay_date` in the year; a seeded override replaces either value when present. `rate` = `interest ÷ principal`.
 - `stocks` (labeled 港股 — HK only, matching the sheet; US figures enter through `transferred`/`invested_adjustment`): `cost` = the year's 年末總成本 (snapshot or live cumulative Σ BUY), `dividends` = Σ `received_amount` of HK dividends with `pay_date` in the year, `rate` = `dividends ÷ cost`, `now_value` = the year's 總市值 (snapshot or live), `value_rate` = `dividends ÷ now_value`.
+- `us_stocks` (labeled 美股 — USD figures, not HKD-converted): `cost`, `dividends`, `rate`, `now_value`, `value_rate` derived exactly as `stocks` but from US trades, dividends, and snapshots.
 - `deposits`: `principal`/`interest` = Σ over 定期 rows whose `end_date` falls in the year and is not after today (the sheet's `End` filter); a seeded override replaces either value when present.
-- Blended `rates`: `income_cost_rate` = `(債券 interest + 港股 dividends) ÷ (債券 principal + 港股 cost)`; `total_value_rate` = `(債券 + 港股 + 定期 interest) ÷ (債券 principal + 港股 now_value)`; `income_value_rate` = `(債券 interest + 港股 dividends) ÷ (債券 principal + 港股 now_value)` — each absent when its denominator is missing or zero.
+- Blended `rates`: `income_cost_rate` = `(債券 interest + 港股 dividends + 美股 dividends × usd_hkd_rate) ÷ (債券 principal + 港股 cost + 美股 cost × usd_hkd_rate)`; `total_value_rate` = `(債券 + 港股 + 定期 interest + 美股 dividends × usd_hkd_rate) ÷ (債券 principal + 港股 now_value + 美股 now_value × usd_hkd_rate)`; `income_value_rate` = `(債券 interest + 港股 dividends + 美股 dividends × usd_hkd_rate) ÷ (債券 principal + 港股 now_value + 美股 now_value × usd_hkd_rate)` — each absent when its denominator is missing or zero. The stored `aia.usd_hkd_rate` applies to every year; a blend is also absent when the year carries any `us_stocks` figure while no rate is set.
 - `income` (收入) = the stored manual figure, `income_avg` = `income ÷ 12`, and its YoY delta; `saved` (存) = `income − spend`, `saved_avg` = `saved ÷ 12`, `saved_pct` = `saved ÷ income` — each absent while `income` is missing or zero.
 
 #### Scenario: Asset rows derive for the live year
 
 - **WHEN** in 2026 the HK stocks' year-end snapshot is absent so live cost is `996600.21`, received HK dividends total `49330.19`, live 總市值 is `1323946`, received bond coupons total `1000` over the one held bond `50000`, and deposits ending by today hold principal `573266.77` and interest `6199.51`
 - **THEN** the 2026 row reports stocks `cost` `996600.21`, `dividends` `49330.19`, `now_value` `1323946`; bonds `principal` `50000`, `interest` `1000`; deposits `principal` `573266.77`, `interest` `6199.51`
+
+#### Scenario: US figures blend at the stored rate
+
+- **WHEN** in 2026 the US yearly row reports `dividends` `200` USD and `now_value` `5000` USD, the stored `aia.usd_hkd_rate` is `7.8`, the HK figures are `dividends` `49330.19` and `now_value` `1323946`, and no bonds or deposits contribute
+- **THEN** `income_value_rate` = `(49330.19 + 200 × 7.8) ÷ (1323946 + 5000 × 7.8)` ≈ `0.03734`
+
+#### Scenario: Blends absent without an FX rate
+
+- **WHEN** a year carries any US `cost`, `dividends`, or `now_value` figure and `aia.usd_hkd_rate` is unset
+- **THEN** `income_cost_rate`, `total_value_rate`, and `income_value_rate` are absent
 
 #### Scenario: Seeded override wins
 
@@ -113,7 +129,7 @@ The system SHALL persist one record per year carrying `income` (收入, manual),
 
 ### Requirement: Year review page
 
-The frontend SHALL show a 總覽 → 年結 view listing one block per year reproducing the sheet's three groups — ledger aggregates, investment summary, and per-asset-class returns (the asset rows labeled 債券/港股/定期, 港股 figures being HK-only) — with their YoY columns, the derived `IBKR 轉入` figure, the effective `raise` per year, inline editing for `income`, `invested_adjustment`, `raise`, `sold_pl`, and the four overrides (clearing restores derived figures), and a reload after every mutation.
+The frontend SHALL show a 總覽 → 年結 view listing one block per year reproducing the sheet's three groups — ledger aggregates, investment summary, and per-asset-class returns (the asset rows labeled 債券/港股/美股/定期, 港股 figures being HK-only and 美股 figures USD) — with their YoY columns, the derived `IBKR 轉入` figure, the effective `raise` per year, inline editing for `income`, `invested_adjustment`, `raise`, `sold_pl`, and the four overrides (clearing restores derived figures), and a reload after every mutation.
 
 #### Scenario: Edit a manual figure
 
