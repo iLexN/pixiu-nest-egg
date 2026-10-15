@@ -16,6 +16,8 @@ DepositForm
 
 The form accepts rate as a percent; the API stores the fraction. `bank` is free text with 渣打 (SC) / 恒生 (HS) presets.
 
+A blank rate is derived on read as 利息 ÷ 本金 × 365 ÷ (end_date − start_date) calendar days, only when principal > 0, interest and start_date are present, and end_date is after start_date. The API flags such a rate `rate_derived: true`; it is never stored, so a PATCH that leaves the rate field absent keeps the column NULL rather than freezing the derived value. An entered rate always wins (`rate_derived: false`).
+
 ## Edit or delete a deposit
 
 ```text

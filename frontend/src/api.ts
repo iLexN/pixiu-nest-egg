@@ -296,6 +296,7 @@ export interface Deposit {
   bank: string | null
   principal: number | null
   rate: number | null
+  rate_derived: boolean
   interest: number | null
   start_date: string | null
   end_date: string

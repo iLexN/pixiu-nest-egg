@@ -120,6 +120,27 @@ pub struct DepositFacts<'a> {
     pub received: bool,
 }
 
+/// The annual rate a bank-quoted deposit implies: `interest ÷ principal ×
+/// 365 ÷ (end_date − start_date)` in actual days. Derived on read for rows
+/// with no entered rate; `None` unless the principal is positive, the
+/// interest is present (0 gives 0.0), both dates parse, and end > start.
+pub fn derive_rate(
+    principal: Option<f64>,
+    interest: Option<f64>,
+    start_date: Option<&str>,
+    end_date: &str,
+) -> Option<f64> {
+    let principal = principal.filter(|principal| principal.is_finite() && *principal > 0.0)?;
+    let interest = interest.filter(|interest| interest.is_finite())?;
+    let start = chrono::NaiveDate::parse_from_str(start_date?, "%Y-%m-%d").ok()?;
+    let end = chrono::NaiveDate::parse_from_str(end_date, "%Y-%m-%d").ok()?;
+    let days = (end - start).num_days();
+    if days <= 0 {
+        return None;
+    }
+    Some(interest / principal * 365.0 / days as f64)
+}
+
 /// The sheet's total column: `利息 + input`, blanks counting as 0.
 pub fn deposit_total(principal: Option<f64>, interest: Option<f64>) -> f64 {
     principal.unwrap_or(0.0) + interest.unwrap_or(0.0)
@@ -539,6 +560,79 @@ mod tests {
         assert!(approx_eq(y2027.months[0].interest, 807.0));
         assert!(approx_eq(y2027.months[0].payout, 80000.0));
         assert!(approx_eq(y2027.months[0].total, 80807.0));
+    }
+
+    // --- derived rate ---
+
+    #[test]
+    fn derive_rate_matches_bank_quoted_rows() {
+        let rate = derive_rate(
+            Some(140000.0),
+            Some(1279.0),
+            Some("2026-10-13"),
+            "2027-02-02",
+        )
+        .expect("derivable");
+        assert!(approx_eq(rate, 1279.0 / 140000.0 * 365.0 / 112.0));
+
+        let rate = derive_rate(Some(55000.0), Some(435.0), Some("2026-09-30"), "2027-01-05")
+            .expect("derivable");
+        assert!(approx_eq(rate, 435.0 / 55000.0 * 365.0 / 97.0));
+    }
+
+    #[test]
+    fn derive_rate_returns_none_without_enough_inputs() {
+        assert_eq!(
+            derive_rate(Some(140000.0), Some(1279.0), None, "2027-02-02"),
+            None
+        );
+        assert_eq!(
+            derive_rate(Some(0.0), Some(1279.0), Some("2026-10-13"), "2027-02-02"),
+            None
+        );
+        assert_eq!(
+            derive_rate(None, Some(1279.0), Some("2026-10-13"), "2027-02-02"),
+            None
+        );
+        assert_eq!(
+            derive_rate(Some(140000.0), None, Some("2026-10-13"), "2027-02-02"),
+            None
+        );
+        assert_eq!(
+            derive_rate(
+                Some(140000.0),
+                Some(1279.0),
+                Some("2027-02-02"),
+                "2027-02-02"
+            ),
+            None
+        );
+        assert_eq!(
+            derive_rate(
+                Some(140000.0),
+                Some(1279.0),
+                Some("2027-02-03"),
+                "2027-02-02"
+            ),
+            None
+        );
+        assert_eq!(
+            derive_rate(
+                Some(140000.0),
+                Some(1279.0),
+                Some("13/10/2026"),
+                "2027-02-02"
+            ),
+            None
+        );
+    }
+
+    #[test]
+    fn derive_rate_allows_zero_interest() {
+        assert_eq!(
+            derive_rate(Some(140000.0), Some(0.0), Some("2026-10-13"), "2027-02-02"),
+            Some(0.0)
+        );
     }
 
     // --- 3.6 validation ---

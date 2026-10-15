@@ -52,7 +52,9 @@ function overdue(deposit: Deposit): boolean {
         <td>{{ deposit.label ?? '' }}</td>
         <td>{{ fmtBank(deposit.bank) }}</td>
         <td class="num">{{ fmtMoney(deposit.principal) }}</td>
-        <td class="num">{{ fmtPercent(deposit.rate) }}</td>
+        <td class="num" :title="deposit.rate_derived ? '由利息及日期計算' : undefined">
+          {{ fmtPercent(deposit.rate) }}
+        </td>
         <td class="num">{{ fmtMoney(deposit.interest) }}</td>
         <td class="num">{{ fmtMoney(deposit.total) }}</td>
         <td v-if="props.showStatus">

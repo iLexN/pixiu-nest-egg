@@ -53,8 +53,9 @@ watch(
       label: deposit.label ?? '',
       bank: deposit.bank ?? '',
       principal: deposit.principal === null ? '' : String(deposit.principal),
-      // Stored as a fraction; edited as a percent.
-      rate: deposit.rate === null ? '' : String(deposit.rate * 100),
+      // Stored as a fraction; edited as a percent. A derived rate stays
+      // blank so saving never stores it — it shows as the placeholder.
+      rate: deposit.rate === null || deposit.rate_derived ? '' : String(deposit.rate * 100),
       interest: deposit.interest === null ? '' : String(deposit.interest),
       start_date: deposit.start_date ?? '',
       end_date: deposit.end_date,
@@ -94,6 +95,12 @@ function num(value: string | number | null): number | null {
   const parsed = Number(text)
   return Number.isFinite(parsed) ? parsed : null
 }
+
+const ratePlaceholder = computed(() =>
+  props.editing?.rate_derived && props.editing.rate !== null
+    ? `${(props.editing.rate * 100).toFixed(3)}（計算）`
+    : '2.8',
+)
 
 const preview = computed(() => {
   const principal = num(form.principal)
@@ -175,7 +182,13 @@ async function submit() {
 
       <label>
         rate（%）
-        <input v-model="form.rate" type="number" step="any" inputmode="decimal" placeholder="2.8" />
+        <input
+          v-model="form.rate"
+          type="number"
+          step="any"
+          inputmode="decimal"
+          :placeholder="ratePlaceholder"
+        />
         <small v-if="error?.fieldMessage('rate')" class="error">{{
           error.fieldMessage('rate')
         }}</small>

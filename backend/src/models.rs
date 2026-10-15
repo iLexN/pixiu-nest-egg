@@ -248,8 +248,8 @@ pub enum DepositStatus {
     End,
 }
 
-/// A 定期 deposit record. `total`, `status`, `end_year` and `end_month` are
-/// derived on read, never stored.
+/// A 定期 deposit record. `rate` (when not stored), `total`, `status`,
+/// `end_year` and `end_month` are derived on read, never stored.
 #[derive(Debug, Clone, Serialize, ToSchema)]
 pub struct Deposit {
     pub id: i64,
@@ -259,8 +259,13 @@ pub struct Deposit {
     pub bank: Option<String>,
     /// The sheet's `input` column.
     pub principal: Option<f64>,
-    /// Annual rate as a fraction (0.03 = 3%).
+    /// Annual rate as a fraction (0.03 = 3%): the stored rate when entered,
+    /// else the rate derived on read from interest, principal and the
+    /// start→end days.
     pub rate: Option<f64>,
+    /// True when `rate` was derived on read (no stored rate) from interest,
+    /// principal and the start→end days.
+    pub rate_derived: bool,
     /// 利息.
     pub interest: Option<f64>,
     /// When the principal left the bank account; NULL when unknown.

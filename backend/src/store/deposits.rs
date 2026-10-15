@@ -4,7 +4,7 @@ use sqlx::SqlitePool;
 use sqlx::sqlite::SqliteRow;
 
 use crate::calc::ValidatedDeposit;
-use crate::calc::{DepositFacts, SuggestionDeposit, deposit_total};
+use crate::calc::{DepositFacts, SuggestionDeposit, deposit_total, derive_rate};
 use crate::models::{Deposit, DepositStatus, NewDeposit};
 use crate::store::{StoreError, now_timestamp, today};
 
@@ -18,14 +18,23 @@ pub fn row_to_deposit(row: &SqliteRow, _today: chrono::NaiveDate) -> Result<Depo
     let principal: Option<f64> = row.try_get("principal")?;
     let interest: Option<f64> = row.try_get("interest")?;
     let received_at: Option<String> = row.try_get("received_at")?;
+    let stored_rate: Option<f64> = row.try_get("rate")?;
+    let start_date: Option<String> = row.try_get("start_date")?;
+    // No entered rate → derive it on read from interest, principal and the
+    // start→end days. Never stored.
+    let derived = stored_rate
+        .is_none()
+        .then(|| derive_rate(principal, interest, start_date.as_deref(), &end_date))
+        .flatten();
     Ok(Deposit {
         id: row.try_get("id")?,
         label: row.try_get("label")?,
         bank: row.try_get("bank")?,
         principal,
-        rate: row.try_get("rate")?,
+        rate: stored_rate.or(derived),
+        rate_derived: derived.is_some(),
         interest,
-        start_date: row.try_get("start_date")?,
+        start_date,
         end_date,
         received_at: received_at.clone(),
         note1: row.try_get("note1")?,

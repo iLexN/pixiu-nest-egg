@@ -122,7 +122,15 @@ pub async fn update(
     let note1 = merge_text(patch.note1, existing.note1);
     let note2 = merge_text(patch.note2, existing.note2);
     let principal = merge_num(patch.principal, existing.principal);
-    let rate = merge_num(patch.rate, existing.rate);
+    // A derived rate is never persisted: an absent patch keeps rate NULL.
+    let rate = merge_num(
+        patch.rate,
+        if existing.rate_derived {
+            None
+        } else {
+            existing.rate
+        },
+    );
     let interest = merge_num(patch.interest, existing.interest);
     let start_date = merge_text(patch.start_date, existing.start_date);
     let end_date = patch.end_date.unwrap_or(existing.end_date);
@@ -444,5 +452,113 @@ mod tests {
             .unwrap();
         let liquid_after = crate::calc::live_totals(&input).liquid_assets;
         assert!((liquid_before - liquid_after - 110000.0).abs() < 1e-6);
+    }
+
+    fn new_deposit(
+        principal: Option<f64>,
+        rate: Option<f64>,
+        interest: Option<f64>,
+        start_date: Option<&str>,
+        end_date: &str,
+    ) -> NewDeposit {
+        NewDeposit {
+            label: Some("SC-TEST".to_string()),
+            bank: Some("SC".to_string()),
+            principal,
+            rate,
+            interest,
+            start_date: start_date.map(str::to_string),
+            end_date: end_date.to_string(),
+            note1: None,
+            note2: None,
+        }
+    }
+
+    async fn stored_rate(pool: &SqlitePool, id: i64) -> Option<f64> {
+        sqlx::query_scalar("SELECT rate FROM deposits WHERE id = ?")
+            .bind(id)
+            .fetch_one(pool)
+            .await
+            .unwrap()
+    }
+
+    #[tokio::test]
+    async fn blank_rate_is_derived_on_read_and_never_stored() {
+        let pool = connect_memory().await.expect("memory db");
+        let state = AppState { pool: pool.clone() };
+
+        // Stored rate wins and stays unflagged.
+        let (status, created) = create(
+            State(state.clone()),
+            Json(new_deposit(
+                Some(55000.0),
+                Some(0.03),
+                Some(435.0),
+                Some("2026-09-30"),
+                "2027-01-05",
+            )),
+        )
+        .await
+        .expect("create stored-rate deposit");
+        assert_eq!(status, StatusCode::CREATED);
+        assert_eq!(created.rate, Some(0.03));
+        assert!(!created.rate_derived);
+
+        // Blank rate with enough inputs derives on read; the column stays NULL.
+        let (_, created) = create(
+            State(state.clone()),
+            Json(new_deposit(
+                Some(140000.0),
+                None,
+                Some(1279.0),
+                Some("2026-10-13"),
+                "2027-02-02",
+            )),
+        )
+        .await
+        .expect("create blank-rate deposit");
+        let id = created.id;
+        let expected = 1279.0 / 140000.0 * 365.0 / 112.0;
+        assert!((created.rate.expect("derived rate") - expected).abs() < 1e-9);
+        assert!(created.rate_derived);
+        assert_eq!(stored_rate(&pool, id).await, None);
+
+        // A PATCH that leaves rate absent does not persist the derived rate.
+        let updated = update(
+            State(state),
+            Path(id),
+            Json(DepositPatch {
+                interest: Some(Some(1300.0)),
+                ..DepositPatch::default()
+            }),
+        )
+        .await
+        .expect("patch interest")
+        .0;
+        let expected = 1300.0 / 140000.0 * 365.0 / 112.0;
+        assert!((updated.rate.expect("re-derived rate") - expected).abs() < 1e-9);
+        assert!(updated.rate_derived);
+        assert_eq!(stored_rate(&pool, id).await, None);
+    }
+
+    #[tokio::test]
+    async fn blank_rate_without_start_date_stays_null() {
+        let pool = connect_memory().await.expect("memory db");
+        let state = AppState { pool };
+
+        let (_, created) = create(
+            State(state),
+            Json(new_deposit(
+                Some(140000.0),
+                None,
+                Some(1279.0),
+                None,
+                "2027-02-02",
+            )),
+        )
+        .await
+        .expect("create no-start deposit");
+        assert_eq!(created.rate, None);
+        assert!(!created.rate_derived);
     }
 }
