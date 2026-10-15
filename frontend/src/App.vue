@@ -38,7 +38,12 @@ type Group =
   | 'aia'
   | 'family'
 
-const NAV: { id: Group; label: string; tabs: { id: Tab; label: string }[] }[] = [
+const NAV: {
+  id: Group
+  label: string
+  tabs: { id: Tab; label: string }[]
+  links?: { label: string; href: string }[]
+}[] = [
   {
     id: 'overview',
     label: '總覽',
@@ -64,6 +69,9 @@ const NAV: { id: Group; label: string; tabs: { id: Tab; label: string }[] }[] = 
     tabs: [
       { id: 'deposits', label: '總覽' },
       { id: 'depositHistory', label: '記錄' },
+    ],
+    links: [
+      { label: '高息馬拉松', href: 'https://www.sc.com/hk/zh/deposits/marathon-savings-account/' },
     ],
   },
   {
@@ -125,6 +133,16 @@ function selectGroup(g: (typeof NAV)[number]) {
         >
           {{ t.label }}
         </button>
+        <a
+          v-for="l in activeGroup.links ?? []"
+          :key="l.href"
+          :href="l.href"
+          target="_blank"
+          rel="noopener"
+          class="tab-link"
+        >
+          {{ l.label }}
+        </a>
       </nav>
     </div>
   </header>
@@ -176,7 +194,19 @@ nav button.active {
   align-items: center;
   gap: 1rem;
 }
-.tabs button {
+.tabs button,
+.tabs a.tab-link {
   background: var(--surface-alt);
+}
+.tabs a.tab-link {
+  display: inline-block;
+  padding: 0.35rem 0.75rem;
+  border: 1px solid var(--border-strong);
+  border-radius: 4px;
+  color: inherit;
+  text-decoration: none;
+}
+.tabs a.tab-link:hover {
+  border-color: var(--accent);
 }
 </style>
