@@ -208,35 +208,6 @@ pub async fn mark_received(
     Ok(())
 }
 
-/// The stored bank-in fields of a received bond: (credited_asset_id, credited_amount).
-pub async fn credited_of(
-    pool: &SqlitePool,
-    id: i64,
-) -> Result<Option<(Option<i64>, Option<f64>)>, StoreError> {
-    Ok(
-        sqlx::query_as("SELECT credited_asset_id, credited_amount FROM bonds WHERE id = ?")
-            .bind(id)
-            .fetch_optional(pool)
-            .await?,
-    )
-}
-
-pub async fn clear_receipt(
-    conn: &mut sqlx::SqliteConnection,
-    id: i64,
-    now: &str,
-) -> Result<(), StoreError> {
-    sqlx::query(
-        "UPDATE bonds SET received_at = NULL, credited_asset_id = NULL, \
-         credited_amount = NULL, updated_at = ? WHERE id = ?",
-    )
-    .bind(now)
-    .bind(id)
-    .execute(&mut *conn)
-    .await?;
-    Ok(())
-}
-
 /// Deleting a bond removes its coupons: nothing outside the bond references
 /// them. Returns the bond rows deleted, so the handler can tell "not found"
 /// apart from success.

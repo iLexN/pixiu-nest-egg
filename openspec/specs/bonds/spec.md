@@ -105,9 +105,18 @@ The frontend SHALL show a 債券 view with the active principal total, one secti
 - **WHEN** the user marks a pending coupon received
 - **THEN** the view reloads and the coupon displays as received with its variance
 
-### Requirement: Bond principal 收訖 lifecycle
+### Requirement: Bond principal 收訖 flag
 
-Each bond SHALL carry a `received_at` date (NULL while the principal return is unconfirmed) alongside the per-coupon receipt lifecycle, which stays separate. The system SHALL expose `POST /api/bonds/:id/receive` — marking the bond's principal received at a given date (defaulting to today), optionally crediting a chosen cash `manual_assets` row by an amount defaulting to the bond's `principal`, and recording the maturity month's `bond-end:<id>` `adjustment` item (skipped when already stored or the month has no row); receiving an already-received bond SHALL return 409. The system SHALL expose `POST /api/bonds/:id/unreceive` — reversing the stored cash credit, deleting the `bond-end` item, and clearing the flag; unreceiving an unreceived bond SHALL return 409. Create SHALL record `received_at = maturity_date` when the entered maturity is already past. The matured-bonds section SHALL flag an unreceived bond 本金未收 and offer the 收訖 action; a received one shows its 收訖日 and a 取消收訖 action. The active/matured split and `債券!B1` active principal remain maturity-date based.
+Each bond SHALL carry a `received_at` date (NULL while the principal return is unconfirmed), separate from the per-coupon receipt lifecycle. Create SHALL record `received_at = maturity_date` when the entered maturity is already past. The active/matured split and `債券!B1` active principal SHALL remain maturity-date based.
+
+#### Scenario: Past maturity auto-marks on create
+
+- **WHEN** a bond is created with `maturity_date` already past
+- **THEN** it is stored received with `received_at = maturity_date`
+
+### Requirement: Bond principal 收訖
+
+`POST /api/bonds/:id/receive` SHALL mark the bond's principal received at a date (default today), optionally crediting a chosen cash `manual_assets` row by an amount defaulting to `principal`, and recording the maturity month's `bond-end:<id>` `adjustment` item; re-receiving SHALL return 409. Receipt SHALL NOT be reversible. The matured-bonds section SHALL flag an unreceived bond 本金未收 and offer 收訖; a received one shows its 收訖日.
 
 #### Scenario: One-click principal return
 
@@ -119,7 +128,7 @@ Each bond SHALL carry a `received_at` date (NULL while the principal return is u
 - **WHEN** the user 收訖's a matured bond with `不存入` selected
 - **THEN** only `received_at` and the `bond-end` item are recorded — no cash row changes
 
-#### Scenario: Undo restores the pending state
+#### Scenario: bond-end item skipped when already stored or monthless
 
-- **WHEN** the user 取消收訖's a bond that had credited `HS` `100000` and created a `bond-end` item
-- **THEN** `HS` loses `100000`, the item is deleted, and the bond returns to 本金未收
+- **WHEN** the maturity month already stores the `bond-end:<id>` item or has no month row
+- **THEN** the credit and flag apply but no item is recorded

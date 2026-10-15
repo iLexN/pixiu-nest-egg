@@ -205,35 +205,6 @@ pub async fn mark_received(
     Ok(())
 }
 
-/// The stored bank-in fields of a received deposit: (credited_asset_id, credited_amount).
-pub async fn credited_of(
-    pool: &SqlitePool,
-    id: i64,
-) -> Result<Option<(Option<i64>, Option<f64>)>, StoreError> {
-    Ok(
-        sqlx::query_as("SELECT credited_asset_id, credited_amount FROM deposits WHERE id = ?")
-            .bind(id)
-            .fetch_optional(pool)
-            .await?,
-    )
-}
-
-pub async fn clear_receipt(
-    conn: &mut sqlx::SqliteConnection,
-    id: i64,
-    now: &str,
-) -> Result<(), StoreError> {
-    sqlx::query(
-        "UPDATE deposits SET received_at = NULL, credited_asset_id = NULL, \
-         credited_amount = NULL, updated_at = ? WHERE id = ?",
-    )
-    .bind(now)
-    .bind(id)
-    .execute(&mut *conn)
-    .await?;
-    Ok(())
-}
-
 pub async fn load_one(pool: &SqlitePool, id: i64) -> Result<Deposit, StoreError> {
     let row = sqlx::query(sqlx::AssertSqlSafe(format!(
         "SELECT {DEPOSIT_COLUMNS} FROM deposits WHERE id = ?"

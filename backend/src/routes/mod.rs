@@ -51,12 +51,10 @@ pub fn api_router(state: AppState) -> (Router, utoipa::openapi::OpenApi) {
         .routes(utoipa_axum::routes!(deposits::summary))
         .routes(utoipa_axum::routes!(deposits::update, deposits::remove))
         .routes(utoipa_axum::routes!(deposits::receive))
-        .routes(utoipa_axum::routes!(deposits::unreceive))
         .routes(utoipa_axum::routes!(family::list, family::create))
         .routes(utoipa_axum::routes!(family::summary))
         .routes(utoipa_axum::routes!(family::update, family::remove))
         .routes(utoipa_axum::routes!(family::receive))
-        .routes(utoipa_axum::routes!(family::unreceive))
         .routes(utoipa_axum::routes!(family::update_note))
         .routes(utoipa_axum::routes!(dividends::list, dividends::create))
         .routes(utoipa_axum::routes!(dividends::summary))
@@ -65,7 +63,6 @@ pub fn api_router(state: AppState) -> (Router, utoipa::openapi::OpenApi) {
         .routes(utoipa_axum::routes!(bonds::summary))
         .routes(utoipa_axum::routes!(bonds::update, bonds::remove))
         .routes(utoipa_axum::routes!(bonds::receive))
-        .routes(utoipa_axum::routes!(bonds::unreceive))
         .routes(utoipa_axum::routes!(
             bonds::list_coupons,
             bonds::create_coupon
@@ -226,7 +223,6 @@ mod tests {
             ("/api/bonds/{id}", "delete"),
             ("/api/bonds/{id}", "patch"),
             ("/api/bonds/{id}/receive", "post"),
-            ("/api/bonds/{id}/unreceive", "post"),
             ("/api/coupons", "get"),
             ("/api/coupons", "post"),
             ("/api/coupons/{id}", "delete"),
@@ -237,7 +233,6 @@ mod tests {
             ("/api/deposits/{id}", "delete"),
             ("/api/deposits/{id}", "patch"),
             ("/api/deposits/{id}/receive", "post"),
-            ("/api/deposits/{id}/unreceive", "post"),
             ("/api/dividends", "get"),
             ("/api/dividends", "post"),
             ("/api/dividends/summary", "get"),
@@ -249,7 +244,6 @@ mod tests {
             ("/api/family/deposits/{id}", "delete"),
             ("/api/family/deposits/{id}", "patch"),
             ("/api/family/deposits/{id}/receive", "post"),
-            ("/api/family/deposits/{id}/unreceive", "post"),
             ("/api/family/holders/{holder}/note", "put"),
             ("/api/forecast", "get"),
             ("/api/forecast-items/{id}", "delete"),

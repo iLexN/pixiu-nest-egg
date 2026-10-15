@@ -267,42 +267,6 @@ pub async fn receive(
     Ok(Json(store::load_one(&state.pool, id).await?))
 }
 
-/// Undo a 收訖: reverse the stored cash credit, drop the auto-created dep-end
-/// item, and clear the received flag so the deposit returns to 未到期定期.
-#[utoipa::path(
-    post,
-    path = "/api/deposits/{id}/unreceive",
-    tag = "deposits",
-    params(("id" = i64, Path, description = "Deposit id")),
-    responses(
-        (status = 200, description = "收訖 cleared and bank-in reversed", body = Deposit),
-        (status = 404, description = "Deposit not found", body = ErrorBody),
-        (status = 409, description = "Deposit is not received", body = ErrorBody),
-    )
-)]
-pub async fn unreceive(
-    State(state): State<AppState>,
-    Path(id): Path<i64>,
-) -> Result<Json<Deposit>, ApiError> {
-    let existing = store::load_one(&state.pool, id).await?;
-    if existing.received_at.is_none() {
-        return Err(ApiError::Conflict(format!("deposit {id} is not received")));
-    }
-    let credited = store::credited_of(&state.pool, id).await?;
-
-    let month = format!("{}-01", &existing.end_date[..7]);
-    let now = now_timestamp();
-    let mut tx = state.pool.begin().await?;
-    if let Some((Some(asset_id), Some(amount))) = credited {
-        months_store::add_manual_asset_amount(&mut tx, -amount, &now, asset_id).await?;
-    }
-    months_store::delete_auto_item(&mut tx, &month, &format!("dep-end:{id}")).await?;
-    store::clear_receipt(&mut tx, id, &now).await?;
-    tx.commit().await?;
-
-    Ok(Json(store::load_one(&state.pool, id).await?))
-}
-
 #[derive(Debug, Serialize, utoipa::ToSchema)]
 pub struct DepositSummaryResponse {
     /// The date `status` was derived against.

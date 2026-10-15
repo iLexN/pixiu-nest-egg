@@ -142,9 +142,18 @@ Every `end_date` and `start_date` entry field in the deposit UI — the 新增�
 - **WHEN** the user types `12/10/2026` into the end date field and submits
 - **THEN** the input is flagged or rejected before or at submission and no deposit is stored with a misread date
 
-### Requirement: Deposit 收訖 lifecycle
+### Requirement: Deposit 收訖 flag
 
-Each deposit SHALL carry a `received_at` date (NULL while unreceived). The system SHALL expose `POST /api/deposits/:id/receive` — marking the deposit received at a given date (defaulting to today), optionally correcting the stored `interest` to the amount actually received, optionally crediting a chosen cash `manual_assets` row by exactly `principal + interest` (the corrected interest when given; the amount is not user-supplied), and recording the month's `dep-end:<id>` `adjustment` item for the same amount (skipped when already stored, when the month has no row, or after re-entry); receiving an already-received deposit SHALL return 409. The system SHALL expose `POST /api/deposits/:id/unreceive` — reversing the stored cash credit, deleting the `dep-end` item, and clearing the flag; unreceiving an unreceived deposit SHALL return 409. Create SHALL record `received_at = end_date` when the entered `end_date` is already past.
+Each deposit SHALL carry a `received_at` date (NULL while unreceived). Create SHALL record `received_at = end_date` when the entered `end_date` is already past.
+
+#### Scenario: Past end_date auto-marks on create
+
+- **WHEN** a deposit is created with `end_date` already past
+- **THEN** it is stored received with `received_at = end_date`
+
+### Requirement: Deposit 收訖
+
+The system SHALL expose `POST /api/deposits/:id/receive` — marking the deposit received at a date (default today), optionally correcting `interest` to the amount received, optionally crediting a chosen cash `manual_assets` row by exactly `principal + interest` (not user-supplied), and recording the month's `dep-end:<id>` `adjustment` item for that amount; re-receiving SHALL return 409. Receipt SHALL NOT be reversible — no unreceive endpoint or action.
 
 #### Scenario: One-click maturity
 
@@ -161,10 +170,10 @@ Each deposit SHALL carry a `received_at` date (NULL while unreceived). The syste
 - **WHEN** the user 收訖's a deposit with `不存入` selected
 - **THEN** only `received_at` and the dep-end item are recorded — no cash row changes
 
-#### Scenario: Undo restores the pending state
+#### Scenario: dep-end item skipped when already stored or monthless
 
-- **WHEN** the user 取消收訖's a deposit that had credited `渣打` `110993` and created a `dep-end` item
-- **THEN** `渣打` loses `110993`, the item is deleted, and the deposit returns to 未到期定期
+- **WHEN** the deposit's end month already stores its `dep-end:<id>` item or has no month row
+- **THEN** the credit and flag apply but no item is recorded
 
 ### Requirement: Unreceived deposit list
 The system SHALL present the **unreceived** deposits ordered by end date — a matured-but-unreceived deposit is included and flagged 已到期未收 — each showing label, principal, rate, interest, total, end_date, and end_month, with a 收訖 action per row. A deposit leaves the list once 收訖, including one 收訖'd before its `end_date`.

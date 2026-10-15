@@ -48,8 +48,6 @@ DepositsView (定期 → 總覽)
       → INSERT the dep-end:<id> adjustment month_item for the end month
         for the same amount (skipped when already stored or the month has
         no row)
-  → 取消收訖 (history rows) → POST /api/deposits/:id/unreceive reverses
-      the credit, deletes the dep-end item, and clears received_at
 
 DepositHistoryView (定期 → 記錄)
   → GET /api/deposits/summary
@@ -91,9 +89,6 @@ FamilyDepositsView (家人 → 定期)
     corrects the interest actually paid — nothing else happens: no cash
     manual_assets credit, no month item, no suggestion, and a past
     end_date is never auto-received on create/edit
-
-取消收訖 (history rows) → POST /api/family/deposits/:id/unreceive clears
-    received_at (409 if not received)
 
 刪除 → DELETE /api/family/deposits/:id
 ```

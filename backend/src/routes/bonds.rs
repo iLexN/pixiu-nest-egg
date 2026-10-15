@@ -227,42 +227,6 @@ pub async fn receive(
     Ok(Json(store::load_bond(&state.pool, id).await?))
 }
 
-/// Undo a bond 收訖: reverse the stored cash credit, drop the bond-end item,
-/// and clear the received flag.
-#[utoipa::path(
-    post,
-    path = "/api/bonds/{id}/unreceive",
-    tag = "bonds",
-    params(("id" = i64, Path, description = "Bond id")),
-    responses(
-        (status = 200, description = "收訖 cleared and bank-in reversed", body = Bond),
-        (status = 404, description = "Bond not found", body = ErrorBody),
-        (status = 409, description = "Bond is not received", body = ErrorBody),
-    )
-)]
-pub async fn unreceive(
-    State(state): State<AppState>,
-    Path(id): Path<i64>,
-) -> Result<Json<Bond>, ApiError> {
-    let existing = store::load_bond(&state.pool, id).await?;
-    if existing.received_at.is_none() {
-        return Err(ApiError::Conflict(format!("bond {id} is not received")));
-    }
-    let credited = store::credited_of(&state.pool, id).await?;
-
-    let month = format!("{}-01", &existing.maturity_date[..7]);
-    let now = now_timestamp();
-    let mut tx = state.pool.begin().await?;
-    if let Some((Some(asset_id), Some(amount))) = credited {
-        months_store::add_manual_asset_amount(&mut tx, -amount, &now, asset_id).await?;
-    }
-    months_store::delete_auto_item(&mut tx, &month, &format!("bond-end:{id}")).await?;
-    store::clear_receipt(&mut tx, id, &now).await?;
-    tx.commit().await?;
-
-    Ok(Json(store::load_bond(&state.pool, id).await?))
-}
-
 /// Deleting a bond removes its coupons: nothing outside the bond references
 /// them, so delete is always permitted.
 #[utoipa::path(

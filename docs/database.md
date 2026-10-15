@@ -55,7 +55,7 @@ One row per 定期 deposit (from 定期Info's 表_定期List). Nullable columns 
 | `interest` | 利息 (expected; the 收訖 form can correct it to the amount actually received) |
 | `end_date` | `YYYY-MM-DD` text date, required |
 | `received_at` | 收訖日 (`YYYY-MM-DD`); NULL while the deposit is still on the books — it stays in 未到期定期 until 收訖 and its interest counts in Month Stat 利息 only once received |
-| `credited_asset_id`, `credited_amount` | The cash `manual_assets` row and amount the 收訖 action credited (optional); stored so 取消收訖 reverses exactly |
+| `credited_asset_id`, `credited_amount` | The cash `manual_assets` row and amount the 收訖 action credited (optional); records where the bank-in went |
 | `note1`, `note2` | Optional notes |
 | `sort_order` | Display order; new entries append |
 | `created_at`, `updated_at` | Audit timestamps |
@@ -182,7 +182,7 @@ One row per 債券 (from the `債券` sheet's registry table). The sheet only ev
 | `principal` | Face value, e.g. 50000 |
 | `maturity_date` | `YYYY-MM-DD` text date (the sheet's `end` column) |
 | `received_at` | 本金收訖日 (`YYYY-MM-DD`); NULL while the matured bond's principal return is unconfirmed |
-| `credited_asset_id`, `credited_amount` | The cash `manual_assets` row and amount the 收訖 action credited (optional); stored so 取消收訖 reverses exactly |
+| `credited_asset_id`, `credited_amount` | The cash `manual_assets` row and amount the 收訖 action credited (optional); records where the bank-in went |
 | `note` | Optional free-text note |
 | `sort_order` | Display order; new entries append |
 | `created_at`, `updated_at` | Audit timestamps |

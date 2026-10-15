@@ -196,15 +196,6 @@ pub async fn mark_received(
     Ok(())
 }
 
-pub async fn clear_receipt(pool: &SqlitePool, id: i64) -> Result<(), StoreError> {
-    sqlx::query("UPDATE family_deposits SET received_at = NULL, updated_at = ? WHERE id = ?")
-        .bind(now_timestamp())
-        .bind(id)
-        .execute(pool)
-        .await?;
-    Ok(())
-}
-
 pub async fn load_one(pool: &SqlitePool, id: i64) -> Result<FamilyDeposit, StoreError> {
     let row = sqlx::query(sqlx::AssertSqlSafe(format!(
         "SELECT {FAMILY_DEPOSIT_COLUMNS} FROM family_deposits WHERE id = ?"

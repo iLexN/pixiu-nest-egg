@@ -1381,9 +1381,6 @@ export const api = {
   receiveDeposit(id: number, body: ReceiveDepositBody = {}): Promise<Deposit> {
     return request(`/deposits/${id}/receive`, { method: 'POST', body: JSON.stringify(body) })
   },
-  unreceiveDeposit(id: number): Promise<Deposit> {
-    return request(`/deposits/${id}/unreceive`, { method: 'POST' })
-  },
   depositSummary(): Promise<DepositSummary> {
     return request('/deposits/summary')
   },
@@ -1409,9 +1406,6 @@ export const api = {
       method: 'POST',
       body: JSON.stringify(body),
     })
-  },
-  unreceiveFamilyDeposit(id: number): Promise<FamilyDeposit> {
-    return request(`/family/deposits/${id}/unreceive`, { method: 'POST' })
   },
   familyDepositSummary(): Promise<FamilyDepositSummary> {
     return request('/family/deposits/summary')
@@ -1457,9 +1451,6 @@ export const api = {
    * to a cash manual asset, and record the maturity month's bond-end item. */
   receiveBond(id: number, body: ReceiveBondBody = {}): Promise<Bond> {
     return request(`/bonds/${id}/receive`, { method: 'POST', body: JSON.stringify(body) })
-  },
-  unreceiveBond(id: number): Promise<Bond> {
-    return request(`/bonds/${id}/unreceive`, { method: 'POST' })
   },
   bondSummary(): Promise<BondSummary> {
     return request('/bonds/summary')

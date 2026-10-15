@@ -242,33 +242,6 @@ pub async fn receive(
     Ok(Json(store::load_one(&state.pool, id).await?))
 }
 
-/// 取消收訖: clear the received flag so the deposit returns to 未到期.
-#[utoipa::path(
-    post,
-    path = "/api/family/deposits/{id}/unreceive",
-    tag = "family",
-    params(("id" = i64, Path, description = "Family deposit id")),
-    responses(
-        (status = 200, description = "收訖 cleared", body = FamilyDeposit),
-        (status = 404, description = "Family deposit not found", body = ErrorBody),
-        (status = 409, description = "Family deposit is not received", body = ErrorBody),
-    )
-)]
-pub async fn unreceive(
-    State(state): State<AppState>,
-    Path(id): Path<i64>,
-) -> Result<Json<FamilyDeposit>, ApiError> {
-    let existing = store::load_one(&state.pool, id).await?;
-    if existing.received_at.is_none() {
-        return Err(ApiError::Conflict(format!(
-            "family deposit {id} is not received"
-        )));
-    }
-    store::clear_receipt(&state.pool, id).await?;
-
-    Ok(Json(store::load_one(&state.pool, id).await?))
-}
-
 #[derive(Debug, Serialize, utoipa::ToSchema)]
 pub struct HolderNoteResponse {
     pub holder: String,

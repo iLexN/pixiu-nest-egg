@@ -795,7 +795,7 @@ async fn deposit_receive_credits_cash_and_records_the_month_item() {
         .expect("dep-end item");
     approx(&dep_end["amount"], 110993.0);
 
-    // Re-receiving conflicts; unreceive reverses everything.
+    // Re-receiving conflicts.
     let (status, _) = send(
         &app,
         "POST",
@@ -804,21 +804,6 @@ async fn deposit_receive_credits_cash_and_records_the_month_item() {
     )
     .await;
     assert_eq!(status, StatusCode::CONFLICT);
-    let (status, body) = send(&app, "POST", &format!("/api/deposits/{id}/unreceive"), None).await;
-    assert_eq!(status, StatusCode::OK, "body = {body}");
-    assert_eq!(body["status"], "ACTIVE");
-
-    let (_, assets) = send(&app, "GET", "/api/manual-assets", None).await;
-    approx(&assets[0]["amount"], 1000.0);
-    let (_, detail) = send(&app, "GET", "/api/months/2099-10", None).await;
-    approx(&detail["month"]["interest"], 0.0);
-    assert!(
-        detail["items"]
-            .as_array()
-            .expect("items")
-            .iter()
-            .all(|item| item["auto_key"] != dep_end_key)
-    );
 }
 
 #[tokio::test]
@@ -877,21 +862,6 @@ async fn bond_receive_credits_principal_and_records_the_month_item() {
         .find(|item| item["auto_key"] == bond_end_key)
         .expect("bond-end item");
     approx(&item["amount"], 100000.0);
-
-    // 取消收訖 reverses everything.
-    let (status, body) = send(&app, "POST", &format!("/api/bonds/{id}/unreceive"), None).await;
-    assert_eq!(status, StatusCode::OK, "body = {body}");
-    assert!(body["received_at"].is_null());
-    let (_, assets) = send(&app, "GET", "/api/manual-assets", None).await;
-    approx(&assets[0]["amount"], 500.0);
-    let (_, detail) = send(&app, "GET", "/api/months/2099-12", None).await;
-    assert!(
-        detail["items"]
-            .as_array()
-            .expect("items")
-            .iter()
-            .all(|item| item["auto_key"] != bond_end_key)
-    );
 }
 
 // --- 4.7 dividends (派息) ---
@@ -1851,27 +1821,6 @@ async fn family_deposit_receive_lifecycle_touches_no_ledger() {
         "POST",
         &format!("/api/family/deposits/{id}/receive"),
         Some(json!({})),
-    )
-    .await;
-    assert_eq!(status, StatusCode::CONFLICT);
-
-    // A malformed 收訖日 is a validation error.
-    let (status, body) = send(
-        &app,
-        "POST",
-        &format!("/api/family/deposits/{id}/unreceive"),
-        None,
-    )
-    .await;
-    assert_eq!(status, StatusCode::OK, "body = {body}");
-    assert_eq!(body["status"], "ACTIVE");
-    assert!(body["received_at"].is_null());
-
-    let (status, _) = send(
-        &app,
-        "POST",
-        &format!("/api/family/deposits/{id}/unreceive"),
-        None,
     )
     .await;
     assert_eq!(status, StatusCode::CONFLICT);

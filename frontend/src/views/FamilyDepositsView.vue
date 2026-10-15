@@ -203,7 +203,7 @@ async function remove(deposit: FamilyDeposit) {
   }
 }
 
-// ----- 收訖 / 取消收訖 (record only — no bank-in, no month item) -----
+// ----- 收訖 (record only — no bank-in, no month item) -----
 
 const receiving = ref<{
   deposit: FamilyDeposit
@@ -235,18 +235,6 @@ async function saveReceive() {
     receiving.value = null
     message.value = '已記錄收訖'
     error.value = ''
-    await load()
-  } catch (err) {
-    error.value = err instanceof ApiError ? err.message : String(err)
-  }
-}
-
-async function unreceive(deposit: FamilyDeposit) {
-  const name = deposit.label ?? `#${deposit.id}`
-  if (!window.confirm(`取消收訖 ${name}？`)) return
-  try {
-    await api.unreceiveFamilyDeposit(deposit.id)
-    message.value = `已取消收訖 ${name}`
     await load()
   } catch (err) {
     error.value = err instanceof ApiError ? err.message : String(err)
@@ -490,14 +478,6 @@ onMounted(load)
             <td class="num">{{ fmtMoney(deposit.total) }}</td>
             <td>{{ deposit.received_at ? `收訖 ${deposit.received_at}` : '未收' }}</td>
             <td class="row-actions">
-              <button
-                v-if="deposit.received_at"
-                type="button"
-                class="link"
-                @click="unreceive(deposit)"
-              >
-                取消收訖
-              </button>
               <RowActions @edit="startEdit(deposit)" @remove="remove(deposit)" />
             </td>
           </tr>

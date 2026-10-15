@@ -63,9 +63,9 @@ The system SHALL compute, on read and never store: `total = COALESCE(principal, 
 - **WHEN** a family deposit has `received_at` set
 - **THEN** its status is `End` and it leaves the upcoming list
 
-### Requirement: Family deposit 收訖 lifecycle
+### Requirement: Family deposit 收訖
 
-Each family deposit SHALL carry a `received_at` date (NULL while unreceived). The system SHALL expose a receive action that marks the deposit received at a given date (defaulting to today) and optionally corrects the stored `interest` to the amount actually paid; receiving an already-received deposit SHALL return 409. The system SHALL expose an unreceive action that clears the flag; unreceiving an unreceived deposit SHALL return 409. Neither action SHALL credit any `manual_assets` row, create or delete any Month Stat item, or produce a Month Stat suggestion. Create and edit SHALL NOT auto-mark past end dates as received — the user confirms receipt explicitly.
+Each family deposit SHALL carry a `received_at` date (NULL while unreceived). A receive action SHALL mark it received at a date (default today) and may correct `interest` to the amount paid; re-receiving SHALL return 409. Receipt SHALL NOT be reversible, and SHALL NOT credit any `manual_assets` row, create or delete a Month Stat item, or produce a suggestion. Create and edit SHALL NOT auto-mark past end dates received.
 
 #### Scenario: Confirm receipt with corrected interest
 
@@ -76,11 +76,6 @@ Each family deposit SHALL carry a `received_at` date (NULL while unreceived). Th
 
 - **WHEN** the user 收訖's a family deposit that is already received
 - **THEN** the system responds 409 and nothing changes
-
-#### Scenario: Undo receipt
-
-- **WHEN** the user 取消收訖's a received family deposit
-- **THEN** `received_at` is cleared and the deposit returns to the holder's upcoming list
 
 ### Requirement: Per-holder note
 

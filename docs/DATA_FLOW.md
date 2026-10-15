@@ -36,7 +36,7 @@ When adding an endpoint, annotate the handler with `#[utoipa::path]` and registe
 |---|---|
 | [database.md](database.md) | Every SQLite table's columns and meaning, plus the list of figures derived on read and never stored |
 | [stocks.md](stocks.md) | 股票: stock registry, 現價 (single + bulk JSON), trade CRUD, 持倉總覽 load and totals math, reorder/hide/filter, 派息 lifecycle, yearly table + freeze |
-| [deposits.md](deposits.md) | 定期: deposit CRUD, 收訖/取消收訖 with optional bank-in, summary/rollups; 家人 → 定期 (isolated record-only deposits + holder notes) |
+| [deposits.md](deposits.md) | 定期: deposit CRUD, 收訖 with optional bank-in, summary/rollups; 家人 → 定期 (isolated record-only deposits + holder notes) |
 | [investments.md](investments.md) | MPF accounts + history + last-month/max derivation, 債券 + coupons (待定 → pending → received, principal 收訖), AIA policies + events + USD rate |
 | [overview.md](overview.md) | 總覽: asset table, 半流動資金, B1/H1/J1, averages + 投資目標 + 目標 + Money Master cards, 預測 forecast grid (items, convert to deposit, bill setting), IBKR block, Month Stat 月結 (items/suggestions/recapture + settings incl. money_master.*, goal amounts/constants), 年結 + year-end actions |
 

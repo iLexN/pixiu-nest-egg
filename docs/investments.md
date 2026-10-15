@@ -49,8 +49,6 @@ BondsView (債券 → 總覽)
       → UPDATE manual_assets amount += credited (cash rows only)
       → INSERT the bond-end:<id> adjustment month_item for the maturity
         month (skipped when already stored or the month has no row)
-  → 取消收訖 → POST /api/bonds/:id/unreceive reverses the credit, deletes
-      the bond-end item, and clears received_at
 ```
 
 Coupon receipt is per-coupon (each 付息日's `received_amount`); bond 收訖 covers only the principal return. The Active/已到期 split stays maturity-date based — an unreceived matured bond sits in 已到期 flagged 本金未收 until confirmed.

@@ -312,17 +312,6 @@ async function saveBondReceive() {
   }
 }
 
-async function unreceiveBond(bond: Bond) {
-  if (!window.confirm(`取消收訖 ${bond.label}？已存入的活期與月結調整項目會一併還原。`)) return
-  try {
-    await api.unreceiveBond(bond.id)
-    message.value = `已取消收訖 ${bond.label}`
-    await load()
-  } catch (err) {
-    error.value = err instanceof ApiError ? err.message : String(err)
-  }
-}
-
 onMounted(load)
 </script>
 
@@ -365,9 +354,6 @@ onMounted(load)
             @click="startBondReceive(bond)"
           >
             收訖
-          </button>
-          <button v-else type="button" class="link" @click="unreceiveBond(bond)">
-            取消收訖
           </button>
           <RowActions @edit="startBondEdit(bond)" @remove="removeBond(bond)" />
         </div>
@@ -603,9 +589,6 @@ onMounted(load)
             @click="startBondReceive(bond)"
           >
             收訖
-          </button>
-          <button v-else type="button" class="link" @click="unreceiveBond(bond)">
-            取消收訖
           </button>
           <RowActions @edit="startBondEdit(bond)" @remove="removeBond(bond)" />
         </div>

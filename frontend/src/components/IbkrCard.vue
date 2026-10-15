@@ -73,7 +73,7 @@ async function save() {
 
 <template>
   <section class="card">
-    <h3>IBKR</h3>
+    <h3>IBKR <small class="muted">A/C U20178201</small></h3>
     <form v-if="editing" class="ibkr-form" @submit.prevent="save">
       <label>
         轉入 (HKD)

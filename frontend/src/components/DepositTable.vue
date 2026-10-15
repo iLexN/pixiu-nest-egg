@@ -16,7 +16,6 @@ const emit = defineEmits<{
   edit: [Deposit]
   remove: [Deposit]
   receive: [Deposit]
-  unreceive: [Deposit]
 }>()
 
 const columns = 10 + (props.showStatus ? 1 : 0)
@@ -70,14 +69,6 @@ function overdue(deposit: Deposit): boolean {
             @click="emit('receive', deposit)"
           >
             收訖
-          </button>
-          <button
-            v-else
-            type="button"
-            class="link"
-            @click="emit('unreceive', deposit)"
-          >
-            取消收訖
           </button>
           <RowActions @edit="emit('edit', deposit)" @remove="emit('remove', deposit)" />
         </td>
