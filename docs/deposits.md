@@ -43,9 +43,11 @@ DepositsView (定期 → 總覽)
   → 收訖 on an upcoming row → POST /api/deposits/:id/receive
       → UPDATE deposits SET received_at (+ interest correction and
         credited_asset_id/credited_amount when 存入活期 is picked)
-      → UPDATE manual_assets amount += credited (cash rows only)
+      → UPDATE manual_assets amount += principal + (corrected) interest —
+        fixed, not user-entered (cash rows only)
       → INSERT the dep-end:<id> adjustment month_item for the end month
-        (skipped when already stored or the month has no row)
+        for the same amount (skipped when already stored or the month has
+        no row)
   → 取消收訖 (history rows) → POST /api/deposits/:id/unreceive reverses
       the credit, deletes the dep-end item, and clears received_at
 

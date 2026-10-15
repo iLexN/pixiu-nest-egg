@@ -330,8 +330,6 @@ export interface ReceiveDepositBody {
   interest?: number
   /** Cash `manual_assets` id to credit the returned money into. */
   credit_asset_id?: number
-  /** Amount credited; defaults to principal + interest. */
-  credit_amount?: number
 }
 
 export interface ActiveMonthBucket {

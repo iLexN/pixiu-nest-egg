@@ -54,7 +54,8 @@
       "Exec(chmod)",
       "Exec(tee)",
       "Exec(command)",
-      "Exec(read)"
+      "Exec(read)",
+      "Exec(exit)"
     ]
   }
 }

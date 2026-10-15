@@ -67,8 +67,17 @@ const receiving = ref<{
   received_at: string
   interest: string | number
   credit_asset_id: number | null
-  credit_amount: string | number
 } | null>(null)
+
+/** What the cash row will be credited: principal + 實收利息 (display only). */
+const receivePreview = computed(() => {
+  const current = receiving.value
+  if (!current) return 0
+  return (
+    (current.deposit.principal ?? 0) +
+    (numOrNull(current.interest) ?? current.deposit.interest ?? 0)
+  )
+})
 
 function startReceive(deposit: Deposit) {
   const assetLabel = deposit.bank ? (BANK_ASSET_LABELS[deposit.bank] ?? deposit.bank) : ''
@@ -78,7 +87,6 @@ function startReceive(deposit: Deposit) {
     received_at: todayIso(),
     interest: deposit.interest ?? '',
     credit_asset_id: matched?.id ?? null,
-    credit_amount: deposit.total,
   }
 }
 
@@ -90,17 +98,11 @@ async function saveReceive() {
     error.value = '實收利息必須是數字'
     return
   }
-  const creditAmount = numOrNull(current.credit_amount)
-  if (current.credit_asset_id !== null && creditAmount === null) {
-    error.value = '存入金額必須是數字'
-    return
-  }
   try {
     await api.receiveDeposit(current.deposit.id, {
       received_at: current.received_at || undefined,
       interest: interest ?? undefined,
       credit_asset_id: current.credit_asset_id ?? undefined,
-      credit_amount: creditAmount ?? undefined,
     })
     receiving.value = null
     message.value = '已記錄收訖'
@@ -173,15 +175,9 @@ onMounted(load)
             </option>
           </select>
         </label>
-        <label v-if="receiving.credit_asset_id !== null">
-          存入金額
-          <input
-            v-model="receiving.credit_amount"
-            type="number"
-            step="any"
-            inputmode="decimal"
-          />
-        </label>
+        <p v-if="receiving.credit_asset_id !== null" class="muted">
+          存入 {{ fmtMoney(receivePreview) }}（本金 + 實收利息）
+        </p>
         <div class="form-actions">
           <button type="submit">收訖</button>
           <button type="button" class="link" @click="receiving = null">取消</button>

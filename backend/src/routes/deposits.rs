@@ -179,13 +179,11 @@ pub struct ReceiveDeposit {
     pub interest: Option<f64>,
     /// Cash `manual_assets` row to credit the returned money into.
     pub credit_asset_id: Option<i64>,
-    /// Amount credited; defaults to principal + interest.
-    pub credit_amount: Option<f64>,
 }
 
-/// 收訖: mark the deposit received, optionally credit its principal + interest
-/// to a cash manual asset, and record the month's `dep-end` adjustment item —
-/// the whole sheet "定期 end step" in one action.
+/// 收訖: mark the deposit received, optionally credit its principal +
+/// (corrected) interest to a cash manual asset, and record the month's
+/// `dep-end` adjustment item — the whole sheet "定期 end step" in one action.
 #[utoipa::path(
     post,
     path = "/api/deposits/{id}/receive",
@@ -223,15 +221,9 @@ pub async fn receive(
         Some(value) => Some(value),
         None => existing.interest,
     };
-    let credit_amount = body
-        .credit_amount
-        .unwrap_or_else(|| existing.principal.unwrap_or(0.0) + interest.unwrap_or(0.0));
-    if !credit_amount.is_finite() {
-        return Err(ApiError::field(
-            "credit_amount",
-            "credit_amount must be a number",
-        ));
-    }
+    // The credit and the dep-end item are always principal + (corrected)
+    // interest — not user-entered.
+    let total = existing.principal.unwrap_or(0.0) + interest.unwrap_or(0.0);
     if let Some(asset_id) = body.credit_asset_id {
         let kind = months_store::manual_asset_kind(&state.pool, asset_id).await?;
         match kind.as_deref() {
@@ -252,7 +244,6 @@ pub async fn receive(
 
     let month = format!("{}-01", &existing.end_date[..7]);
     let auto_key = format!("dep-end:{id}");
-    let total = existing.principal.unwrap_or(0.0) + interest.unwrap_or(0.0);
     let now = now_timestamp();
     let mut tx = state.pool.begin().await?;
     store::mark_received(
@@ -261,12 +252,12 @@ pub async fn receive(
         &received_at,
         interest,
         body.credit_asset_id,
-        body.credit_asset_id.map(|_| credit_amount),
+        body.credit_asset_id.map(|_| total),
         &now,
     )
     .await?;
     if let Some(asset_id) = body.credit_asset_id {
-        months_store::add_manual_asset_amount(&mut tx, credit_amount, &now, asset_id).await?;
+        months_store::add_manual_asset_amount(&mut tx, total, &now, asset_id).await?;
     }
     // The dep-end inflow item the suggestion would have created.
     let label = existing.label.as_deref().unwrap_or("定期");
@@ -436,7 +427,6 @@ mod tests {
                 received_at: None,
                 interest: None,
                 credit_asset_id: None,
-                credit_amount: None,
             }),
         )
         .await
@@ -539,6 +529,78 @@ mod tests {
         assert!((updated.rate.expect("re-derived rate") - expected).abs() < 1e-9);
         assert!(updated.rate_derived);
         assert_eq!(stored_rate(&pool, id).await, None);
+    }
+
+    /// The corrected 實收利息 — not a user-entered amount — sets both the
+    /// cash credit and the dep-end item: principal + 1000 = 111000.
+    #[tokio::test]
+    async fn corrected_interest_flows_into_the_cash_credit() {
+        let pool = connect_memory().await.expect("memory db");
+        let state = AppState { pool: pool.clone() };
+
+        let asset_id: i64 = sqlx::query_scalar(
+            "INSERT INTO manual_assets (label, kind, liquidity, amount, sort_order, updated_at) \
+             VALUES ('渣打', 'cash', 'short', 1000, 1, '2026-01-01T00:00:00') RETURNING id",
+        )
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+        sqlx::query(
+            "INSERT INTO month_stats (month, created_at, updated_at) \
+             VALUES ('2099-10-01', '2026-01-01T00:00:00', '2026-01-01T00:00:00')",
+        )
+        .execute(&pool)
+        .await
+        .unwrap();
+
+        let (_, created) = create(
+            State(state.clone()),
+            Json(new_deposit(
+                Some(110000.0),
+                None,
+                Some(993.0),
+                None,
+                "2099-10-12",
+            )),
+        )
+        .await
+        .expect("create deposit");
+        let id = created.id;
+
+        let received = receive(
+            State(state),
+            Path(id),
+            Json(ReceiveDeposit {
+                received_at: None,
+                interest: Some(1000.0),
+                credit_asset_id: Some(asset_id),
+            }),
+        )
+        .await
+        .expect("receive")
+        .0;
+        assert_eq!(received.interest, Some(1000.0));
+
+        let amount: f64 = sqlx::query_scalar("SELECT amount FROM manual_assets WHERE id = ?")
+            .bind(asset_id)
+            .fetch_one(&pool)
+            .await
+            .unwrap();
+        assert_eq!(amount, 1000.0 + 111000.0);
+        let credited: f64 = sqlx::query_scalar("SELECT credited_amount FROM deposits WHERE id = ?")
+            .bind(id)
+            .fetch_one(&pool)
+            .await
+            .unwrap();
+        assert_eq!(credited, 111000.0);
+        let item: f64 = sqlx::query_scalar(
+            "SELECT amount FROM month_items WHERE month = '2099-10-01' AND auto_key = ?",
+        )
+        .bind(format!("dep-end:{id}"))
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+        assert_eq!(item, 111000.0);
     }
 
     #[tokio::test]
