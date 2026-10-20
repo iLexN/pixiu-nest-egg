@@ -5,7 +5,7 @@ use chrono::NaiveDate;
 use sqlx::sqlite::SqliteRow;
 use sqlx::{Row, SqlitePool};
 
-use crate::calc::{MpfAccountFacts, MpfPoint, mpf_figures, mpf_gap_month_ends};
+use crate::calc::{MpfAccountFacts, MpfPoint, mpf_figures};
 use crate::models::MpfHistoryRow;
 use crate::store::{StoreError, now_timestamp};
 
@@ -130,11 +130,11 @@ pub fn facts_of(account: &StoredAccount, history: &[MpfHistoryRow]) -> MpfAccoun
     }
 }
 
-/// Record one contributions/balance update inside an open transaction:
-/// backfill synthetic month-end rows for every fully elapsed month with no
-/// records (carrying the pre-update values), then upsert today's row so
-/// same-day corrections replace rather than append. `fallback_on` (the
-/// account's creation date) anchors the gap scan when no history exists yet.
+/// Record one contributions/balance update inside an open transaction. When
+/// the account has no history yet and `fallback_on` (its creation date)
+/// predates today, first write a synthetic baseline row dated `fallback_on`
+/// with the pre-update values so earlier as-of lookups still resolve — then
+/// upsert today's row so same-day corrections replace rather than append.
 pub async fn record_history(
     conn: &mut sqlx::SqliteConnection,
     account_id: i64,
@@ -143,23 +143,20 @@ pub async fn record_history(
     today: NaiveDate,
     fallback_on: NaiveDate,
 ) -> Result<(), StoreError> {
-    let anchor: Option<String> =
-        sqlx::query_scalar("SELECT MAX(recorded_on) FROM mpf_history WHERE account_id = ?")
+    let has_history: bool =
+        sqlx::query_scalar("SELECT EXISTS(SELECT 1 FROM mpf_history WHERE account_id = ?)")
             .bind(account_id)
             .fetch_one(&mut *conn)
             .await?;
-    let anchor_date = anchor
-        .and_then(|raw| NaiveDate::parse_from_str(&raw, "%Y-%m-%d").ok())
-        .unwrap_or(fallback_on);
 
-    for date in mpf_gap_month_ends(anchor_date, today) {
+    if !has_history && fallback_on < today {
         sqlx::query(
             "INSERT OR IGNORE INTO mpf_history \
              (account_id, recorded_on, contributions, balance, synthetic) \
              VALUES (?, ?, ?, ?, 1)",
         )
         .bind(account_id)
-        .bind(date.to_string())
+        .bind(fallback_on.to_string())
         .bind(previous.0)
         .bind(previous.1)
         .execute(&mut *conn)
@@ -350,11 +347,63 @@ mod tests {
         .await;
 
         let rows = history(&pool, id).await;
-        assert_eq!(rows, vec![("2026-09-17".to_string(), 100.0, 120.0, 0)]);
+        assert_eq!(
+            rows,
+            vec![
+                ("2026-09-01".to_string(), 0.0, 0.0, 1),
+                ("2026-09-17".to_string(), 100.0, 120.0, 0),
+            ]
+        );
     }
 
     #[tokio::test]
-    async fn gap_months_backfill_with_pre_update_values() {
+    async fn first_update_writes_a_creation_day_baseline() {
+        let pool = connect_memory().await.unwrap();
+        let id = insert_account(&pool, "2026-07-10T00:00:00+08:00").await;
+
+        record(
+            &pool,
+            id,
+            (80.0, 90.0),
+            (100.0, 150.0),
+            "2026-10-05",
+            "2026-07-10",
+        )
+        .await;
+
+        // A single synthetic baseline at the creation date — no month-end
+        // rows for the gap in between.
+        let rows = history(&pool, id).await;
+        assert_eq!(
+            rows,
+            vec![
+                ("2026-07-10".to_string(), 80.0, 90.0, 1),
+                ("2026-10-05".to_string(), 100.0, 150.0, 0),
+            ]
+        );
+    }
+
+    #[tokio::test]
+    async fn same_day_creation_writes_no_baseline() {
+        let pool = connect_memory().await.unwrap();
+        let id = insert_account(&pool, "2026-10-05T00:00:00+08:00").await;
+
+        record(
+            &pool,
+            id,
+            (80.0, 90.0),
+            (100.0, 150.0),
+            "2026-10-05",
+            "2026-10-05",
+        )
+        .await;
+
+        let rows = history(&pool, id).await;
+        assert_eq!(rows, vec![("2026-10-05".to_string(), 100.0, 150.0, 0)]);
+    }
+
+    #[tokio::test]
+    async fn later_updates_add_no_baseline_or_gap_rows() {
         let pool = connect_memory().await.unwrap();
         let id = insert_account(&pool, "2026-08-01T00:00:00+08:00").await;
 
@@ -367,6 +416,7 @@ mod tests {
             "2026-08-01",
         )
         .await;
+        // History now exists, so the multi-month gap writes only today's row.
         record(
             &pool,
             id,
@@ -381,64 +431,9 @@ mod tests {
         assert_eq!(
             rows,
             vec![
+                ("2026-08-01".to_string(), 0.0, 0.0, 1),
                 ("2026-08-28".to_string(), 100.0, 110.0, 0),
-                ("2026-09-30".to_string(), 100.0, 110.0, 1),
                 ("2026-10-05".to_string(), 100.0, 130.0, 0),
-            ]
-        );
-    }
-
-    #[tokio::test]
-    async fn adjacent_months_need_no_backfill() {
-        let pool = connect_memory().await.unwrap();
-        let id = insert_account(&pool, "2026-08-01T00:00:00+08:00").await;
-
-        record(
-            &pool,
-            id,
-            (0.0, 0.0),
-            (100.0, 110.0),
-            "2026-08-28",
-            "2026-08-01",
-        )
-        .await;
-        record(
-            &pool,
-            id,
-            (100.0, 110.0),
-            (100.0, 120.0),
-            "2026-09-05",
-            "2026-08-01",
-        )
-        .await;
-
-        let rows = history(&pool, id).await;
-        assert_eq!(rows.len(), 2);
-        assert!(rows.iter().all(|(_, _, _, synthetic)| *synthetic == 0));
-    }
-
-    #[tokio::test]
-    async fn first_update_backfills_from_creation_month() {
-        let pool = connect_memory().await.unwrap();
-        let id = insert_account(&pool, "2026-07-10T00:00:00+08:00").await;
-
-        record(
-            &pool,
-            id,
-            (0.0, 0.0),
-            (100.0, 150.0),
-            "2026-10-05",
-            "2026-07-10",
-        )
-        .await;
-
-        let rows = history(&pool, id).await;
-        assert_eq!(
-            rows,
-            vec![
-                ("2026-08-31".to_string(), 0.0, 0.0, 1),
-                ("2026-09-30".to_string(), 0.0, 0.0, 1),
-                ("2026-10-05".to_string(), 100.0, 150.0, 0),
             ]
         );
     }

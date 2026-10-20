@@ -1,6 +1,5 @@
 use super::*;
 
-use chrono::Datelike;
 use serde::Serialize;
 use utoipa::ToSchema;
 
@@ -80,33 +79,14 @@ pub fn mpf_figures(contributions: f64, balance: f64) -> MpfFigures {
     }
 }
 
-fn month_end(date: chrono::NaiveDate) -> chrono::NaiveDate {
-    first_of_month(date) + chrono::Months::new(1) - chrono::Days::new(1)
-}
-
-/// The last day of every calendar month strictly between the months holding
-/// `from` and `to` — the synthetic month-end rows a multi-month gap needs.
-pub fn mpf_gap_month_ends(
-    from: chrono::NaiveDate,
-    to: chrono::NaiveDate,
-) -> Vec<chrono::NaiveDate> {
-    let mut ends = Vec::new();
-    let mut cursor = first_of_month(from) + chrono::Months::new(1);
-    let limit = first_of_month(to);
-    while cursor < limit {
-        ends.push(month_end(cursor));
-        cursor = cursor + chrono::Months::new(1);
-    }
-    ends
-}
-
-/// Figures of the latest history row inside the previous calendar month.
+/// Figures of the latest history row dated on or before the last day of the
+/// previous calendar month — an as-of lookup, so a month with no recorded
+/// row still reports the figures that stood at its end.
 pub fn mpf_last_month(history: &[MpfPoint], today: chrono::NaiveDate) -> Option<MpfFigures> {
     let prev_end = first_of_month(today) - chrono::Days::new(1);
-    let (year, month) = (prev_end.year(), prev_end.month());
     history
         .iter()
-        .filter(|point| point.recorded_on.year() == year && point.recorded_on.month() == month)
+        .filter(|point| point.recorded_on <= prev_end)
         .max_by_key(|point| point.recorded_on)
         .map(|point| mpf_figures(point.contributions, point.balance))
 }
@@ -265,20 +245,6 @@ mod tests {
     }
 
     #[test]
-    fn mpf_gap_month_ends_cover_only_months_strictly_between() {
-        assert_eq!(
-            mpf_gap_month_ends(day("2026-08-28"), day("2026-10-05")),
-            vec![day("2026-09-30")]
-        );
-        assert!(mpf_gap_month_ends(day("2026-08-28"), day("2026-09-05")).is_empty());
-        assert!(mpf_gap_month_ends(day("2026-09-01"), day("2026-09-20")).is_empty());
-        assert_eq!(
-            mpf_gap_month_ends(day("2025-12-15"), day("2026-03-02")),
-            vec![day("2026-01-31"), day("2026-02-28")]
-        );
-    }
-
-    #[test]
     fn mpf_last_month_reads_the_latest_row_in_the_previous_month() {
         let history = [
             mpf_point("2026-08-10", 100.0, 100.0),
@@ -290,6 +256,18 @@ mod tests {
         assert!(approx_eq(last.gain, 12.0));
         // Only a September row: August has nothing to report.
         assert!(mpf_last_month(&history[2..], day("2026-09-17")).is_none());
+    }
+
+    #[test]
+    fn mpf_last_month_carries_forward_older_rows() {
+        // No row in September: the August row still stood at September's end.
+        let history = [mpf_point("2026-08-28", 100.0, 115.0)];
+        let last = mpf_last_month(&history, day("2026-10-05")).unwrap();
+        assert!(approx_eq(last.rate.unwrap(), 0.15));
+        assert!(approx_eq(last.gain, 15.0));
+        // Rows only in the current month never count.
+        let current = [mpf_point("2026-10-02", 100.0, 115.0)];
+        assert!(mpf_last_month(&current, day("2026-10-05")).is_none());
     }
 
     #[test]

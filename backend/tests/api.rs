@@ -2570,3 +2570,180 @@ async fn settings_round_trips_at_the_new_path() {
     .await;
     assert!(status.is_client_error(), "status = {status}");
 }
+
+// --- record-history-on-write ---
+
+async fn history_rows(pool: &sqlx::SqlitePool, market: &str) -> Vec<(String, f64, f64)> {
+    sqlx::query_as(
+        "SELECT recorded_on, buy_cost_priced, market_value FROM market_history \
+         WHERE market = ? ORDER BY recorded_on",
+    )
+    .bind(market)
+    .fetch_all(pool)
+    .await
+    .expect("market_history")
+}
+
+async fn history_count(pool: &sqlx::SqlitePool) -> i64 {
+    sqlx::query_scalar("SELECT COUNT(*) FROM market_history")
+        .fetch_one(pool)
+        .await
+        .expect("count")
+}
+
+async fn set_price(app: &Router, stock_id: i64, price: f64) {
+    let (status, body) = send(
+        app,
+        "PATCH",
+        &format!("/api/stocks/{stock_id}"),
+        Some(json!({ "manual_price": price })),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "body = {body}");
+}
+
+async fn buy_trade(app: &Router, stock_id: i64, shares: f64, total: f64) -> i64 {
+    let (status, body) = send(
+        app,
+        "POST",
+        "/api/trades",
+        Some(json!({
+            "stock_id": stock_id, "trade_type": "BUY", "trade_date": "2026-01-05",
+            "shares": shares, "unit_price": total / shares, "total": total
+        })),
+    )
+    .await;
+    assert_eq!(status, StatusCode::CREATED, "body = {body}");
+    body["id"].as_i64().expect("trade id")
+}
+
+#[tokio::test]
+async fn manual_price_patch_records_market_history() {
+    let (app, pool) = app_with_pool().await;
+    let stock = create_stock(&app, "HK", "中國銀行", None).await;
+    buy_trade(&app, stock, 100.0, 900.0).await;
+    assert!(history_rows(&pool, "HK").await.is_empty());
+
+    set_price(&app, stock, 10.0).await;
+
+    let rows = history_rows(&pool, "HK").await;
+    assert_eq!(rows.len(), 1);
+    approx(&rows[0].1.into(), 900.0);
+    approx(&rows[0].2.into(), 1000.0);
+}
+
+#[tokio::test]
+async fn trade_create_and_delete_record_history() {
+    let (app, pool) = app_with_pool().await;
+    let stock = create_stock(&app, "HK", "中國銀行", None).await;
+    set_price(&app, stock, 10.0).await;
+    buy_trade(&app, stock, 100.0, 900.0).await;
+    let rows = history_rows(&pool, "HK").await;
+    assert_eq!(rows.len(), 1);
+    approx(&rows[0].1.into(), 900.0);
+
+    let trade = buy_trade(&app, stock, 100.0, 800.0).await;
+    let rows = history_rows(&pool, "HK").await;
+    assert_eq!(rows.len(), 1);
+    approx(&rows[0].1.into(), 1700.0);
+    approx(&rows[0].2.into(), 2000.0);
+
+    let (status, _) = send(&app, "DELETE", &format!("/api/trades/{trade}"), None).await;
+    assert_eq!(status, StatusCode::NO_CONTENT);
+    let rows = history_rows(&pool, "HK").await;
+    // Same-day updates replace the row rather than append.
+    assert_eq!(rows.len(), 1);
+    approx(&rows[0].1.into(), 900.0);
+    approx(&rows[0].2.into(), 1000.0);
+}
+
+#[tokio::test]
+async fn moving_a_trade_across_markets_records_both() {
+    let (app, pool) = app_with_pool().await;
+    let hk = create_stock(&app, "HK", "中國銀行", None).await;
+    set_price(&app, hk, 10.0).await;
+    buy_trade(&app, hk, 100.0, 900.0).await;
+    let moving = buy_trade(&app, hk, 100.0, 800.0).await;
+
+    let us = create_stock(&app, "US", "VOO", None).await;
+    set_price(&app, us, 100.0).await;
+    let (status, body) = send(
+        &app,
+        "POST",
+        "/api/trades",
+        Some(json!({
+            "stock_id": us, "trade_type": "BUY", "trade_date": "2026-01-05",
+            "shares": 10, "unit_price": 90.0, "fee": 5.0
+        })),
+    )
+    .await;
+    assert_eq!(status, StatusCode::CREATED, "body = {body}");
+
+    let (status, body) = send(
+        &app,
+        "PATCH",
+        &format!("/api/trades/{moving}"),
+        Some(json!({ "stock_id": us })),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "body = {body}");
+
+    // HK dropped to the remaining trade; US gained the moved one.
+    let hk_rows = history_rows(&pool, "HK").await;
+    assert_eq!(hk_rows.len(), 1);
+    approx(&hk_rows[0].1.into(), 900.0);
+    approx(&hk_rows[0].2.into(), 1000.0);
+    let us_rows = history_rows(&pool, "US").await;
+    assert_eq!(us_rows.len(), 1);
+    approx(&us_rows[0].1.into(), 1705.0);
+    approx(&us_rows[0].2.into(), 11000.0);
+}
+
+#[tokio::test]
+async fn note_only_stock_patch_records_nothing() {
+    let (app, pool) = app_with_pool().await;
+    let stock = create_stock(&app, "HK", "中國銀行", None).await;
+    set_price(&app, stock, 10.0).await;
+    buy_trade(&app, stock, 100.0, 900.0).await;
+    let before = history_count(&pool).await;
+    assert!(before > 0);
+
+    let (status, body) = send(
+        &app,
+        "PATCH",
+        &format!("/api/stocks/{stock}"),
+        Some(json!({ "note": "watch" })),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "body = {body}");
+
+    assert_eq!(history_count(&pool).await, before);
+}
+
+#[tokio::test]
+async fn summary_reads_and_freeze_write_no_history() {
+    let (app, pool) = app_with_pool().await;
+    let stock = create_stock(&app, "HK", "中國銀行", None).await;
+    set_price(&app, stock, 10.0).await;
+    buy_trade(&app, stock, 100.0, 900.0).await;
+    let before = history_count(&pool).await;
+    assert!(before > 0);
+
+    let (status, _) = send(&app, "GET", "/api/summary?market=HK", None).await;
+    assert_eq!(status, StatusCode::OK);
+    let (status, _) = send(&app, "GET", "/api/summary/yearly?market=HK", None).await;
+    assert_eq!(status, StatusCode::OK);
+    let (status, _) = send(&app, "GET", "/api/year-review", None).await;
+    assert_eq!(status, StatusCode::OK);
+    let year = &wealth_backend::store::today().to_string()[..4];
+    let (status, body) = send(
+        &app,
+        "POST",
+        &format!("/api/summary/yearly/HK/{year}/freeze"),
+        None,
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "body = {body}");
+
+    assert_eq!(history_count(&pool).await, before);
+}

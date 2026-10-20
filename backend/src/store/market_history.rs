@@ -6,15 +6,14 @@
 use chrono::NaiveDate;
 use sqlx::{Row, SqlitePool};
 
-use crate::calc::{MpfPoint, mpf_gap_month_ends};
+use crate::calc::MpfPoint;
 use crate::models::Market;
 use crate::store::StoreError;
 
-/// Record the market's totals for `today`: backfill a synthetic month-end
-/// row for every fully elapsed month with no records (carrying the last
-/// stored values), then upsert today's row so same-day rebuilds replace
-/// rather than append. With no previous record there is no backfill —
-/// nothing is fabricated for months that predate any observation.
+/// Record the market's totals for `today` when they differ from the latest
+/// stored row: write one row for a new day, or replace today's row so
+/// same-day rebuilds keep only the freshest values. Unchanged totals add
+/// nothing, so writes that do not move the market leave history untouched.
 pub async fn record(
     pool: &SqlitePool,
     market: Market,
@@ -30,25 +29,12 @@ pub async fn record(
     .await?;
 
     if let Some(anchor) = anchor {
-        let recorded_on: String = anchor.try_get("recorded_on")?;
-        let anchor_date = NaiveDate::parse_from_str(&recorded_on, "%Y-%m-%d")
-            .map_err(|err| sqlx::Error::Decode(Box::new(err)))?;
         let previous: (f64, f64) = (
             anchor.try_get("buy_cost_priced")?,
             anchor.try_get("market_value")?,
         );
-        for date in mpf_gap_month_ends(anchor_date, today) {
-            sqlx::query(
-                "INSERT OR IGNORE INTO market_history \
-                 (market, recorded_on, buy_cost_priced, market_value, synthetic) \
-                 VALUES (?, ?, ?, ?, 1)",
-            )
-            .bind(market.as_str())
-            .bind(date.to_string())
-            .bind(previous.0)
-            .bind(previous.1)
-            .execute(pool)
-            .await?;
+        if previous == current {
+            return Ok(());
         }
     }
 
@@ -129,6 +115,19 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn unchanged_totals_record_nothing() {
+        let pool = connect_memory().await.unwrap();
+
+        record(&pool, (100.0, 110.0), "2026-08-28").await;
+        // Same day and a later day: nothing to add while totals stand.
+        record(&pool, (100.0, 110.0), "2026-08-28").await;
+        record(&pool, (100.0, 110.0), "2026-09-05").await;
+
+        let rows = history(&pool).await;
+        assert_eq!(rows, vec![("2026-08-28".to_string(), 100.0, 110.0, 0)]);
+    }
+
+    #[tokio::test]
     async fn same_day_rebuilds_replace_the_row() {
         let pool = connect_memory().await.unwrap();
 
@@ -140,7 +139,24 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn gap_months_backfill_with_last_stored_values() {
+    async fn changed_totals_on_a_new_day_add_one_row() {
+        let pool = connect_memory().await.unwrap();
+
+        record(&pool, (100.0, 110.0), "2026-08-28").await;
+        record(&pool, (100.0, 120.0), "2026-09-05").await;
+
+        let rows = history(&pool).await;
+        assert_eq!(
+            rows,
+            vec![
+                ("2026-08-28".to_string(), 100.0, 110.0, 0),
+                ("2026-09-05".to_string(), 100.0, 120.0, 0),
+            ]
+        );
+    }
+
+    #[tokio::test]
+    async fn gap_months_write_no_synthetic_rows() {
         let pool = connect_memory().await.unwrap();
 
         record(&pool, (100.0, 110.0), "2026-08-28").await;
@@ -151,22 +167,9 @@ mod tests {
             rows,
             vec![
                 ("2026-08-28".to_string(), 100.0, 110.0, 0),
-                ("2026-09-30".to_string(), 100.0, 110.0, 1),
                 ("2026-10-05".to_string(), 100.0, 130.0, 0),
             ]
         );
-    }
-
-    #[tokio::test]
-    async fn adjacent_months_need_no_backfill() {
-        let pool = connect_memory().await.unwrap();
-
-        record(&pool, (100.0, 110.0), "2026-08-28").await;
-        record(&pool, (100.0, 120.0), "2026-09-05").await;
-
-        let rows = history(&pool).await;
-        assert_eq!(rows.len(), 2);
-        assert!(rows.iter().all(|(_, _, _, synthetic)| *synthetic == 0));
     }
 
     #[tokio::test]

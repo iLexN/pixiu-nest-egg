@@ -144,9 +144,9 @@ One row per account per recorded day — `UNIQUE(account_id, recorded_on)`, so a
 | `account_id` | Links to `mpf_accounts.id` |
 | `recorded_on` | `YYYY-MM-DD` text date |
 | `contributions`, `balance` | The account's values on that date |
-| `synthetic` | `1` for month-end rows the backend backfilled automatically or that came from the retired workbook import; `0` for real updates |
+| `synthetic` | `1` for rows that came from the retired workbook import or the retired month-end backfill, plus the first-update baseline row described below; `0` for real updates |
 
-When a contributions/balance update arrives in a later month and whole calendar months passed with no rows, the update backfills a synthetic month-end row per empty month carrying the pre-update values — the values that actually stood during those months.
+A contributions/balance update writes one row dated that day. When the update is the account's first recorded history and the account was created on an earlier date, the update also writes a synthetic baseline row dated the account's creation date carrying the pre-update values, so as-of lookups before that day still resolve. No month-end backfill runs: months with no update simply have no rows, and 上月 reads the latest row on or before month-end.
 
 ### `app_meta`
 
@@ -163,7 +163,7 @@ Family holder notes live here too: `family.note.<holder>` holds one free-text no
 
 ### `market_history`
 
-One row per market per day a summary is computed — `UNIQUE(market, recorded_on)`, so rebuilding the same market's summary again on the same day replaces the row rather than appending.
+One row per market per day its totals changed on a successful write — `UNIQUE(market, recorded_on)`, so further writes the same day replace the row rather than appending.
 
 | Column | Meaning |
 |---|---|
@@ -171,9 +171,9 @@ One row per market per day a summary is computed — `UNIQUE(market, recorded_on
 | `market` | `HK` or `US` |
 | `recorded_on` | `YYYY-MM-DD` text date |
 | `buy_cost_priced`, `market_value` | The market totals' priced cost basis and market value on that date |
-| `synthetic` | `1` for month-end rows backfilled automatically or that came from the retired workbook import; `0` for real records |
+| `synthetic` | `1` for rows that came from the retired workbook import or the retired month-end backfill; `0` for real records |
 
-When a summary is computed and whole calendar months passed with no rows, the build backfills a synthetic month-end row per empty month carrying the last-recorded values — the values that actually stood during those months. Rows migrated from the workbook include a `YYYY-12-31` mark per market per `year_snapshots` year with both 成本 and 總市值, so 最高 has history from day one. A market with no priced stock records nothing.
+Rows are written on stock/trade create-update-delete, manual 現價 saves, and bulk price imports — never on reads: summary, yearly and year-review responses derive without touching the table. A write records nothing when the market's totals equal the latest stored row, and no month-end backfill runs: 上月 reads the latest row on or before the last day of the previous month. A market with no priced stock records nothing. Rows migrated from the workbook include a `YYYY-12-31` mark per market per `year_snapshots` year with both 成本 and 總市值, so 最高 has history from day one.
 
 ### `bonds`
 
@@ -317,7 +317,7 @@ These are calculated by the backend when needed:
 - Per-year received rollups
 - Yearly `invested`, `cost`, `dividends` and the derived yield/YoY columns
 - MPF per-account `rate` = (`balance` − `contributions`) ÷ `contributions`, and `gain` = `balance` − `contributions`
-- MPF `last month` figures (the latest `mpf_history` row in the previous calendar month)
+- MPF `last month` figures (the latest `mpf_history` row on or before the last day of the previous calendar month)
 - MPF `max` rate and `max` gain, each independently the largest of the seed, every history row, and the current values
 - The whole forecast grid: per-month `cash`/`locked`/`semi_liquid`/`ref_check`, deposit finish/interest sums, plan `deposit_return`s, and the quarter-month `bill` line
 - MPF portfolio totals/last-month/max, via the as-of merge described in [investments.md](investments.md)

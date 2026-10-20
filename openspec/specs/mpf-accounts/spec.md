@@ -58,23 +58,9 @@ Every update to an account's `contributions` or `balance` SHALL record a history
 - **WHEN** the user edits only an account's `member_no`
 - **THEN** no new history row is created
 
-### Requirement: Month-rollover backfill
-
-When an update is recorded and one or more calendar months have fully elapsed with no history rows since the account's previous record, the system SHALL insert a synthetic month-end history row for each elapsed empty month, carrying the values that were current before the update. Synthetic rows SHALL be marked so the UI can distinguish carried-forward values from real updates.
-
-#### Scenario: Gap month is backfilled
-
-- **WHEN** an account's last record is dated `2026-08-28` and the user next updates it on `2026-10-05`
-- **THEN** a synthetic history row dated in September 2026 is created carrying the August values, and `2026-10-05` gets the update's own row
-
-#### Scenario: No gap, no backfill
-
-- **WHEN** an account's last record is in the previous calendar month and the user updates it today
-- **THEN** no synthetic rows are created
-
 ### Requirement: Automatic last-month and max figures
 
-For each account the system SHALL derive, on read: the last-month rate and net gain from the latest history row in the previous calendar month (empty when no such row exists); and the all-time max rate and max net gain as the maxima over the account's seeded high-water marks, every history row, and the current values.
+For each account the system SHALL derive, on read: the last-month rate and net gain from the latest history row dated on or before the last day of the previous calendar month (empty when no such row exists); and the all-time max rate and max net gain as the maxima over the account's seeded high-water marks, every history row, and the current values.
 
 #### Scenario: Last month from history
 
@@ -90,6 +76,25 @@ For each account the system SHALL derive, on read: the last-month rate and net g
 
 - **WHEN** an account's highest-ever rate occurred in March and its highest-ever net gain occurred in August
 - **THEN** the account reports the March rate and the August gain as its max figures
+
+#### Scenario: Month without an update carries forward
+
+- **WHEN** an account's latest history row is dated `2026-08-28` with contributions 120000 and balance 150000, and it was not updated in September, viewed on `2026-10-05`
+- **THEN** the account's last-month figures show rate `0.25` and net gain `30000`
+
+### Requirement: First-update baseline row
+
+When a contributions/balance update is recorded for an account that has no history rows, the system SHALL first record a baseline history row. That row carries the account's values from before the update, is dated the account's creation day, and is marked synthetic, so the as-of record holds the values that stood until the update. The update then records its own row as usual.
+
+#### Scenario: Baseline before the first update
+
+- **WHEN** an account created on `2026-09-17` with contributions 120000 and balance 150000 and no history is updated on `2026-10-05` to balance 160000
+- **THEN** history holds a synthetic row dated `2026-09-17` carrying 120000 / 150000 and a row dated `2026-10-05` carrying the new values, and the account's last-month figures in October show rate `0.25`
+
+#### Scenario: No baseline once history exists
+
+- **WHEN** an account that already has history rows is updated
+- **THEN** only the update's own row is recorded
 
 ### Requirement: MPF max tracking rules
 

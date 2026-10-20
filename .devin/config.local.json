@@ -55,7 +55,8 @@
       "Exec(tee)",
       "Exec(command)",
       "Exec(read)",
-      "Exec(exit)"
+      "Exec(exit)",
+      "Exec(disown)"
     ]
   }
 }

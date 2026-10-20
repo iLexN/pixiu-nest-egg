@@ -10,20 +10,21 @@ MpfView edit form (via 編輯 in the account row's ⋯ menu)
   → backend merges the patch and validates (label required, amounts ≥ 0)
   → UPDATE one mpf_accounts row
   → if contributions or balance changed, inside the same transaction:
-      → backfill a synthetic month-end mpf_history row per empty elapsed
-        month, carrying the pre-update values
+      → when the account has no history yet and was created before today,
+        insert a synthetic baseline row at its creation date carrying the
+        pre-update values (no baseline when creation is today)
       → upsert today's mpf_history row
         (ON CONFLICT account_id+recorded_on → replace)
   → GET /api/mpf reloads accounts, totals, note, and history
 ```
 
-Editing only metadata (label, trustee, plan/contract/member numbers) writes **no** history row. Deleting a history row via 記錄 → 刪除 removes just that row; last-month and max figures recompute on the next read, since they are derived rather than stored.
+Editing only metadata (label, trustee, plan/contract/member numbers) writes **no** history row. Deleting a history row via 記錄 → 刪除 removes just that row; last-month and max figures recompute on the next read, since they are derived rather than stored. `synthetic` rows come from the retired workbook import, the retired month-end backfill, or the first-update baseline described above.
 
 Derived on every read:
 
 ```text
 per-account rate      = (balance − contributions) ÷ contributions   (empty when 0)
-per-account last month = latest history row in the previous month
+per-account last month = latest history row on or before last month-end
 per-account max        = MAX(seed_max_*, all history rows, current),
                           rate and gain tracked independently
 portfolio buy/now/%/gain = Σ contributions, Σ balance, derived

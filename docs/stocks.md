@@ -184,9 +184,8 @@ SummaryView
   → backend groups trades by stock_id
   → backend calculates every stock row
   → backend calculates sector rollups and market totals
-  → backend upserts today's market_history row when at least one stock is
-    priced, backfilling synthetic month-end rows for fully elapsed months
-  → backend derives 上月 (latest history row in the previous calendar month)
+  → backend derives 上月 (latest history row on or before the last day of
+    the previous calendar month)
     and 最高 (maxima over all history rows plus the current values) for
     未實現報酬率 and 未實現金額 — reusing the MPF math (`mpf_last_month`,
     `mpf_max`) over history rows mapped to (contributions, balance); the
@@ -194,7 +193,7 @@ SummaryView
   → frontend formats and displays the response
 ```
 
-The summary request fetches the selected market's complete summary. It does not fetch only changed rows. A bulk price update (`prices::apply`, UI or `import_prices` CLI) triggers the same `market_history` build per touched market so bulk/CLI imports are captured too.
+The summary request fetches the selected market's complete summary and never writes to `market_history` — reads are pure. History rows are recorded on successful writes instead: stock and trade create/update/delete, manual 現價 saves, and bulk price updates (`prices::apply`, UI or `import_prices` CLI) each record the touched market's totals. A write is skipped when the totals equal the latest stored row, writes on the same day replace that day's row, and no synthetic month-end rows are created. Existing `synthetic` rows come from the retired workbook import or the retired backfill.
 
 Per stock, the backend calculates:
 

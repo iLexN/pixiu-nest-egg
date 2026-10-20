@@ -90,6 +90,7 @@ pub async fn create(
     .map_err(ApiError::Validation)?;
 
     let id = store::insert_trade(&state.pool, stock_id, &validated, body.note.as_deref()).await?;
+    crate::service::summary::record_market(&state.pool, market).await?;
     Ok((
         StatusCode::CREATED,
         Json(store::load_one(&state.pool, id).await?),
@@ -157,6 +158,11 @@ pub async fn update(
     .map_err(ApiError::Validation)?;
 
     store::update_trade(&state.pool, id, stock_id, &validated, note).await?;
+    // A trade moved across stocks can move totals in both markets.
+    crate::service::summary::record_market(&state.pool, existing.market).await?;
+    if market != existing.market {
+        crate::service::summary::record_market(&state.pool, market).await?;
+    }
 
     Ok(Json(store::load_one(&state.pool, id).await?))
 }
@@ -175,8 +181,10 @@ pub async fn remove(
     State(state): State<AppState>,
     Path(id): Path<i64>,
 ) -> Result<StatusCode, ApiError> {
+    let market = store::load_one(&state.pool, id).await?.market;
     if store::delete_trade(&state.pool, id).await? == 0 {
         return Err(ApiError::NotFound(format!("trade {id} not found")));
     }
+    crate::service::summary::record_market(&state.pool, market).await?;
     Ok(StatusCode::NO_CONTENT)
 }

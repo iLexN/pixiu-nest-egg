@@ -84,6 +84,7 @@ pub async fn create(
         sort_order,
     )
     .await?;
+    crate::service::summary::record_market(&state.pool, body.market).await?;
 
     Ok((
         StatusCode::CREATED,
@@ -200,6 +201,7 @@ pub async fn update(
         i64::from(patch.is_active.unwrap_or(existing.is_active)),
     )
     .await?;
+    crate::service::summary::record_market(&state.pool, existing.market).await?;
 
     Ok(Json(store::load_one(&state.pool, id).await?))
 }
@@ -254,6 +256,7 @@ pub async fn remove(
         )));
     }
     store::delete_stock(&state.pool, id).await?;
+    crate::service::summary::record_market(&state.pool, stock.market).await?;
     Ok(StatusCode::NO_CONTENT)
 }
 

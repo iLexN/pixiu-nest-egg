@@ -93,7 +93,7 @@ pub async fn apply(pool: &SqlitePool, upload: PriceUpload) -> Result<PriceReport
     // `import_prices` bin shares this path).
     for market in [Market::Hk, Market::Us] {
         if resolved.iter().any(|entry| entry.market == market) {
-            crate::service::summary::build(pool, market).await?;
+            crate::service::summary::record_market(pool, market).await?;
         }
     }
 

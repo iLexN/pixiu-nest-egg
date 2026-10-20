@@ -36,22 +36,13 @@ pub struct SummaryResponse {
     pub max: Option<MarketFigures>,
 }
 
-/// Every figure here is derived from the stored trades on each read.
+/// Every figure here is derived from the stored trades on each read, with no
+/// side effects — history rows are written by `record_market` on writes.
 pub async fn build(pool: &SqlitePool, market: Market) -> Result<SummaryResponse, StoreError> {
     let (stock_rows, sectors, totals) = summarize_market(pool, market).await?;
 
-    // Record today's totals, then derive 上月/最高 from the market's history.
-    // An unpriced market records nothing: its rows would have no market value.
+    // Derive 上月/最高 from the market's recorded history.
     let today = crate::store::today();
-    if let Some(market_value) = totals.market_value {
-        crate::store::market_history::record(
-            pool,
-            market,
-            (totals.buy_cost_priced, market_value),
-            today,
-        )
-        .await?;
-    }
     let history = crate::store::market_history::load(pool, market).await?;
     let figures = |figures: crate::models::MpfFigures| MarketFigures {
         percent: figures.rate,
@@ -93,8 +84,24 @@ pub async fn build(pool: &SqlitePool, market: Market) -> Result<SummaryResponse,
     })
 }
 
-/// The stock rows, sector rollup and market totals, without the
-/// market-history upsert — the part of `build` that is free of side effects.
+/// Record today's totals for the market after a successful write. An
+/// unpriced market records nothing: its rows would have no market value.
+pub async fn record_market(pool: &SqlitePool, market: Market) -> Result<(), StoreError> {
+    let totals = summarize_market(pool, market).await?.2;
+    if let Some(market_value) = totals.market_value {
+        crate::store::market_history::record(
+            pool,
+            market,
+            (totals.buy_cost_priced, market_value),
+            crate::store::today(),
+        )
+        .await?;
+    }
+    Ok(())
+}
+
+/// The stock rows, sector rollup and market totals — the part of `build`
+/// that is free of side effects.
 async fn summarize_market(
     pool: &SqlitePool,
     market: Market,
@@ -218,12 +225,23 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn build_records_todays_totals() {
+    async fn build_writes_no_history() {
         let pool = connect_memory().await.unwrap();
         let id = add_stock(&pool, "HK", "中國銀行", Some(10.0)).await;
         add_buy(&pool, id, 100.0, 900.0).await;
 
         build(&pool, Market::Hk).await.expect("build");
+
+        assert!(history_rows(&pool).await.is_empty());
+    }
+
+    #[tokio::test]
+    async fn record_market_records_todays_totals() {
+        let pool = connect_memory().await.unwrap();
+        let id = add_stock(&pool, "HK", "中國銀行", Some(10.0)).await;
+        add_buy(&pool, id, 100.0, 900.0).await;
+
+        record_market(&pool, Market::Hk).await.expect("record");
 
         let today = crate::store::today().to_string();
         let rows = history_rows(&pool).await;
@@ -287,6 +305,7 @@ mod tests {
         let id = add_stock(&pool, "HK", "中國銀行", None).await;
         add_buy(&pool, id, 100.0, 900.0).await;
 
+        record_market(&pool, Market::Hk).await.expect("record");
         let response = build(&pool, Market::Hk).await.expect("build");
 
         assert!(history_rows(&pool).await.is_empty());
