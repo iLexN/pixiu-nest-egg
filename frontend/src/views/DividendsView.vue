@@ -18,7 +18,7 @@ const props = defineProps<{ market: Market }>()
 const summary = ref<DividendSummary | null>(null)
 const stocks = ref<SummaryStock[]>([])
 const received = ref<Dividend[]>([])
-const year = ref<number | null>(null)
+const year = ref<number | null>(new Date().getFullYear())
 const filterStockId = ref<number | null>(null)
 const message = ref('')
 const error = ref('')
@@ -35,6 +35,10 @@ async function load() {
     ])
     summary.value = dividendSummary
     stocks.value = marketSummary.stocks
+    const years = dividendSummary.history_years
+    if (year.value !== null && !years.includes(year.value)) {
+      year.value = years.at(-1) ?? year.value
+    }
     received.value = await api.listDividends({
       market: props.market,
       status: 'received',
@@ -98,7 +102,7 @@ watch(() => props.market, () => {
   editing.value = null
   receiving.value = null
   showForm.value = false
-  year.value = null
+  year.value = new Date().getFullYear()
   filterStockId.value = null
   void load()
 })

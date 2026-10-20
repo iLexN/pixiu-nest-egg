@@ -319,7 +319,8 @@ DividendsView (股票 → 派息 tab, market-scoped like 交易記錄)
   → GET /api/summary?market=...
       → stock list for the form; the per-share × shares preview hint
   → GET /api/dividends?market=...&status=received&year=YYYY&order=desc
-      → received history rows
+      → received history rows; year defaults to the current year, falling
+        back to the latest year with received records (全部年份 shows all)
 ```
 
 Derived on every read, never stored: `status`, effective `amount`, `yield_on_cost` (amount ÷ buy_cost), `yield_on_price` (amount ÷ received_price × shares_held), `variance` (received − estimated), `gross_amount` (received + withholding_tax). Yields are empty when their denominator is missing.
