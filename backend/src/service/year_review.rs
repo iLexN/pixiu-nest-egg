@@ -25,7 +25,7 @@ pub async fn build(pool: &SqlitePool) -> Result<YearReviewResponse, StoreError> 
     let records = crate::store::year_review::load_records(pool).await?;
     let bonds = crate::store::bonds::year_facts(pool).await?;
     let deposits = crate::store::deposits::year_facts(pool).await?;
-    let transfers = crate::store::overview::transfers_by_year(pool).await?;
+    let transfers = crate::store::ibkr::transfers_by_year(pool).await?;
     let last_salaries = crate::store::months::last_salaries_by_year(pool).await?;
 
     Ok(YearReviewResponse {

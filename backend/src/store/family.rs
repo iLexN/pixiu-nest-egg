@@ -11,13 +11,6 @@ use crate::calc::{ValidatedDeposit, deposit_total};
 use crate::models::{DepositStatus, FamilyDeposit};
 use crate::store::{StoreError, now_timestamp};
 
-/// `app_meta` key prefix for the per-holder note: `family.note.<holder>`.
-pub const FAMILY_NOTE_PREFIX: &str = "family.note.";
-
-pub fn note_key(holder: &str) -> String {
-    format!("{FAMILY_NOTE_PREFIX}{holder}")
-}
-
 pub const FAMILY_DEPOSIT_COLUMNS: &str = "id, holder, label, bank, principal, interest, \
      start_date, end_date, received_at, note, sort_order";
 

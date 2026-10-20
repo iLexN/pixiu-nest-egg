@@ -8,7 +8,7 @@ Replaces the `Overview` sheet's asset-allocation block (`A3:C18`) and the 美股
 
 ### Requirement: Overview aggregation endpoint
 
-`GET /api/overview` SHALL return the sheet's `A3:C18` block plus its headline figures, all derived on read: `total_assets` (總數, `B1`), `liquid_assets` (流動資產, `H1`), `liquid_ratio` (`J1` = `liquid_assets` ÷ (salary × 100), absent while no salary is stored), `assets` (the `A3:B9` rows), `assets_sum` (`B10`), `semi_liquid` (the `A14:C18` block plus the `A13` ratio), `ibkr` (the 美股 `A1:B5` block with derived figures), `salary`, and `rate` (the stored `aia.usd_hkd_rate`, absent while unset). Figures needing the USD→HKD rate SHALL be absent while it is unset, consistent with the other modules.
+`GET /api/overview` SHALL return the sheet's `A3:C18` block plus its headline figures, all derived on read: `total_assets` (總數, `B1`), `liquid_assets` (流動資產, `H1`), `liquid_ratio` (`J1` = `liquid_assets` ÷ (salary × 100), absent while no salary is stored), `assets` (the `A3:B9` rows), `assets_sum` (`B10`), `semi_liquid` (the `A14:C18` block plus the `A13` ratio), `ibkr` (the 美股 `A1:B5` block with derived figures), `salary`, and `rate` (the stored USD fx rate, absent while unset).
 
 #### Scenario: Aggregation returned
 
@@ -17,8 +17,17 @@ Replaces the `Overview` sheet's asset-allocation block (`A3:C18`) and the 美股
 
 #### Scenario: No rate stored
 
-- **WHEN** no `aia.usd_hkd_rate` is stored
+- **WHEN** no USD fx rate is stored
 - **THEN** the 基金 and IBKR amounts, and the rate-dependent totals terms, are absent rather than zero
+
+### Requirement: Rate-dependent overview figures
+
+Figures needing the USD→HKD rate SHALL be absent while it is unset, consistent with the other modules.
+
+#### Scenario: No rate blanks USD figures
+
+- **WHEN** no USD fx rate is stored
+- **THEN** overview figures needing USD→HKD are absent
 
 ### Requirement: Asset allocation table
 
@@ -31,17 +40,31 @@ The `assets` list SHALL contain, in the sheet's row order: 港股 (HK market val
 
 ### Requirement: 半流動資金 block
 
-`semi_liquid` SHALL carry `deposits` (已定期 = Σ principal over active deposits — principal only, matching `定期!B1`), `cash_rows` (every manual `cash` row, e.g. HS, 渣打), `cash_sum` (活期 = Σ cash rows), `total` (半流動資金 = `deposits` + `cash_sum`), `vs_quarter_liquid` (the sheet's `C14` = `total` − the configured `overview.semi_liquid_target` ratio × `liquid_assets`; the sheet's `25%` literal promoted to the setting, `0.25` while unset), and `share` (the sheet's `A13` = `total` ÷ (港股 + 債券 + `total` + IBKR), absent while any term is missing or the divisor is zero).
+`semi_liquid` SHALL carry `deposits` (已定期 = Σ principal over active deposits — principal only, matching `定期!B1`), `cash_rows` (every `bank` cash account in `sort_order`, e.g. HS, 渣打 — broker accounts are excluded), `cash_sum` (活期 = Σ cash rows), and `total` (半流動資金 = `deposits` + `cash_sum`).
 
 #### Scenario: Block derived
 
-- **WHEN** active deposits hold principal 445000 and cash rows HS 30538.78 + 渣打 1364.89
+- **WHEN** active deposits hold principal 445000 and bank accounts HS 30538.78 + 渣打 1364.89
 - **THEN** `cash_sum` is 31903.67 and `total` is 476903.67
+
+#### Scenario: Broker cash stays out of 活期
+
+- **WHEN** the IBKR HKD broker account holds `765.42`
+- **THEN** it is not listed in `cash_rows` and does not change `cash_sum`
 
 #### Scenario: Configured ratio applied
 
-- **WHEN** `overview.semi_liquid_target` is `0.3`, `total` is `476903.67`, and `liquid_assets` is `1962919.66`
+- **WHEN** `strategy.semi_liquid_target` is `0.3`, `total` is `476903.67`, and `liquid_assets` is `1962919.66`
 - **THEN** `vs_quarter_liquid` is approximately `-111972.23`
+
+### Requirement: Semi-liquid comparison figures
+
+The block SHALL also carry `vs_quarter_liquid` (the sheet's `C14` = `total` − the configured `strategy.semi_liquid_target` ratio × `liquid_assets`; the sheet's `25%` literal promoted to the setting, `0.25` while unset), and `share` (the sheet's `A13` = `total` ÷ (港股 + 債券 + `total` + IBKR), absent while any term is missing or the divisor is zero).
+
+#### Scenario: Share of semi-liquid
+
+- **WHEN** 港股, 債券, `total` and IBKR figures are all present
+- **THEN** `share` is `total` divided by their sum
 
 ### Requirement: Headline totals
 
@@ -54,7 +77,7 @@ The `assets` list SHALL contain, in the sheet's row order: 港股 (HK market val
 
 ### Requirement: IBKR account figures
 
-The system SHALL store three manual IBKR figures in `app_meta` — `ibkr.now_value` (`B2`: the account total as displayed in the IBKR app, which uses a different FX rate than `aia.usd_hkd_rate`), `ibkr.hkd_cash` (`B4`), and `ibkr.usd_cash` (`B5`) — and SHALL keep a dated `ibkr_transfers` log whose sum is `transferred_hkd` (美股 `B1`: cumulative bank→IBKR transfers in HKD, absent while the log is empty); each year's sum is the year's IBKR 轉入. These are exposed through `GET /api/ibkr` and `PATCH /api/ibkr`: each account field SHALL accept a finite non-negative number or `null` to clear, while `transfer_hkd` SHALL append a log row for any finite delta (a negative value records a withdrawal or undoes a mistyped entry) dated `transfer_date`, defaulting to today. The response SHALL derive `computed_total_hkd` (美股 `B7` = (US market value + `usd_cash`) × rate + `hkd_cash`), `net` = `now_value` − `transferred_hkd`, `net_pct` = `net` ÷ `transferred_hkd`, and `vs_now_value` = `computed_total_hkd` − `now_value`, each absent while its inputs are missing.
+The system SHALL store the IBKR app's displayed account total as the setting `ibkr.reported_value` (`B2`; the app uses a different FX rate than the stored USD fx rate). The cash positions SHALL be the amounts of the `broker` cash accounts: `hkd_cash` (`B4`) from the HKD broker account, `usd_cash` (`B5`) from the USD broker account.
 
 #### Scenario: Computed total
 
@@ -69,7 +92,12 @@ The system SHALL store three manual IBKR figures in `app_meta` — `ibkr.now_val
 #### Scenario: Clearing a field
 
 - **WHEN** the user patches `usd_cash` to `null`
-- **THEN** the stored value is cleared and `computed_total_hkd` drops the USD cash term
+- **THEN** the USD broker account's amount becomes `0` and `computed_total_hkd` no longer includes any USD cash
+
+#### Scenario: Cash edit is the account balance
+
+- **WHEN** the user patches `usd_cash` to `1200.25`
+- **THEN** `GET /api/cash-accounts` reports the USD broker account at `1200.25`
 
 #### Scenario: Recording a transfer
 
@@ -81,9 +109,56 @@ The system SHALL store three manual IBKR figures in `app_meta` — `ibkr.now_val
 - **WHEN** the user patches `transfer_hkd` `-10000`
 - **THEN** a negative row is appended and `transferred_hkd` drops by `10000`
 
+### Requirement: IBKR transfers log
+
+The system SHALL keep a dated `ibkr_transfers` log whose sum is `transferred_hkd` (美股 `B1`: cumulative bank→IBKR transfers in HKD, absent while the log is empty); each year's sum is the year's IBKR 轉入.
+
+#### Scenario: Yearly transfer sum
+
+- **WHEN** the log holds transfers dated in a year
+- **THEN** that year's IBKR 轉入 is their sum
+
+### Requirement: IBKR patch semantics
+
+The IBKR figures are exposed through `GET /api/ibkr` and `PATCH /api/ibkr`, as `now_value`, `hkd_cash` and `usd_cash`. `now_value` SHALL accept a finite non-negative number, or `null` to clear. `hkd_cash`/`usd_cash` SHALL accept a finite non-negative number, which is written to the broker account, or `null`, which sets that account to `0`.
+
+#### Scenario: Patch writes the broker account
+
+- **WHEN** `PATCH /api/ibkr` carries `usd_cash` `1234.56`
+- **THEN** the USD broker cash account's amount becomes `1234.56`
+
+### Requirement: IBKR transfer entry
+
+`transfer_hkd` SHALL append a log row for any finite delta (a negative value records a withdrawal or undoes a mistyped entry) dated `transfer_date`, defaulting to today. One PATCH SHALL apply all its fields in a single transaction.
+
+#### Scenario: Negative delta undoes an entry
+
+- **WHEN** `transfer_hkd` carries a negative delta
+- **THEN** a log row is appended recording it
+
+### Requirement: IBKR derived figures
+
+The response SHALL derive:
+
+- `computed_total_hkd` (美股 `B7` = (US market value + `usd_cash`) × rate + `hkd_cash`)
+- `net` = `now_value` − `transferred_hkd`
+- `net_pct` = `net` ÷ `transferred_hkd`
+- `vs_now_value` = `computed_total_hkd` − `now_value`
+
+Each is absent while its inputs are missing.
+
+#### Scenario: Net versus transferred
+
+- **WHEN** `now_value` exceeds `transferred_hkd`
+- **THEN** `net` and `net_pct` report the gain
+
 ### Requirement: 總覽 page
 
-The frontend SHALL show a 總覽 view with a headline strip (總數, 流動資產, J1 as a percentage, and the live 開心Pool balance), the asset table (label, HKD amount, share — `—` while an amount is absent), the 半流動資金 block (已定期, each cash row, 活期, and the 半流動資金 total — rendered red while below the configured `overview.semi_liquid_target` share of 流動資產 and green while above — with its `A13` share and `C14` difference on a second footer row whose label reflects the configured percent), and the IBKR block (stored inputs plus the derived figures). Manual `asset`/`cash` row amounts SHALL be editable inline via the existing manual-assets endpoints; the view SHALL reload after every mutation. The IBKR block SHALL be the same editable card as the 美股 summary — editable `transferred_hkd` delta + date, `now_value`, `hkd_cash`, and `usd_cash` inputs saving through `PATCH /api/ibkr` beside the derived figures — and the view SHALL reload after a save so the asset-table IBKR row and every dependent figure refresh.
+The frontend SHALL show a 總覽 view with:
+
+- a headline strip (總數, 流動資產, J1 as a percentage, and the live 開心Pool balance)
+- the asset table (label, HKD amount, share — `—` while an amount is absent)
+- the 半流動資金 block: 已定期, each bank cash row, 活期, and the 半流動資金 total.
 
 #### Scenario: Edit a manual row inline
 
@@ -95,9 +170,38 @@ The frontend SHALL show a 總覽 view with a headline strip (總數, 流動資�
 - **WHEN** the user sets `usd_cash` to `1200.25` on the 總覽 IBKR card and saves
 - **THEN** the view reloads showing the updated IBKR block, asset-table IBKR row, and dependent totals
 
+### Requirement: 半流動資金 display rules
+
+The block SHALL follow: The total renders red while below the configured `strategy.semi_liquid_target` share of 流動資產 and green while above. A second footer row shows its `A13` share and `C14` difference, labelled with the configured percent.
+
+#### Scenario: Total below target shows red
+
+- **WHEN** the 半流動資金 total is below the configured share of 流動資產
+- **THEN** it renders red
+
+### Requirement: Overview IBKR block and inline editing
+
+- the IBKR block (stored inputs plus the derived figures)
+
+Manual `asset` row amounts SHALL be editable inline via the manual-assets endpoints, and bank cash row amounts via the cash-accounts endpoints. The view SHALL reload after every mutation.
+
+#### Scenario: Cash row edit hits cash-accounts API
+
+- **WHEN** the user edits a bank cash row amount inline
+- **THEN** the change saves through the cash-accounts endpoints and the view reloads
+
+### Requirement: Overview IBKR editable card
+
+The IBKR block SHALL be the same editable card as the 美股 summary: editable `transferred_hkd` delta + date, `now_value`, `hkd_cash`, and `usd_cash` inputs saving through `PATCH /api/ibkr`, beside the derived figures. The view SHALL reload after a save so the asset-table IBKR row and every dependent figure refresh.
+
+#### Scenario: IBKR card save refreshes dependents
+
+- **WHEN** the user saves the IBKR card
+- **THEN** the view reloads so the asset-table IBKR row and every dependent figure refresh
+
 ### Requirement: 過去 12 個月平均 block
 
-`GET /api/overview` SHALL return an `averages` block mirroring the sheet's `F3:G10` (+`H6`): trailing averages of the per-month 總數增加 (Changed), 支出 (month_spend), 生活支出 (living_spend), 存 (saved), and 利息 (interest) over the 12 most recent month rows whose `month` precedes the current month; the live 開心Pool balance; and `living_budget` = `ROUNDUP(living_spend_avg × 1.05, −2)` (up to the nearest 100). Each average SHALL skip months where that column has no value (AVERAGE semantics), and SHALL be absent while the window holds no values for it. `living_budget_low` SHALL be true when `living_budget < liquid_assets × 0.0001 × 30 + 9000`, and the response SHALL carry that floor value for display.
+`GET /api/overview` SHALL return an `averages` block mirroring the sheet's `F3:G10` (+`H6`): trailing averages of the per-month 總數增加 (Changed), 支出 (month_spend), 生活支出 (living_spend), 存 (saved), and 利息 (interest) over the 12 most recent month rows whose `month` precedes the current month; the live 開心Pool balance; and `living_budget` = `ROUNDUP(living_spend_avg × 1.05, −2)` (up to the nearest 100).
 
 #### Scenario: Trailing window
 
@@ -113,6 +217,15 @@ The frontend SHALL show a 總覽 view with a headline strip (總數, 流動資�
 
 - **WHEN** the 生活支出 average is `14119.67`
 - **THEN** `living_budget` is `14900`, and `living_budget_low` is true only while `liquid_assets × 0.003 + 9000` exceeds `14900`
+
+### Requirement: Averages skip semantics and low flag
+
+Each average SHALL skip months where that column has no value (AVERAGE semantics), and SHALL be absent while the window holds no values for it. `living_budget_low` SHALL be true when `living_budget < liquid_assets × 0.0001 × 30 + 9000`, and the response SHALL carry that floor value for display.
+
+#### Scenario: Empty window gives absent average
+
+- **WHEN** the window holds no values for a column
+- **THEN** its average is absent
 
 ### Requirement: 總覽 averages card
 
@@ -130,7 +243,7 @@ The 總覽 page SHALL show a "過去 12 個月平均" card listing 總數增加,
 
 ### Requirement: 投資目標 block
 
-`GET /api/overview` SHALL return an `invest_targets` block mirroring the sheet's `J22:N27`: `avg_invested` (the sheet's `J22`) and `rows`, one per year covered by the year-review row set, ordered ascending. Each row SHALL carry `year`, `invested` (the year-review row's `invested`, absent while none), the year's effective `raise`, `interest` (the year-review row's 利息回報), `pool_spend` (the year-review row's 開心Pool支出), `target`, `remain`, and `growth` per the formula requirement below. `interest`/`pool_spend` SHALL be `0` when the year reports none — the same count-absent-as-0 semantics the target formula applies. `avg_invested` SHALL be the mean of `invested` over the rows for the three most recent completed years (years before the current year), skipping rows whose `invested` is absent, and SHALL be absent while no completed year reports `invested`.
+`GET /api/overview` SHALL return an `invest_targets` block mirroring the sheet's `J22:N27`: `avg_invested` (the sheet's `J22`) and `rows`, one per year covered by the year-review row set, ordered ascending. Each row SHALL carry `year`, `invested` (the year-review row's `invested`, absent while none), the year's effective `raise`, `interest` (the year-review row's 利息回報), `pool_spend` (the year-review row's 開心Pool支出), `target`, `remain`, and `growth` per the formula requirement below.
 
 #### Scenario: Rows cover the year-review years
 
@@ -152,9 +265,18 @@ The 總覽 page SHALL show a "過去 12 個月平均" card listing 總數增加,
 - **WHEN** only two of the three most recent completed years report `invested`
 - **THEN** `avg_invested` is the mean over those two
 
+### Requirement: Invested average and absent-as-zero
+
+`interest`/`pool_spend` SHALL be `0` when the year reports none — the same count-absent-as-0 semantics the target formula applies. `avg_invested` SHALL be the mean of `invested` over the rows for the three most recent completed years (years before the current year), skipping rows whose `invested` is absent, and SHALL be absent while no completed year reports `invested`.
+
+#### Scenario: Average over completed years
+
+- **WHEN** only one completed year reports `invested`
+- **THEN** `avg_invested` is that figure
+
 ### Requirement: 投資目標 formula
 
-For each row the system SHALL derive `target` = `invested(Y-1) − interest(Y-1) − pool_spend(Y-1)×0.7 + raise(Y)×0.5×12 + interest(Y) + pool_spend(Y)×0.7`, reading `invested`/`interest`/`pool_spend`/`raise` off the stated years' year-review figures; `target` SHALL be absent while the prior year's `invested` is absent, and absent `interest`/`pool_spend`/`raise` inputs SHALL count as `0`. `remain` SHALL be `target − invested` on the current year's row only, absent on completed years and while either input is missing. `growth` SHALL be `(invested(Y) − invested(Y-1)) ÷ invested(Y-1)` for completed years and `(target(Y) − invested(Y-1)) ÷ invested(Y-1)` for the current year, absent while either input is missing or the divisor is zero.
+For each row the system SHALL derive `target` = `invested(Y-1) − interest(Y-1) − pool_spend(Y-1)×0.7 + raise(Y)×0.5×12 + interest(Y) + pool_spend(Y)×0.7`, reading `invested`/`interest`/`pool_spend`/`raise` off the stated years' year-review figures; `target` SHALL be absent while the prior year's `invested` is absent, and absent `interest`/`pool_spend`/`raise` inputs SHALL count as `0`.
 
 #### Scenario: Current-year target derived
 
@@ -171,9 +293,18 @@ For each row the system SHALL derive `target` = `invested(Y-1) − interest(Y-1)
 - **WHEN** 2023 is the earliest row
 - **THEN** its `target`, `remain`, and `growth` are absent while `invested` still reports
 
+### Requirement: Remain and growth figures
+
+`remain` SHALL be `target − invested` on the current year's row only, absent on completed years and while either input is missing. `growth` SHALL be `(invested(Y) − invested(Y-1)) ÷ invested(Y-1)` for completed years and `(target(Y) − invested(Y-1)) ÷ invested(Y-1)` for the current year, absent while either input is missing or the divisor is zero.
+
+#### Scenario: Remain only on the current year
+
+- **WHEN** a completed year's row is rendered
+- **THEN** `remain` is absent
+
 ### Requirement: 投資目標 card
 
-The 總覽 page SHALL show an 投資目標 card with the `avg_invested` figure (近3年平均) as its header stat and a per-year table of 年份, `invested`, `target`, `remain`, and `growth` rendered as a percentage — `—` while a figure is absent. A muted footnote SHALL expand the current year's `target` into its formula terms — `上年invested`, `上年利息回報`, `上年Pool支出×0.7`, `月薪增幅×50%*12`, `今年利息回報`, `今年Pool支出×0.7` — each followed by its computed contribution in parentheses, `—` while an input is absent; an absent `raise` counts as `0`. The footnote SHALL be absent while no current-year row exists.
+The 總覽 page SHALL show an 投資目標 card with the `avg_invested` figure (近3年平均) as its header stat and a per-year table of 年份, `invested`, `target`, `remain`, and `growth` rendered as a percentage — `—` while a figure is absent.
 
 #### Scenario: Card renders the block
 
@@ -190,32 +321,18 @@ The 總覽 page SHALL show an 投資目標 card with the `avg_invested` figure (
 - **WHEN** the block lists no row for the current year
 - **THEN** the card shows no formula footnote
 
+### Requirement: Target formula footnote
+
+A muted footnote SHALL expand the current year's `target` into its formula terms — `上年invested`, `上年利息回報`, `上年Pool支出×0.7`, `月薪增幅×50%*12`, `今年利息回報`, `今年Pool支出×0.7` — each followed by its computed contribution in parentheses, `—` while an input is absent; an absent `raise` counts as `0`. The footnote SHALL be absent while no current-year row exists.
+
+#### Scenario: Footnote lists the terms
+
+- **WHEN** a current-year row exists
+- **THEN** the footnote shows each formula term with its computed contribution
+
 ### Requirement: Goals block
 
 `GET /api/overview` SHALL return a `goals` block mirroring the sheet's `J10:M20` milestone tracker and `N13:P16` formula targets. Every figure derives on read and is absent while its inputs are missing or its divisor is zero; the block never reports a figure the sheet would show as an error or a blank.
-
-Shared figures:
-
-- `n4_rate`/`n4_year` (`Overview!N4`): the `income_value_rate` of the latest completed year's YearInReview row — the year before today's — both absent while that row or its rate is missing.
-- `current_invest` (`K13`): 港股 market value + 債券 active principal + the IBKR computed HKD total; absent while the IBKR total is absent (no USD→HKD rate).
-- `saving_year` (`L12`): the mean of the present terms among `averages.saved × 12`, `invest_targets.avg_invested`, `money_master.avg_per_month × 12`, running `saved_avg × 12`, and `(running saved_avg + interest_avg) × 12`, absent terms skipped — matching the sheet's `AVERAGE`; absent while no term is present. `saving_month` (`M12`) = `saving_year ÷ 12`.
-- `passive_return_year` (`L13`) = `current_invest × n4_rate`; `passive_return_month` (`M13`) = ÷ 12.
-- `goal3_inflation`/`goal3_years`/`final_replacement`: the effective `overview.goal3_*`/`overview.final_replacement` constants feeding `third.target`/`final_goal.target`, reporting the `1.07`/`30`/`0.7` defaults while unset — echoed so the card can expand the formulas without a second fetch.
-- `saved_avg`/`interest_avg`: the `'Month Stat'` running averages (`L8`/`N8`, monthly) feeding the `saving_year` AVERAGE and the formula-goal paces — echoed absent while no qualifying month exists, so the card can expand `存/年` without a second fetch.
-
-Each milestone row (`milestones[0]`/`milestones[1]` = the sheet's 1st/2nd 目標):
-
-- `target` (`K12`/`K18`): the stored `overview.goal1_amount`/`overview.goal2_amount`; absent while the setting is unset, which blanks the whole milestone's figures.
-- `remain` (`K14`/`K20`) = `target − current_invest`.
-- `years` (`L14`/`L20`) = `remain ÷ saving_year`.
-- `eta` (`J11`/`J17`) = today + `round(365 × years)` days, `YYYY-MM-DD`.
-
-Each formula goal (`third` = `O14:O16`, `final_goal` = `P14:P16`):
-
-- `third.target` (`O14`) = `averages.living_budget × overview.goal3_inflation × 12 × overview.goal3_years`; `third.remain` (`O15`) = `target − liquid_assets`; `third.years` (`O16`) = `remain ÷ ((running saved_avg + interest_avg) × 12)`; `third.eta` = today + `round(365 × years)` days, `YYYY-MM-DD`.
-- `final_goal.target` (`P14`) = `salary × overview.final_replacement × 12 ÷ n4_rate`; `final_goal.remain` (`P15`) = `target − total_assets`; `final_goal.years` (`P16`) = `remain ÷ (running total_change_avg × 12)`; `final_goal.eta` = today + `round(365 × years)` days, `YYYY-MM-DD`.
-
-Unlike the sheet, a goal whose `remain ≤ 0` is already reached: its `years` and `eta` SHALL be absent rather than negative or a past date.
 
 #### Scenario: Sheet reproduction
 
@@ -224,7 +341,7 @@ Unlike the sheet, a goal whose `remain ≤ 0` is already reached: its `years` an
 
 #### Scenario: Constants echoed
 
-- **WHEN** `overview.goal3_inflation` and `overview.goal3_years` are unset and `overview.final_replacement` is `0.6`
+- **WHEN** `goals.goal3_inflation` and `goals.goal3_years` are unset and `goals.final_replacement` is `0.6`
 - **THEN** the block reports `goal3_inflation` `1.07`, `goal3_years` `30`, and `final_replacement` `0.6`
 
 #### Scenario: Running averages echoed
@@ -249,15 +366,99 @@ Unlike the sheet, a goal whose `remain ≤ 0` is already reached: its `years` an
 
 #### Scenario: Cleared milestone amount
 
-- **WHEN** `overview.goal1_amount` is unset
+- **WHEN** `goals.goal1_amount` is unset
 - **THEN** the 1st milestone reports absent `target`/`remain`/`years`/`eta` while the 2nd milestone and formula goals are unaffected
+
+### Requirement: Shared rate and current invest figures
+
+The block SHALL carry these shared figures:
+
+- `n4_rate`/`n4_year` (`Overview!N4`): the `income_value_rate` of the latest completed year's YearInReview row — the year before today's — both absent while that row or its rate is missing.
+- `current_invest` (`K13`): 港股 market value + 債券 active principal + the IBKR computed HKD total; absent while the IBKR total is absent (no USD→HKD rate).
+
+#### Scenario: N4 absent without prior year
+
+- **WHEN** the latest completed year's YearInReview row has no `income_value_rate`
+- **THEN** `n4_rate` and `n4_year` are absent
+
+### Requirement: Saving-year figure
+
+The block SHALL carry:
+
+- `saving_year` (`L12`): the mean of the present terms among `averages.saved × 12`, `invest_targets.avg_invested`, `money_master.avg_per_month × 12`, running `saved_avg × 12`, and `(running saved_avg + interest_avg) × 12`, absent terms skipped — matching the sheet's `AVERAGE`; absent while no term is present. `saving_month` (`M12`) = `saving_year ÷ 12`.
+
+#### Scenario: Saving-year averages present terms
+
+- **WHEN** two of the five `saving_year` terms are present
+- **THEN** `saving_year` is the mean of those two
+
+### Requirement: Passive return and goal constants
+
+The block SHALL carry:
+
+- `passive_return_year` (`L13`) = `current_invest × n4_rate`; `passive_return_month` (`M13`) = ÷ 12.
+- `goal3_inflation`/`goal3_years`/`final_replacement`: the effective `goals.goal3_*`/`goals.final_replacement` constants feeding `third.target`/`final_goal.target`, reporting the `1.07`/`30`/`0.7` defaults while unset — echoed so the card can expand the formulas without a second fetch.
+
+#### Scenario: Defaults while unset
+
+- **WHEN** no goal constants are stored
+- **THEN** the block reports the `1.07`/`30`/`0.7` defaults
+
+### Requirement: Shared running averages
+
+The block SHALL carry:
+
+- `saved_avg`/`interest_avg`: the `'Month Stat'` running averages (`L8`/`N8`, monthly) feeding the `saving_year` AVERAGE and the formula-goal paces — echoed absent while no qualifying month exists, so the card can expand `存/年` without a second fetch.
+
+#### Scenario: Averages echoed
+
+- **WHEN** qualifying months exist
+- **THEN** `saved_avg`/`interest_avg` are echoed so the card can expand `存/年`
+
+### Requirement: Milestone figures
+
+Each milestone row (`milestones[0]`/`milestones[1]` = the sheet's 1st/2nd 目標) SHALL carry:
+
+- `target` (`K12`/`K18`): the stored `goals.goal1_amount`/`goals.goal2_amount`; absent while the setting is unset, which blanks the whole milestone's figures.
+- `remain` (`K14`/`K20`) = `target − current_invest`.
+- `years` (`L14`/`L20`) = `remain ÷ saving_year`.
+- `eta` (`J11`/`J17`) = today + `round(365 × years)` days, `YYYY-MM-DD`.
+
+#### Scenario: Milestone ETA from years
+
+- **WHEN** `remain` is positive and `saving_year` is present
+- **THEN** `eta` is today plus `round(365 × years)` days
+
+### Requirement: Third formula goal
+
+Each formula goal (`third` = `O14:O16`, `final_goal` = `P14:P16`) SHALL carry for `third`:
+
+- `third.target` (`O14`) = `averages.living_budget × goals.goal3_inflation × 12 × goals.goal3_years`; `third.remain` (`O15`) = `target − liquid_assets`; `third.years` (`O16`) = `remain ÷ ((running saved_avg + interest_avg) × 12)`; `third.eta` = today + `round(365 × years)` days, `YYYY-MM-DD`.
+
+#### Scenario: Third goal from the budget
+
+- **WHEN** `averages.living_budget` is present
+- **THEN** `third.target` is `living_budget × 1.07 × 12 × 30` (defaults while unset)
+
+### Requirement: Final formula goal and reached goals
+
+- `final_goal.target` (`P14`) = `salary × goals.final_replacement × 12 ÷ n4_rate`; `final_goal.remain` (`P15`) = `target − total_assets`; `final_goal.years` (`P16`) = `remain ÷ (running total_change_avg × 12)`; `final_goal.eta` = today + `round(365 × years)` days, `YYYY-MM-DD`.
+
+Unlike the sheet, a goal whose `remain ≤ 0` is already reached: its `years` and `eta` SHALL be absent rather than negative or a past date.
+
+#### Scenario: Reached goal shows no ETA
+
+- **WHEN** a goal's `remain` is `0` or negative
+- **THEN** its `years` and `eta` are absent
 
 ### Requirement: Goal settings
 
-The month-stat settings SHALL carry the five goal inputs as `app_meta` keys: `overview.goal1_amount` and `overview.goal2_amount` (the milestone targets — the sheet's `K12`/`K18` literals), `overview.goal3_inflation` (the sheet's `1.07`), `overview.goal3_years` (the sheet's `25+5`), and `overview.final_replacement` (the sheet's `0.7`).
+The settings SHALL carry the five goal inputs as `app_meta` keys:
 
-- `GET /api/months/settings` SHALL return the two amounts as stored (`null` while unset) and the three constants as their effective values (the defaults while unset).
-- `PATCH /api/months/settings` SHALL accept each field: the amounts must be finite and ≥ 0, the constants finite and > 0; invalid values are rejected with a field error. `null` clears an amount (blanking that milestone's figures) or resets a constant to its default; an absent field leaves the stored value untouched.
+- `goals.goal1_amount` and `goals.goal2_amount`: the milestone targets, the sheet's `K12`/`K18` literals
+- `goals.goal3_inflation`: the sheet's `1.07`
+- `goals.goal3_years`: the sheet's `25+5`
+- `goals.final_replacement`: the sheet's `0.7`
 
 #### Scenario: Constants round-trip through defaults
 
@@ -274,9 +475,19 @@ The month-stat settings SHALL carry the five goal inputs as `app_meta` keys: `ov
 - **WHEN** `goal1_amount` was `1550000` and the patch carries `null`
 - **THEN** settings report `goal1_amount` `null` and the overview's 1st milestone is blank
 
+### Requirement: Goal settings endpoints
+
+- `GET /api/settings` SHALL return the two amounts as stored (`null` while unset) and the three constants as their effective values (the defaults while unset).
+- `PATCH /api/settings` SHALL accept each field: the amounts must be finite and ≥ 0, the constants finite and > 0; invalid values are rejected with a field error. `null` clears an amount (blanking that milestone's figures) or resets a constant to its default; an absent field leaves the stored value untouched.
+
+#### Scenario: Null clears a milestone amount
+
+- **WHEN** `goals.goal1_amount` is patched to `null`
+- **THEN** that milestone's figures blank
+
 ### Requirement: 目標 card
 
-The 總覽 page SHALL show a `目標` card mirroring the sheet's layout: for the 1st/2nd milestones a row carrying target, remain, years, and the ETA date; for the 3rd and Final targets a row carrying target, remain, years, and the ETA date. The shared current invest value, saving per year / per month, and passive return per year / per month SHALL show once in the table footer rather than repeating on each milestone row. The card SHALL caption the `N4` rate with the year it belongs to. A goal whose `remain ≤ 0` SHALL show `已達成` instead of years/eta, and every absent figure renders as `—`. A muted footnote SHALL expand the two formula targets with live values — `3rd = 生活預算 (…) × 通脹 (…) × 12 × 年期 (…)` and `Final = 薪金 (…) × 替代率 (…) × 12 ÷ N4 (…)` — each input's current figure in parentheses, `—` while an input is absent. The footnote SHALL likewise expand `存/年` as `AVERAGE` over its five yearly terms — `近12月存×12`, `近3年invested`, `MM月均×12`, `歷年存×12`, `(歷年存+息)×12` — each with its live contribution in parentheses, `—` while a term is absent.
+The 總覽 page SHALL show a `目標` card mirroring the sheet's layout: for the 1st/2nd milestones a row carrying target, remain, years, and the ETA date; for the 3rd and Final targets a row carrying target, remain, years, and the ETA date. The shared current invest value, saving per year / per month, and passive return per year / per month SHALL show once in the table footer rather than repeating on each milestone row.
 
 #### Scenario: Card renders the block
 
@@ -303,9 +514,32 @@ The 總覽 page SHALL show a `目標` card mirroring the sheet's layout: for the
 - **WHEN** every goals input is absent
 - **THEN** the card still renders with `—` for each figure
 
+### Requirement: Goal card reached and caption rules
+
+The card SHALL caption the `N4` rate with the year it belongs to. A goal whose `remain ≤ 0` SHALL show `已達成` instead of years/eta, and every absent figure renders as `—`.
+
+#### Scenario: Reached goal displays 已達成
+
+- **WHEN** a goal's `remain` is `0` or negative
+- **THEN** the row shows `已達成` instead of years/eta
+
+### Requirement: Goal card formula footnotes
+
+A muted footnote SHALL expand the two formula targets with live values — `3rd = 生活預算 (…) × 通脹 (…) × 12 × 年期 (…)` and `Final = 薪金 (…) × 替代率 (…) × 12 ÷ N4 (…)` — each input's current figure in parentheses, `—` while an input is absent. The footnote SHALL likewise expand `存/年` as `AVERAGE` over its five yearly terms — `近12月存×12`, `近3年invested`, `MM月均×12`, `歷年存×12`, `(歷年存+息)×12` — each with its live contribution in parentheses, `—` while a term is absent.
+
+#### Scenario: Footnote shows live inputs
+
+- **WHEN** the 目標 card renders with a stored `final_replacement`
+- **THEN** the footnote shows `Final = 薪金 (…) × 替代率 (…) × 12 ÷ N4 (…)` with the live figures in parentheses
+
 ### Requirement: 策略 liquidity tiers block
 
-`GET /api/overview` SHALL return a `liquidity_tiers` block mirroring the sheet's `J3:K7`, all derived on read: `cannot_use` (`K5` = the stored salary × 6 — the sheet's `N6` 6-month salary), `can_use` (`K4` = `semi_liquid.total` − `cannot_use`, negative allowed), `short_term` (`K6` = 港股 + 債券 + IBKR + Σ manual `asset` rows with `liquidity` `short`), and `long_term` (`K7` = 基金 + MPF + Σ manual `asset` rows with `liquidity` `long`). `cannot_use` and `can_use` SHALL be absent while no salary is stored. `short_term` and `long_term` SHALL be absent while `aia.usd_hkd_rate` is unset (their IBKR and 基金 terms need it). While every figure is present, `can_use + cannot_use + short_term + long_term` SHALL equal `total_assets`.
+`GET /api/overview` SHALL return a `liquidity_tiers` block mirroring the sheet's `J3:K7`, all derived on read:
+
+- `cannot_use` (`K5`) = the stored salary × 6, the sheet's `N6` 6-month salary
+- `can_use` (`K4`) = `semi_liquid.total` − `cannot_use`, negative allowed
+- `short_term` (`K6`) = 港股 + 債券 + IBKR + Σ manual `asset` rows with `liquidity` `short`
+- `long_term` (`K7`) = 基金 + MPF + Σ manual `asset` rows with `liquidity` `long`
 
 #### Scenario: Tiers derived
 
@@ -319,18 +553,27 @@ The 總覽 page SHALL show a `目標` card mirroring the sheet's layout: for the
 
 #### Scenario: No salary stored
 
-- **WHEN** `overview.salary` is unset
+- **WHEN** `ledger.salary` is unset
 - **THEN** `cannot_use` and `can_use` are absent while `short_term` and `long_term` still report
 
 #### Scenario: No rate stored
 
-- **WHEN** `aia.usd_hkd_rate` is unset
+- **WHEN** the USD fx rate is unset
 - **THEN** `short_term` and `long_term` are absent rather than partial sums
 
 #### Scenario: Buffer exceeds 半流動資金
 
 - **WHEN** 半流動資金 is `300000` and the salary is `52700`
 - **THEN** `can_use` is `-16200`
+
+### Requirement: Liquidity tier absence rules
+
+`cannot_use` and `can_use` SHALL be absent while no salary is stored. `short_term` and `long_term` SHALL be absent while the USD fx rate is unset, because their IBKR and 基金 terms need it. While every figure is present, `can_use + cannot_use + short_term + long_term` SHALL equal `total_assets`.
+
+#### Scenario: Tiers sum to total
+
+- **WHEN** every tier figure is present
+- **THEN** `can_use + cannot_use + short_term + long_term` equals `total_assets`
 
 ### Requirement: 總覽 策略 card
 
@@ -354,21 +597,6 @@ The 總覽 page SHALL show a 策略 card listing the four tiers in sheet order �
 ### Requirement: Forecast projection block
 
 `GET /api/forecast` SHALL return a `months` array mirroring the sheet's `預測` grid `A20:H36`: seven entries for the current calendar month through current +6, each carrying `month` (`YYYY-MM-01`) and the sheet's rows as derived fields — `start`, `salary`, `spend`, `deposit_finish`, `interest`, `bill`, `plan_items`, `deposit_placements`, `deposit_return`, `cash`, `locked`, `semi_liquid`, and `ref_check`.
-
-Per month `m`:
-
-- `start` SHALL be the current month's stored `start_cash` (月初出糧後) when `m` is the first month — falling back to the live 活期 sum (Σ `cash` manual assets) while no `start_cash` is stored — and the previous month's `cash` otherwise; absent while its source is absent.
-- `salary` SHALL be the stored `overview.salary`, absent while unset.
-- `spend` SHALL be −`living_budget` from the overview averages block, absent while no budget exists.
-- `deposit_finish` SHALL be Σ `principal` of deposits whose `end_date` falls in `m` (the sheet's `定期 finish` row sourced from `2026回報率`/`定期Info` SUMIFs), `0` when none.
-- `interest` SHALL be Σ `interest` of deposits ending in `m` + Σ HK dividend amounts with a pay/record date in `m` + Σ bond coupon amounts due or received in `m` + Σ `interest`-kind forecast items in `m` — counting known expected or received amounts and skipping components with no known amount, `0` when none. The month entry SHALL also carry `interest_components` listing the auto receipts (source `deposit`/`coupon`/`dividend`, label, amount, `received`) so the breakdown behind the figure is inspectable.
-- `bill` SHALL be − the stored `forecast.bill_amount` setting on Jan/Apr/Jul/Oct months (the sheet's 差餉 quarters reading `B39`), absent on other months; when one or more `bill` forecast items exist for `m`, `bill` SHALL be their Σ instead (an override, not an addition).
-- `plan_items` SHALL list the month's stored forecast items.
-- `deposit_placements` SHALL list the real deposits whose `start_date` falls in `m` — each with `deposit_id`, `label`, `bank`, `principal`, and `start_date` — empty when none. Deposits without a `start_date` are never placements.
-- `deposit_return` SHALL be the sum described by the deposit-returns requirement, `0` when none.
-- `cash` (活期) SHALL be `start + salary + spend + deposit_finish + interest + bill + deposit_return + Σ amounts of `tax`/`stock`/`other` items in `m` + Σ amounts of `hs_deposit`/`sc_deposit` items in `m` − Σ `principal` of `deposit_placements` in `m`, absent while `start` is absent; absent components count as `0`. (`interest` and `bill` items are already inside `interest`/`bill`, so they are not summed again.)
-
-`ref_check` SHALL be `semi_liquid − the configured `overview.semi_liquid_target` ratio × liquid_assets` using the live `liquid_assets` (the sheet's `B20:H20` against `$N$7` — `H1 ÷ 4`, the same threshold as `C14` written as a division), absent while either side is absent.
 
 #### Scenario: First column anchors on 月初
 
@@ -400,9 +628,87 @@ Per month `m`:
 - **WHEN** `forecast.bill_amount` is `2158` and the window covers `2027-01`
 - **THEN** `2027-01` reports `bill` `-2158` and `2027-02` reports no `bill`
 
+### Requirement: Forecast start, salary and spend rows
+
+Per month `m`:
+
+- `start` SHALL be the current month's stored `start_cash` (月初出糧後) when `m` is the first month — falling back to the live 活期 sum (Σ `bank` cash account balances) while no `start_cash` is stored — and the previous month's `cash` otherwise; absent while its source is absent.
+- `salary` SHALL be the stored `ledger.salary`, absent while unset.
+- `spend` SHALL be −`living_budget` from the overview averages block, absent while no budget exists.
+
+#### Scenario: Next month starts from previous cash
+
+- **WHEN** month `m` is not the first month
+- **THEN** its `start` is the previous month's `cash`
+
+### Requirement: Forecast deposit finish and bill rows
+
+For each forecast month `m`:
+
+- `deposit_finish` SHALL be Σ `principal` of deposits whose `end_date` falls in `m` (the sheet's `定期 finish` row sourced from `2026回報率`/`定期Info` SUMIFs), `0` when none.
+- `bill` SHALL be − the stored `forecast.bill_amount` setting on Jan/Apr/Jul/Oct months (the sheet's 差餉 quarters reading `B39`), absent on other months; when one or more `bill` forecast items exist for `m`, `bill` SHALL be their Σ instead (an override, not an addition).
+
+#### Scenario: Bill only on quarter months
+
+- **WHEN** `m` is not Jan, Apr, Jul or Oct and no `bill` items exist
+- **THEN** `bill` is absent
+
+### Requirement: Forecast interest figure
+
+For each forecast month `m`:
+
+- `interest` SHALL be Σ `interest` of deposits ending in `m` + Σ HK dividend amounts with a pay/record date in `m` + Σ bond coupon amounts due or received in `m` + Σ `interest`-kind forecast items in `m` — counting known expected or received amounts and skipping components with no known amount, `0` when none.
+
+#### Scenario: Interest sums the components
+
+- **WHEN** a month has a deposit ending and a received coupon
+- **THEN** `interest` sums their amounts
+
+### Requirement: Forecast interest components
+
+The month entry SHALL also carry `interest_components` listing the auto receipts (source `deposit`/`coupon`/`dividend`, label, amount, `received`) so the breakdown behind the figure is inspectable.
+
+#### Scenario: Components inspectable
+
+- **WHEN** a month has auto receipts behind `interest`
+- **THEN** `interest_components` lists each receipt
+
+### Requirement: Forecast plan and placement rows
+
+For each forecast month `m`:
+
+- `plan_items` SHALL list the month's stored forecast items.
+- `deposit_placements` SHALL list the real deposits whose `start_date` falls in `m` — each with `deposit_id`, `label`, `bank`, `principal`, and `start_date` — empty when none. Deposits without a `start_date` are never placements.
+- `deposit_return` SHALL be the sum described by the deposit-returns requirement, `0` when none.
+
+#### Scenario: Placement requires a start date
+
+- **WHEN** a deposit has no `start_date`
+- **THEN** it never appears in `deposit_placements`
+
+### Requirement: Forecast cash figure
+
+For each forecast month `m`:
+
+- `cash` (活期) SHALL be `start + salary + spend + deposit_finish + interest + bill + deposit_return + Σ amounts of `tax`/`stock`/`other` items in `m` + Σ amounts of `hs_deposit`/`sc_deposit` items in `m` − Σ `principal` of `deposit_placements` in `m`, absent while `start` is absent; absent components count as `0`. (`interest` and `bill` items are already inside `interest`/`bill`, so they are not summed again.)
+
+#### Scenario: Cash chains the rows
+
+- **WHEN** `start` is present
+- **THEN** `cash` derives as the stated sum with absent components counting as `0`
+
+### Requirement: Forecast ref check
+
+`ref_check` SHALL be `semi_liquid − the configured `strategy.semi_liquid_target` ratio × liquid_assets` using the live `liquid_assets` (the sheet's `B20:H20` against `$N$7` — `H1 ÷ 4`, the same threshold as `C14` written as a division), absent while either side is absent.
+
+#### Scenario: Ref check absent without liquid assets
+
+- **WHEN** `liquid_assets` is absent
+- **THEN** `ref_check` is absent
+
 ### Requirement: Locked 定期+SC chain
 
-Each forecast month SHALL derive `locked` (the sheet's `定期 + SC` row) from a month-start anchor: Σ `principal` of deposits held on the window's first day — `start_date` absent or before the first month's 1st, and `end_date` on or after that 1st. The anchor SHALL NOT use the live "end date not passed" total, so a deposit that matured earlier in the current month stays in the anchor and leaves through `deposit_finish`, and a deposit starting on or after the 1st enters through its placement month. Each month `m` (the first included, chaining from the anchor) SHALL derive `locked(m) = locked(m−1) − deposit_finish(m) − Σ hs_deposit/sc_deposit plan amounts(m) + Σ principal of deposit_placements(m) − deposit_return(m)` — plan amounts are stored negative, so subtracting them adds to `locked`. `semi_liquid` SHALL be `cash + locked`, absent while either side is absent. The overview `半流動資金` block SHALL keep using the live active-deposit total.
+Each forecast month SHALL derive `locked` (the sheet's `定期 + SC` row) from a month-start anchor: Σ `principal` of deposits held on the window's first day — `start_date` absent or before the first month's 1st, and `end_date` on or after that 1st.
 
 #### Scenario: Locked evolves
 
@@ -424,9 +730,36 @@ Each forecast month SHALL derive `locked` (the sheet's `定期 + SC` row) from a
 - **WHEN** `2026-09` derives `semi_liquid` `520071.25` and live `liquid_assets` is `1964860.57`
 - **THEN** `ref_check` is approximately `28856.10`
 
+### Requirement: Locked chain and semi-liquid
+
+Each month `m` (the first included, chaining from the anchor) SHALL derive `locked(m) = locked(m−1) − deposit_finish(m) − Σ hs_deposit/sc_deposit plan amounts(m) + Σ principal of deposit_placements(m) − deposit_return(m)` — plan amounts are stored negative, so subtracting them adds to `locked`. `semi_liquid` SHALL be `cash + locked`, absent while either side is absent.
+
+#### Scenario: Chain subtracts finishes
+
+- **WHEN** month `m` follows a month with `deposit_finish`
+- **THEN** `locked(m)` is `locked(m−1)` minus that finish plus placements, minus `deposit_return`
+
+### Requirement: Locked anchor edge cases
+
+The anchor SHALL NOT use the live "end date not passed" total, so a deposit that matured earlier in the current month stays in the anchor and leaves through `deposit_finish`, and a deposit starting on or after the 1st enters through its placement month.
+
+#### Scenario: Early-matured deposit stays in the anchor
+
+- **WHEN** a deposit matured earlier in the current month
+- **THEN** it stays in the anchor and leaves through `deposit_finish`
+
+### Requirement: Live semi-liquid block unchanged
+
+The overview `半流動資金` block SHALL keep using the live active-deposit total.
+
+#### Scenario: Live block unaffected by the chain
+
+- **WHEN** the overview renders the 半流動資金 block
+- **THEN** it uses the live active-deposit total, not the forecast anchor
+
 ### Requirement: Forecast plan items
 
-The system SHALL store forecast items — `id`, `month` (`YYYY-MM-01`), `kind`, signed `amount`, `note`, and optional `return_month` — exposed through `POST /api/forecast/:ym/items`, `PATCH /api/forecast-items/:id`, and `DELETE /api/forecast-items/:id`. `kind` SHALL be one of `hs_deposit`, `sc_deposit` (planned lockups, stored negative — they reduce `cash`, add to `locked`, and schedule a `deposit_return`), `interest` (manual interest additions, the sheet's `+1000`-style cell), `tax` (Tax/基金/醫療保險), `stock` (股票), `bill` (a `bill` override), or `other` (TBC). Multiple items SHALL be allowed per month and kind — the sheet's `=7000+6000` cell is two items. `return_month` SHALL be rejected on kinds other than `hs_deposit`/`sc_deposit`, and `amount` SHALL be finite and non-zero. Items dated outside the current window SHALL still be stored: items ahead of the window enter it as months slide forward; items whose month is before the window are stale — their placement and return effects apply only while the item's own month is inside the window (the sheet's shifted-out cells fire nothing either, and this also prevents a real deposit created without conversion from double-counting a stale plan's return).
+The system SHALL store forecast items — `id`, `month` (`YYYY-MM-01`), `kind`, signed `amount`, `note`, and optional `return_month` — exposed through `POST /api/forecast/:ym/items`, `PATCH /api/forecast-items/:id`, and `DELETE /api/forecast-items/:id`. `kind` SHALL be one of an enumerated set that includes `hs_deposit` and `sc_deposit` (planned lockups, stored negative — they reduce `cash`, add to `locked`, and schedule a `deposit_return`).
 
 #### Scenario: Two placements in one cell's place
 
@@ -437,6 +770,33 @@ The system SHALL store forecast items — `id`, `month` (`YYYY-MM-01`), `kind`, 
 
 - **WHEN** an item is created with `kind` `tax` and `return_month` `2027-03`
 - **THEN** the request fails with 400
+
+### Requirement: Remaining forecast kinds
+
+The `kind` enumeration continues with `interest` (manual interest additions, the sheet's `+1000`-style cell), `tax` (Tax/基金/醫療保險), `stock` (股票), `bill` (a `bill` override), and `other` (TBC). Multiple items SHALL be allowed per month and kind — the sheet's `=7000+6000` cell is two items.
+
+#### Scenario: Multiple items per kind
+
+- **WHEN** two `hs_deposit` items are stored for a month
+- **THEN** both are kept, like the sheet's `=7000+6000` cell
+
+### Requirement: Forecast item validation
+
+`return_month` SHALL be rejected on kinds other than `hs_deposit`/`sc_deposit`, and `amount` SHALL be finite and non-zero.
+
+#### Scenario: Return month on a tax item rejected
+
+- **WHEN** a `tax` item is created with a `return_month`
+- **THEN** it is rejected
+
+### Requirement: Out-of-window plan items
+
+Items dated outside the current window SHALL still be stored: items ahead of the window enter it as months slide forward; items whose month is before the window are stale — their placement and return effects apply only while the item's own month is inside the window (the sheet's shifted-out cells fire nothing either, and this also prevents a real deposit created without conversion from double-counting a stale plan's return).
+
+#### Scenario: Stale item fires nothing
+
+- **WHEN** an item's month is before the window
+- **THEN** its placement and return effects apply only while its own month is inside the window
 
 ### Requirement: Deposit plan returns
 
@@ -454,7 +814,7 @@ Each in-window `hs_deposit` item SHALL schedule a `deposit_return` of `−amount
 
 ### Requirement: Convert plan to deposit
 
-`POST /api/forecast-items/:id/convert` SHALL accept the deposit fields (`principal` prefilled with `−amount` by the frontend, `end_date` required, `rate`/`interest`/`start_date`/`label`/`note` optional, `bank` defaulting from the item kind), create the deposit row, and delete the forecast item in one transaction. The item's scheduled `deposit_return` disappears with it since returns are derived. When the deposit's `start_date` falls in the plan's month, and its `end_date` falls in the plan's return month, the forecast's `cash`, `locked`, `semi_liquid`, and `ref_check` SHALL be unchanged by the conversion except for the deposit's own `interest` now counting in its end month.
+`POST /api/forecast-items/:id/convert` SHALL accept the deposit fields (`principal` prefilled with `−amount` by the frontend, `end_date` required, `rate`/`interest`/`start_date`/`label`/`note` optional, `bank` defaulting from the item kind), create the deposit row, and delete the forecast item in one transaction.
 
 #### Scenario: Conversion replaces the plan
 
@@ -466,9 +826,18 @@ Each in-window `hs_deposit` item SHALL schedule a `deposit_return` of `−amount
 - **WHEN** the current month `2026-09` holds an `sc_deposit` plan `-55000` and it is converted with `start_date` `2026-09-30`, `end_date` `2027-01-05`, and `interest` `435`
 - **THEN** every month's `cash` and `semi_liquid` are the same as before the conversion, except that from `2027-01` onward they are `435` higher, and every month's `locked` is unchanged
 
+### Requirement: Conversion forecast effects
+
+The item's scheduled `deposit_return` disappears with it since returns are derived. When the deposit's `start_date` falls in the plan's month, and its `end_date` falls in the plan's return month, the forecast's `cash`, `locked`, `semi_liquid`, and `ref_check` SHALL be unchanged by the conversion except for the deposit's own `interest` now counting in its end month.
+
+#### Scenario: Conversion preserves the forecast
+
+- **WHEN** a plan converts to a deposit with `start_date` in the plan's month and `end_date` in its return month
+- **THEN** `cash`, `locked`, `semi_liquid` and `ref_check` are unchanged except for the deposit's `interest` in its end month
+
 ### Requirement: Bill amount setting
 
-`PATCH /api/months/settings` SHALL also accept `bill_amount` (finite, non-negative), stored as `forecast.bill_amount` in `app_meta`. The seeded default SHALL be `2158` (the sheet's `B39`).
+`PATCH /api/settings` SHALL also accept `bill_amount` (finite, non-negative), stored as `forecast.bill_amount` in `app_meta`. The seeded default SHALL be `2158` (the sheet's `B39`).
 
 #### Scenario: Updated amount flows through
 
@@ -477,7 +846,7 @@ Each in-window `hs_deposit` item SHALL schedule a `deposit_return` of `−amount
 
 ### Requirement: 總覽 預測 grid card
 
-The 總覽 page SHALL show a 預測 card rendering the grid with months as columns and the sheet's lines as rows — `ref check`, `半流動`, month-end dates, `活期`, `定期+SC`, `start`, `salary`, `支出`, `定期 finish`, `定期 HS`, `SC高息馬拉松`, `利息`, `Tax/基金/醫療保險`, `股票`, `繳費`, `TBC - 定期 end`, `TBC` — `—` while a figure is absent. Plan cells SHALL offer inline add/edit/delete per item and a `轉為定期` action on `hs_deposit`/`sc_deposit` items that opens the deposit form prefilled. Each of the month's `deposit_placements` SHALL appear as a read-only line (label, `−principal`, `start_date`, marked `已定期`) in the `定期 HS` row when its bank is `HS` and in the `SC高息馬拉松` row otherwise; the cell's figure SHALL be Σ its plan amounts plus Σ `−principal` of its placements, and placements SHALL offer no edit, delete, or convert action. `ref_check` SHALL render in the negative/red style while below `0`. A `活期` cell SHALL render in the negative/red style while its `cash` figure is below `20000` — a cell at exactly `20000`, or `—` while `cash` is absent, renders normally. The view SHALL reload after every mutation.
+The 總覽 page SHALL show a 預測 card rendering the grid with months as columns and the sheet's lines as rows — `ref check`, `半流動`, month-end dates, `活期`, `定期+SC`, `start`, `salary`, `支出`, `定期 finish`, `定期 HS`, `SC高息馬拉松`, `利息`, `Tax/基金/醫療保險`, `股票`, `繳費`, `TBC - 定期 end`, `TBC` — `—` while a figure is absent.
 
 #### Scenario: Grid renders
 
@@ -499,16 +868,36 @@ The 總覽 page SHALL show a 預測 card rendering the grid with months as colum
 - **WHEN** a month's `cash` is `15000`, the next column's `cash` is `20000`, and a third column's `cash` is absent
 - **THEN** the first `活期` cell renders in the negative/red style while the `20000` and `—` cells render normally
 
+### Requirement: Plan cell editing
+
+Plan cells SHALL offer inline add/edit/delete per item and a `轉為定期` action on `hs_deposit`/`sc_deposit` items that opens the deposit form prefilled.
+
+#### Scenario: Convert action on a plan cell
+
+- **WHEN** an `hs_deposit` plan cell is shown
+- **THEN** it offers a `轉為定期` action opening the deposit form prefilled
+
+### Requirement: Deposit placement lines
+
+Each of the month's `deposit_placements` SHALL appear as a read-only line (label, `−principal`, `start_date`, marked `已定期`) in the `定期 HS` row when its bank is `HS` and in the `SC高息馬拉松` row otherwise; the cell's figure SHALL be Σ its plan amounts plus Σ `−principal` of its placements, and placements SHALL offer no edit, delete, or convert action.
+
+#### Scenario: Placement routed by bank
+
+- **WHEN** a placement's bank is `HS`
+- **THEN** its read-only line appears in the `定期 HS` row
+
+### Requirement: Grid styling and reload
+
+`ref_check` SHALL render in the negative/red style while below `0`. A `活期` cell SHALL render in the negative/red style while its `cash` figure is below `20000` — a cell at exactly `20000`, or `—` while `cash` is absent, renders normally. The view SHALL reload after every mutation.
+
+#### Scenario: Low cash cell shows red
+
+- **WHEN** a `活期` cell's `cash` figure is `19999`
+- **THEN** it renders in the negative/red style
+
 ### Requirement: Money Master block
 
 `GET /api/overview` SHALL return a `money_master` block mirroring the sheet's `J29:N35` challenge tracker: the stored inputs `start_date` (challenge start `YYYY-MM-DD`), `saved` (the bank app's saved figure), `target_months`, and `target_amount`; the effective `month_now` and `coming_save`; and the derived `months_left`, `avg_per_month` (`M31`), `yearly_rate` (`N31`), `time_progress` (`K33`), `saved_progress` (`L33`), `progress_gap` (`M33`), and `can_use` (`K35`).
-
-- `month_now` SHALL be the stored `money_master.month_now` override when set, else `full months elapsed since start_date + 1` (the bank's 1-indexed month counter), absent while no `start_date` is stored and no override exists.
-- `months_left` SHALL be `max(1, target_months − month_now + 1)`, absent while either input is missing.
-- `coming_save` SHALL be the stored `money_master.coming_save` override when set, else `salary + (target_amount − saved) ÷ months_left` — negative while ahead of target, matching the bank app — absent while any of salary, `target_amount`, `saved`, or `months_left` is missing.
-- `avg_per_month` SHALL be `saved ÷ month_now`, `yearly_rate` SHALL be `avg_per_month × 12`, each absent while its inputs are missing or the divisor is zero.
-- `time_progress` SHALL be `month_now ÷ target_months`, `saved_progress` SHALL be `saved ÷ target_amount`, `progress_gap` SHALL be `saved_progress − time_progress`, each absent while its inputs are missing or the divisor is zero.
-- `can_use` SHALL be `salary − coming_save`, absent while either input is missing; it MAY exceed salary while `coming_save` is negative.
 
 #### Scenario: Live challenge derived
 
@@ -530,6 +919,44 @@ The 總覽 page SHALL show a 預測 card rendering the grid with months as colum
 - **WHEN** the derived `month_now` exceeds `target_months`
 - **THEN** `months_left` is `1`, `time_progress` exceeds `1`, and `coming_save` still derives from the full remaining gap
 
+### Requirement: Money Master month counters
+
+- `month_now` SHALL be the stored `money_master.month_now` override when set, else `full months elapsed since start_date + 1` (the bank's 1-indexed month counter), absent while no `start_date` is stored and no override exists.
+- `months_left` SHALL be `max(1, target_months − month_now + 1)`, absent while either input is missing.
+
+#### Scenario: Override wins
+
+- **WHEN** `money_master.month_now` is set
+- **THEN** `month_now` is the override, not the elapsed count
+
+### Requirement: Money Master coming save
+
+- `coming_save` SHALL be the stored `money_master.coming_save` override when set, else `salary + (target_amount − saved) ÷ months_left` — negative while ahead of target, matching the bank app — absent while any of salary, `target_amount`, `saved`, or `months_left` is missing.
+
+#### Scenario: Negative while ahead
+
+- **WHEN** `saved` is ahead of `target_amount`
+- **THEN** `coming_save` is negative, matching the bank app
+
+### Requirement: Money Master rates and can-use
+
+- `avg_per_month` SHALL be `saved ÷ month_now`, `yearly_rate` SHALL be `avg_per_month × 12`, each absent while its inputs are missing or the divisor is zero.
+- `time_progress` SHALL be `month_now ÷ target_months`, `saved_progress` SHALL be `saved ÷ target_amount`, `progress_gap` SHALL be `saved_progress − time_progress`, each absent while its inputs are missing or the divisor is zero.
+
+#### Scenario: Progress gap
+
+- **WHEN** `month_now` and `target_months` and `saved` and `target_amount` are present
+- **THEN** `progress_gap` is `saved_progress − time_progress`
+
+### Requirement: Money Master can-use
+
+- `can_use` SHALL be `salary − coming_save`, absent while either input is missing; it MAY exceed salary while `coming_save` is negative.
+
+#### Scenario: Can-use may exceed salary
+
+- **WHEN** `coming_save` is negative
+- **THEN** `can_use` exceeds salary
+
 ### Requirement: Money Master card
 
 The 總覽 page SHALL show a `Money Master` card mirroring the sheet's layout: a `現在` row and a `目標` row carrying month · saved · `平均` (the 現在 row's `/mo` pace and the 目標 row's `/yr` pace), a `進度` row showing `time_progress`, `saved_progress`, and `progress_gap` as percentages, a `每月需儲` row, and a `可動用` row — each figure rendered as `—` while absent. `每月需儲` and `可動用` SHALL render in the negative/red style while below zero.
@@ -546,7 +973,7 @@ The 總覽 page SHALL show a `Money Master` card mirroring the sheet's layout: a
 
 ### Requirement: 半流動資金 target ratio setting
 
-`PATCH /api/months/settings` SHALL also accept `semi_liquid_target` — the share of 流動資產 that 半流動資金 should cover — stored as `overview.semi_liquid_target` in `app_meta`. The value SHALL be a finite fraction in `[0, 1)`; `null` clears the stored value. `GET /api/months/settings` SHALL return the effective value (`0.25` — the sheet's `C14`/`N7` literal — while unset), and `GET /api/overview` SHALL carry the effective ratio so the 總覽 footer can label the configured percent.
+`PATCH /api/settings` SHALL also accept `semi_liquid_target`, the share of 流動資產 that 半流動資金 should cover. It is stored as `strategy.semi_liquid_target` in `app_meta`. The value SHALL be a finite fraction in `[0, 1)`; `null` clears the stored value. `GET /api/settings` SHALL return the effective value (`0.25` while unset, the sheet's `C14`/`N7` literal). `GET /api/overview` SHALL carry the effective ratio so the 總覽 footer can label the configured percent.
 
 #### Scenario: Updated ratio flows through
 

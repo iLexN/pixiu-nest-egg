@@ -5,6 +5,7 @@ use serde::{Deserialize, Serialize};
 
 use super::AppState;
 use super::mpf::NoteResponse;
+use super::patch::{merge_num, merge_text};
 use crate::calc::{
     AiaEventInput, AiaPolicyFacts, AiaPolicyInput, AiaTotals, aia_totals, apply_aia_payment,
     apply_aia_withdrawal, next_premium_due, undo_aia_event_amount, validate_aia_event,
@@ -12,8 +13,7 @@ use crate::calc::{
 };
 use crate::error::{ApiError, ErrorBody};
 use crate::models::{
-    AiaEvent, AiaEventKind, AiaNotePatch, AiaPolicy, AiaPolicyPatch, AiaRatePatch, NewAiaEvent,
-    NewAiaPolicy,
+    AiaEvent, AiaEventKind, AiaNotePatch, AiaPolicy, AiaPolicyPatch, NewAiaEvent, NewAiaPolicy,
 };
 use crate::store::aia as store;
 use crate::store::{now_timestamp, today};
@@ -93,17 +93,6 @@ pub async fn update(
     Json(patch): Json<AiaPolicyPatch>,
 ) -> Result<Json<AiaPolicy>, ApiError> {
     let existing = store::load_policy(&state.pool, id).await?;
-
-    let merge_text = |patch: Option<Option<String>>, existing: Option<String>| match patch {
-        Some(value) => value
-            .map(|value| value.trim().to_string())
-            .filter(|value| !value.is_empty()),
-        None => existing,
-    };
-    let merge_num = |patch: Option<Option<f64>>, existing: Option<f64>| match patch {
-        Some(value) => value,
-        None => existing,
-    };
 
     let label = patch.label.unwrap_or(existing.label);
     let policy_no = merge_text(patch.policy_no, existing.policy_no);
@@ -201,9 +190,7 @@ pub struct AiaSummaryResponse {
 pub async fn summary(State(state): State<AppState>) -> Result<Json<AiaSummaryResponse>, ApiError> {
     let today = today();
     let policies = store::load_all_policies(&state.pool).await?;
-    let rate = crate::store::meta::meta_get(&state.pool, store::RATE_KEY)
-        .await?
-        .and_then(|raw| raw.parse::<f64>().ok());
+    let rate = crate::store::fx::usd_rate(&state.pool).await?;
     let facts: Vec<AiaPolicyFacts> = policies.iter().map(store::facts_of).collect();
     let totals = aia_totals(&facts, rate);
     let next_due = next_premium_due(
@@ -222,7 +209,7 @@ pub async fn summary(State(state): State<AppState>) -> Result<Json<AiaSummaryRes
         with_events.push(PolicyWithEvents { policy, events });
     }
 
-    let note = crate::store::meta::meta_get(&state.pool, store::NOTE_KEY).await?;
+    let note = crate::store::settings::aia_note(&state.pool).await?;
     Ok(Json(AiaSummaryResponse {
         today: today.to_string(),
         rate,
@@ -231,11 +218,6 @@ pub async fn summary(State(state): State<AppState>) -> Result<Json<AiaSummaryRes
         totals,
         policies: with_events,
     }))
-}
-
-#[derive(Debug, Serialize, utoipa::ToSchema)]
-pub struct RateResponse {
-    pub rate: Option<f64>,
 }
 
 /// The section's free-text note, kept in `app_meta` under `aia.note` — the
@@ -253,39 +235,10 @@ pub async fn update_note(
     State(state): State<AppState>,
     Json(body): Json<AiaNotePatch>,
 ) -> Result<Json<NoteResponse>, ApiError> {
-    crate::store::meta::meta_put(&state.pool, store::NOTE_KEY, body.note.as_deref()).await?;
+    crate::store::settings::set_aia_note(&state.pool, body.note.as_deref()).await?;
     Ok(Json(NoteResponse {
-        note: crate::store::meta::meta_get(&state.pool, store::NOTE_KEY).await?,
+        note: crate::store::settings::aia_note(&state.pool).await?,
     }))
-}
-
-/// The workbook keeps a live GOOGLEFINANCE rate in `Overview!N3`; the app keeps
-/// a manual copy in `app_meta` — same facility as the MPF note.
-#[utoipa::path(
-    patch,
-    path = "/api/aia/rate",
-    tag = "aia",
-    request_body = AiaRatePatch,
-    responses(
-        (status = 200, description = "Stored USD→HKD rate (null clears it)", body = RateResponse),
-        (status = 400, description = "Rate must be positive", body = ErrorBody),
-    )
-)]
-pub async fn update_rate(
-    State(state): State<AppState>,
-    Json(body): Json<AiaRatePatch>,
-) -> Result<Json<RateResponse>, ApiError> {
-    if let Some(rate) = body.rate
-        && (!rate.is_finite() || rate <= 0.0)
-    {
-        return Err(ApiError::field("rate", "rate must be a positive number"));
-    }
-    let value = body.rate.map(|rate| rate.to_string());
-    crate::store::meta::meta_put(&state.pool, store::RATE_KEY, value.as_deref()).await?;
-    let rate = crate::store::meta::meta_get(&state.pool, store::RATE_KEY)
-        .await?
-        .and_then(|raw| raw.parse::<f64>().ok());
-    Ok(Json(RateResponse { rate }))
 }
 
 #[derive(Debug, Deserialize, utoipa::ToSchema, utoipa::IntoParams)]

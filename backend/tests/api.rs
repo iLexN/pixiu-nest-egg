@@ -8,10 +8,39 @@ use wealth_backend::db;
 use wealth_backend::routes::{AppState, api_router};
 
 async fn app() -> Router {
+    app_with_pool().await.0
+}
+
+async fn app_with_pool() -> (Router, sqlx::SqlitePool) {
     let pool = db::connect_memory().await.expect("in-memory database");
     // Route paths already carry the /api prefix.
-    let (api, _openapi) = api_router(AppState { pool });
-    Router::new().merge(api)
+    let (api, _openapi) = api_router(AppState { pool: pool.clone() });
+    (Router::new().merge(api), pool)
+}
+
+/// A 活期 bank row seeded directly; 'HS' is flagged the receipt default,
+/// matching the migrated production data.
+async fn seed_cash(pool: &sqlx::SqlitePool, label: &str, amount: f64) -> i64 {
+    let is_default = label == "HS";
+    sqlx::query_scalar(
+        "INSERT INTO cash_accounts (label, currency, role, amount, is_default_receipt, \
+         sort_order, updated_at) VALUES (?, 'HKD', 'bank', ?, ?, 1, '2026-01-01T00:00:00') \
+         RETURNING id",
+    )
+    .bind(label)
+    .bind(amount)
+    .bind(is_default)
+    .fetch_one(pool)
+    .await
+    .expect("cash account")
+}
+
+async fn cash_amount(pool: &sqlx::SqlitePool, id: i64) -> f64 {
+    sqlx::query_scalar("SELECT amount FROM cash_accounts WHERE id = ?")
+        .bind(id)
+        .fetch_one(pool)
+        .await
+        .expect("cash amount")
 }
 
 async fn send(app: &Router, method: &str, uri: &str, body: Option<Value>) -> (StatusCode, Value) {
@@ -732,19 +761,11 @@ async fn deposit_summary_reports_upcoming_rollups_and_year_tables() {
 
 #[tokio::test]
 async fn deposit_receive_credits_cash_and_records_the_month_item() {
-    let app = app().await;
+    let (app, pool) = app_with_pool().await;
 
-    // The cash row the returned money credits into, and the month the
+    // The cash account the returned money credits into, and the month the
     // dep-end item lands in.
-    let (status, asset) = send(
-        &app,
-        "POST",
-        "/api/manual-assets",
-        Some(json!({ "label": "渣打", "kind": "cash", "amount": 1000.0 })),
-    )
-    .await;
-    assert_eq!(status, StatusCode::CREATED, "body = {asset}");
-    let asset_id = asset["id"].as_i64().expect("asset id");
+    let asset_id = seed_cash(&pool, "渣打", 1000.0).await;
     let (status, _) = send(
         &app,
         "PATCH",
@@ -775,15 +796,22 @@ async fn deposit_receive_credits_cash_and_records_the_month_item() {
         &app,
         "POST",
         &format!("/api/deposits/{id}/receive"),
-        Some(json!({ "credit_asset_id": asset_id })),
+        Some(json!({ "account_id": asset_id })),
     )
     .await;
     assert_eq!(status, StatusCode::OK, "body = {body}");
     assert_eq!(body["status"], "END");
     assert!(body["received_at"].is_string());
 
-    let (_, assets) = send(&app, "GET", "/api/manual-assets", None).await;
-    approx(&assets[0]["amount"], 111993.0);
+    approx(&cash_amount(&pool, asset_id).await.into(), 111993.0);
+    // The exact account credited is recorded for reversal.
+    let credited_account: i64 =
+        sqlx::query_scalar("SELECT credited_account_id FROM deposits WHERE id = ?")
+            .bind(id)
+            .fetch_one(&pool)
+            .await
+            .expect("credited account");
+    assert_eq!(credited_account, asset_id);
 
     let (_, detail) = send(&app, "GET", "/api/months/2099-10", None).await;
     approx(&detail["month"]["interest"], 993.0);
@@ -808,17 +836,9 @@ async fn deposit_receive_credits_cash_and_records_the_month_item() {
 
 #[tokio::test]
 async fn bond_receive_credits_principal_and_records_the_month_item() {
-    let app = app().await;
+    let (app, pool) = app_with_pool().await;
 
-    let (status, asset) = send(
-        &app,
-        "POST",
-        "/api/manual-assets",
-        Some(json!({ "label": "HS", "kind": "cash", "amount": 500.0 })),
-    )
-    .await;
-    assert_eq!(status, StatusCode::CREATED, "body = {asset}");
-    let asset_id = asset["id"].as_i64().expect("asset id");
+    let asset_id = seed_cash(&pool, "HS", 500.0).await;
     let (status, _) = send(
         &app,
         "PATCH",
@@ -845,14 +865,13 @@ async fn bond_receive_credits_principal_and_records_the_month_item() {
         &app,
         "POST",
         &format!("/api/bonds/{id}/receive"),
-        Some(json!({ "credit_asset_id": asset_id })),
+        Some(json!({ "account_id": asset_id })),
     )
     .await;
     assert_eq!(status, StatusCode::OK, "body = {body}");
     assert!(body["received_at"].is_string());
 
-    let (_, assets) = send(&app, "GET", "/api/manual-assets", None).await;
-    approx(&assets[0]["amount"], 100500.0);
+    approx(&cash_amount(&pool, asset_id).await.into(), 100500.0);
     let bond_end_key = format!("bond-end:{id}");
     let (_, detail) = send(&app, "GET", "/api/months/2099-12", None).await;
     let item = detail["items"]
@@ -1055,17 +1074,10 @@ async fn dividend_receipt_without_stock_price_stores_null() {
 
 #[tokio::test]
 async fn coupon_and_dividend_receive_banks_in_and_records_the_item() {
-    let app = app().await;
+    let (app, pool) = app_with_pool().await;
 
-    // HS cash row + month rows for the receipts' months.
-    let (status, hs) = send(
-        &app,
-        "POST",
-        "/api/manual-assets",
-        Some(json!({ "label": "HS", "kind": "cash", "amount": 100.0 })),
-    )
-    .await;
-    assert_eq!(status, StatusCode::CREATED, "body = {hs}");
+    // HS cash account + month rows for the receipts' months.
+    let hs_id = seed_cash(&pool, "HS", 100.0).await;
     for ym in ["2099-10", "2099-11"] {
         send(
             &app,
@@ -1107,8 +1119,7 @@ async fn coupon_and_dividend_receive_banks_in_and_records_the_item() {
     .await;
     assert_eq!(status, StatusCode::OK, "body = {body}");
 
-    let (_, assets) = send(&app, "GET", "/api/manual-assets", None).await;
-    approx(&assets[0]["amount"], 1100.0);
+    approx(&cash_amount(&pool, hs_id).await.into(), 1100.0);
     let coupon_key = format!("coupon:{coupon_id}");
     let (_, detail) = send(&app, "GET", "/api/months/2099-10", None).await;
     let item = detail["items"]
@@ -1128,8 +1139,7 @@ async fn coupon_and_dividend_receive_banks_in_and_records_the_item() {
     )
     .await;
     assert_eq!(status, StatusCode::OK);
-    let (_, assets) = send(&app, "GET", "/api/manual-assets", None).await;
-    approx(&assets[0]["amount"], 100.0);
+    approx(&cash_amount(&pool, hs_id).await.into(), 100.0);
     let (_, detail) = send(&app, "GET", "/api/months/2099-10", None).await;
     assert!(
         detail["items"]
@@ -1161,8 +1171,7 @@ async fn coupon_and_dividend_receive_banks_in_and_records_the_item() {
     )
     .await;
     assert_eq!(status, StatusCode::OK, "body = {body}");
-    let (_, assets) = send(&app, "GET", "/api/manual-assets", None).await;
-    approx(&assets[0]["amount"], 600.0);
+    approx(&cash_amount(&pool, hs_id).await.into(), 600.0);
     let div_key = format!("div:{div_id}");
     let (_, detail) = send(&app, "GET", "/api/months/2099-11", None).await;
     assert!(
@@ -1193,10 +1202,23 @@ async fn coupon_and_dividend_receive_banks_in_and_records_the_item() {
     )
     .await;
     assert_eq!(status, StatusCode::OK, "body = {body}");
-    let (_, assets) = send(&app, "GET", "/api/manual-assets", None).await;
-    approx(&assets[0]["amount"], 600.0); // HS untouched
+    approx(&cash_amount(&pool, hs_id).await.into(), 600.0); // HS untouched
     let (_, overview) = send(&app, "GET", "/api/overview", None).await;
     approx(&overview["ibkr"]["usd_cash"], 200.0);
+    // The recorded credit points at the IBKR USD broker account.
+    let ibkr_usd: i64 = sqlx::query_scalar(
+        "SELECT id FROM cash_accounts WHERE role = 'broker' AND currency = 'USD'",
+    )
+    .fetch_one(&pool)
+    .await
+    .expect("IBKR USD account");
+    let credited_account: i64 =
+        sqlx::query_scalar("SELECT credited_account_id FROM dividends WHERE id = ?")
+            .bind(us_id)
+            .fetch_one(&pool)
+            .await
+            .expect("credited account");
+    assert_eq!(credited_account, ibkr_usd);
     let (_, detail) = send(&app, "GET", "/api/months/2099-11", None).await;
     assert!(
         detail["items"]
@@ -1354,18 +1376,10 @@ async fn dividend_us_receipt_with_withholding_tax() {
 
 #[tokio::test]
 async fn month_recapture_snapshots_start_cash_from_the_cash_sum() {
-    let app = app().await;
+    let (app, pool) = app_with_pool().await;
 
-    for (label, amount) in [("HS", 1000.0), ("渣打", 500.0)] {
-        let (status, body) = send(
-            &app,
-            "POST",
-            "/api/manual-assets",
-            Some(json!({ "label": label, "kind": "cash", "amount": amount })),
-        )
-        .await;
-        assert_eq!(status, StatusCode::CREATED, "body = {body}");
-    }
+    let hs_id = seed_cash(&pool, "HS", 1000.0).await;
+    seed_cash(&pool, "渣打", 500.0).await;
 
     // Creating a month stores no 月初.
     let (status, month) = send(&app, "PATCH", "/api/months/2099-03", Some(json!({}))).await;
@@ -1383,17 +1397,12 @@ async fn month_recapture_snapshots_start_cash_from_the_cash_sum() {
     assert_eq!(status, StatusCode::OK, "body = {month}");
     approx(&month["start_cash"], 1500.0);
 
-    // Editing a cash row then recapturing again refreshes 月初.
-    let (_, assets) = send(&app, "GET", "/api/manual-assets", None).await;
-    let hs_id = assets[0]["id"].as_i64().expect("asset id");
-    let (status, _) = send(
-        &app,
-        "PATCH",
-        &format!("/api/manual-assets/{hs_id}"),
-        Some(json!({ "amount": 700.0 })),
-    )
-    .await;
-    assert_eq!(status, StatusCode::OK);
+    // Editing a cash account then recapturing again refreshes 月初.
+    sqlx::query("UPDATE cash_accounts SET amount = 700 WHERE id = ?")
+        .bind(hs_id)
+        .execute(&pool)
+        .await
+        .expect("edit cash account");
     let (status, month) = send(
         &app,
         "PATCH",
@@ -1926,7 +1935,7 @@ async fn family_deposits_do_not_touch_user_totals() {
                 "interest": 993, "end_date": "2099-10-12" }),
     )
     .await;
-    let ym = wealth_backend::routes::today().to_string()[..7].to_string();
+    let ym = wealth_backend::store::today().to_string()[..7].to_string();
     let (status, _) = send(&app, "PATCH", &format!("/api/months/{ym}"), Some(json!({}))).await;
     assert_eq!(status, StatusCode::OK);
 
@@ -1980,7 +1989,7 @@ fn ym_add(ym: &str, months: i64) -> String {
 #[tokio::test]
 async fn forecast_items_crud_and_validation() {
     let app = app().await;
-    let ym = wealth_backend::routes::today().to_string()[..7].to_string();
+    let ym = wealth_backend::store::today().to_string()[..7].to_string();
     let next = ym_add(&ym, 1);
 
     // return_month on a non-deposit kind → 400.
@@ -2066,14 +2075,14 @@ async fn forecast_items_crud_and_validation() {
 async fn forecast_bill_amount_setting_round_trips() {
     let app = app().await;
 
-    let (status, body) = send(&app, "GET", "/api/months/settings", None).await;
+    let (status, body) = send(&app, "GET", "/api/settings", None).await;
     assert_eq!(status, StatusCode::OK);
     approx(&body["bill_amount"], 2158.0);
 
     let (status, body) = send(
         &app,
         "PATCH",
-        "/api/months/settings",
+        "/api/settings",
         Some(json!({ "bill_amount": 2260.75 })),
     )
     .await;
@@ -2084,7 +2093,7 @@ async fn forecast_bill_amount_setting_round_trips() {
     let (status, _) = send(
         &app,
         "PATCH",
-        "/api/months/settings",
+        "/api/settings",
         Some(json!({ "bill_amount": -1 })),
     )
     .await;
@@ -2110,7 +2119,7 @@ async fn forecast_bill_amount_setting_round_trips() {
     let (status, body) = send(
         &app,
         "PATCH",
-        "/api/months/settings",
+        "/api/settings",
         Some(json!({ "bill_amount": null })),
     )
     .await;
@@ -2121,7 +2130,7 @@ async fn forecast_bill_amount_setting_round_trips() {
 #[tokio::test]
 async fn forecast_convert_turns_a_plan_into_a_deposit() {
     let app = app().await;
-    let ym = wealth_backend::routes::today().to_string()[..7].to_string();
+    let ym = wealth_backend::store::today().to_string()[..7].to_string();
     let end_ym = ym_add(&ym, 6);
 
     let (status, body) = send(
@@ -2188,4 +2197,376 @@ async fn forecast_convert_turns_a_plan_into_a_deposit() {
     // The deposit itself is the locked anchor now; it finishes at end month.
     approx(&months[0]["locked"], 180_000.0);
     approx(&months[6]["deposit_finish"], 180_000.0);
+}
+
+/// A coupon receipt banks into the default account; after the default moves,
+/// clearing the receipt reverses the ORIGINAL account, not the new default.
+#[tokio::test]
+async fn coupon_reversal_follows_the_recorded_account_after_default_moves() {
+    let (app, pool) = app_with_pool().await;
+
+    let hs_id = seed_cash(&pool, "HS", 100.0).await;
+    let sc_id = seed_cash(&pool, "渣打", 0.0).await;
+    send(
+        &app,
+        "PATCH",
+        "/api/months/2099-10",
+        Some(json!({ "start_cash": 1.0 })),
+    )
+    .await;
+
+    let (status, bond) = send(
+        &app,
+        "POST",
+        "/api/bonds",
+        Some(json!({ "label": "b", "principal": 100000, "maturity_date": "2099-12-23" })),
+    )
+    .await;
+    assert_eq!(status, StatusCode::CREATED, "body = {bond}");
+    let bond_id = bond["id"].as_i64().expect("bond id");
+    let (status, coupon) = send(
+        &app,
+        "POST",
+        "/api/coupons",
+        Some(json!({ "bond_id": bond_id, "pay_date": "2099-10-23", "per_10k": 200.0 })),
+    )
+    .await;
+    assert_eq!(status, StatusCode::CREATED, "body = {coupon}");
+    let coupon_id = coupon["id"].as_i64().expect("coupon id");
+
+    // 收訖 into the HS default.
+    let (status, body) = send(
+        &app,
+        "PATCH",
+        &format!("/api/coupons/{coupon_id}"),
+        Some(json!({ "received_amount": 1000.0 })),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "body = {body}");
+    approx(&cash_amount(&pool, hs_id).await.into(), 1100.0);
+    let credited_account: i64 =
+        sqlx::query_scalar("SELECT credited_account_id FROM bond_coupons WHERE id = ?")
+            .bind(coupon_id)
+            .fetch_one(&pool)
+            .await
+            .expect("credited account");
+    assert_eq!(credited_account, hs_id);
+
+    // Move the default to 渣打.
+    sqlx::query("UPDATE cash_accounts SET is_default_receipt = 0 WHERE id = ?")
+        .bind(hs_id)
+        .execute(&pool)
+        .await
+        .unwrap();
+    sqlx::query("UPDATE cash_accounts SET is_default_receipt = 1 WHERE id = ?")
+        .bind(sc_id)
+        .execute(&pool)
+        .await
+        .unwrap();
+
+    // Clearing the receipt subtracts from HS — the recorded account.
+    let (status, body) = send(
+        &app,
+        "PATCH",
+        &format!("/api/coupons/{coupon_id}"),
+        Some(json!({ "received_amount": null })),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "body = {body}");
+    approx(&cash_amount(&pool, hs_id).await.into(), 100.0);
+    approx(&cash_amount(&pool, sc_id).await.into(), 0.0);
+}
+
+// --- 5.1 fx rates ---
+
+#[tokio::test]
+async fn fx_rate_round_trips_and_clears() {
+    let app = app().await;
+
+    let (status, body) = send(
+        &app,
+        "PATCH",
+        "/api/fx-rates/USD",
+        Some(json!({ "rate": 7.8 })),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "body = {body}");
+    assert_eq!(body["currency"], "USD");
+    approx(&body["rate_to_hkd"], 7.8);
+    assert!(body["updated_at"].is_string());
+
+    let (status, body) = send(&app, "GET", "/api/fx-rates", None).await;
+    assert_eq!(status, StatusCode::OK);
+    let rates = body.as_array().expect("rates");
+    assert_eq!(rates.len(), 1);
+    assert_eq!(rates[0]["currency"], "USD");
+    approx(&rates[0]["rate_to_hkd"], 7.8);
+
+    // `null` clears the rate: AIA's HKD figures drop out with it.
+    let (status, body) = send(
+        &app,
+        "PATCH",
+        "/api/fx-rates/USD",
+        Some(json!({ "rate": null })),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "body = {body}");
+    assert!(body["rate_to_hkd"].is_null());
+    assert!(body["updated_at"].is_null());
+
+    let (status, body) = send(&app, "GET", "/api/aia/summary", None).await;
+    assert_eq!(status, StatusCode::OK);
+    assert!(body["rate"].is_null());
+    assert!(body["totals"]["total_value_hkd"].is_null());
+}
+
+#[tokio::test]
+async fn fx_rate_rejects_bad_values_and_currencies() {
+    let app = app().await;
+
+    for rate in [json!(0), json!(-1.5)] {
+        let (status, body) = send(
+            &app,
+            "PATCH",
+            "/api/fx-rates/USD",
+            Some(json!({ "rate": rate })),
+        )
+        .await;
+        assert_eq!(status, StatusCode::BAD_REQUEST, "rate = {rate}");
+        assert_eq!(body["fields"][0]["field"], "rate");
+    }
+
+    let (status, body) = send(
+        &app,
+        "PATCH",
+        "/api/fx-rates/EUR",
+        Some(json!({ "rate": 8.0 })),
+    )
+    .await;
+    assert_eq!(status, StatusCode::BAD_REQUEST);
+    assert_eq!(body["fields"][0]["field"], "currency");
+}
+
+// --- 5.1 cash accounts ---
+
+#[tokio::test]
+async fn cash_account_crud_and_rules() {
+    let app = app().await;
+
+    let (status, body) = send(
+        &app,
+        "POST",
+        "/api/cash-accounts",
+        Some(json!({ "label": "HS", "currency": "HKD", "role": "bank",
+                     "amount": 100.0 })),
+    )
+    .await;
+    assert_eq!(status, StatusCode::CREATED, "body = {body}");
+    let hs_id = body["id"].as_i64().expect("id");
+    assert_eq!(body["currency"], "HKD");
+    assert_eq!(body["role"], "bank");
+
+    // A USD bank is meaningless.
+    let (status, body) = send(
+        &app,
+        "POST",
+        "/api/cash-accounts",
+        Some(json!({ "label": "USD bank", "currency": "USD", "role": "bank" })),
+    )
+    .await;
+    assert_eq!(status, StatusCode::BAD_REQUEST, "body = {body}");
+    assert_eq!(body["fields"][0]["field"], "currency");
+
+    // The migration seeds one USD broker (IBKR USD); a second conflicts.
+    let (status, _) = send(
+        &app,
+        "POST",
+        "/api/cash-accounts",
+        Some(json!({ "label": "other USD broker", "currency": "USD",
+                     "role": "broker" })),
+    )
+    .await;
+    assert_eq!(status, StatusCode::CONFLICT);
+
+    // Broker accounts cannot be deleted.
+    let (status, body) = send(&app, "GET", "/api/cash-accounts", None).await;
+    assert_eq!(status, StatusCode::OK);
+    let broker_id = body
+        .as_array()
+        .expect("accounts")
+        .iter()
+        .find(|a| a["role"] == "broker")
+        .expect("a broker account")["id"]
+        .as_i64()
+        .expect("broker id");
+    let (status, _) = send(
+        &app,
+        "DELETE",
+        &format!("/api/cash-accounts/{broker_id}"),
+        None,
+    )
+    .await;
+    assert_eq!(status, StatusCode::CONFLICT);
+
+    // Flagging 渣打 as the HKD default unflags HS in the same transaction.
+    let (status, body) = send(
+        &app,
+        "POST",
+        "/api/cash-accounts",
+        Some(json!({ "label": "渣打", "currency": "HKD", "role": "bank" })),
+    )
+    .await;
+    assert_eq!(status, StatusCode::CREATED, "body = {body}");
+    let sc_id = body["id"].as_i64().expect("id");
+
+    let (status, _) = send(
+        &app,
+        "PATCH",
+        &format!("/api/cash-accounts/{hs_id}"),
+        Some(json!({ "is_default_receipt": true })),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+    let (status, body) = send(
+        &app,
+        "PATCH",
+        &format!("/api/cash-accounts/{sc_id}"),
+        Some(json!({ "is_default_receipt": true })),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "body = {body}");
+    assert_eq!(body["is_default_receipt"], true);
+
+    let (status, body) = send(&app, "GET", "/api/cash-accounts", None).await;
+    assert_eq!(status, StatusCode::OK);
+    let accounts = body.as_array().expect("accounts");
+    let hs = accounts.iter().find(|a| a["id"] == hs_id).expect("HS");
+    assert_eq!(hs["is_default_receipt"], false);
+}
+
+// --- 5.1 receipts over HTTP ---
+
+#[tokio::test]
+async fn deposit_receive_rejects_a_wrong_currency_account() {
+    let (app, pool) = app_with_pool().await;
+
+    let usd_broker: i64 = sqlx::query_scalar(
+        "SELECT id FROM cash_accounts WHERE role = 'broker' AND currency = 'USD'",
+    )
+    .fetch_one(&pool)
+    .await
+    .expect("IBKR USD account");
+
+    let deposit = create_deposit(
+        &app,
+        json!({ "label": "SC-9632", "bank": "SC", "principal": 110000,
+                "interest": 993, "end_date": "2099-10-12" }),
+    )
+    .await;
+    let id = deposit["id"].as_i64().expect("id");
+
+    let (status, body) = send(
+        &app,
+        "POST",
+        &format!("/api/deposits/{id}/receive"),
+        Some(json!({ "account_id": usd_broker })),
+    )
+    .await;
+    assert_eq!(status, StatusCode::BAD_REQUEST, "body = {body}");
+    assert_eq!(body["fields"][0]["field"], "account_id");
+}
+
+#[tokio::test]
+async fn deposit_receive_without_bank_in_changes_no_account() {
+    let (app, pool) = app_with_pool().await;
+
+    let hs_id = seed_cash(&pool, "HS", 1000.0).await;
+    let deposit = create_deposit(
+        &app,
+        json!({ "label": "SC-9632", "bank": "SC", "principal": 110000,
+                "interest": 993, "end_date": "2099-10-12" }),
+    )
+    .await;
+    let id = deposit["id"].as_i64().expect("id");
+
+    let (status, body) = send(
+        &app,
+        "POST",
+        &format!("/api/deposits/{id}/receive"),
+        Some(json!({ "bank_in": false })),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "body = {body}");
+    assert!(body["credited_account_id"].is_null());
+    approx(&cash_amount(&pool, hs_id).await.into(), 1000.0);
+}
+
+#[tokio::test]
+async fn hk_dividend_receive_into_a_chosen_account_credits_it() {
+    let (app, pool) = app_with_pool().await;
+
+    seed_cash(&pool, "HS", 100.0).await;
+    let sc_id = seed_cash(&pool, "渣打", 500.0).await;
+
+    create_stock(&app, "HK", "中國銀行", None).await;
+    let (status, div) = send(
+        &app,
+        "POST",
+        "/api/dividends",
+        Some(json!({ "market": "HK", "code": "中國銀行",
+                     "pay_date": "2099-11-05", "estimated_amount": 480.0 })),
+    )
+    .await;
+    assert_eq!(status, StatusCode::CREATED, "body = {div}");
+    let div_id = div["id"].as_i64().expect("div id");
+
+    let (status, body) = send(
+        &app,
+        "PATCH",
+        &format!("/api/dividends/{div_id}"),
+        Some(json!({ "received_amount": 500.0, "account_id": sc_id })),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "body = {body}");
+    assert_eq!(body["credited_account_id"], sc_id);
+    approx(&body["credited_amount"], 500.0);
+    approx(&cash_amount(&pool, sc_id).await.into(), 1000.0);
+}
+
+// --- 5.1 settings move ---
+
+#[tokio::test]
+async fn settings_round_trips_at_the_new_path() {
+    let app = app().await;
+
+    let (status, body) = send(&app, "GET", "/api/settings", None).await;
+    assert_eq!(status, StatusCode::OK);
+    assert!(body["salary"].is_null());
+
+    let (status, body) = send(
+        &app,
+        "PATCH",
+        "/api/settings",
+        Some(json!({ "salary": 60000 })),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "body = {body}");
+    approx(&body["salary"], 60000.0);
+
+    let (status, body) = send(&app, "GET", "/api/settings", None).await;
+    assert_eq!(status, StatusCode::OK);
+    approx(&body["salary"], 60000.0);
+
+    // The old path is gone: /api/months/{ym} treats "settings" as a bad month
+    // key, so both methods now fail as client errors instead of serving.
+    let (status, _) = send(&app, "GET", "/api/months/settings", None).await;
+    assert!(status.is_client_error(), "status = {status}");
+    let (status, _) = send(
+        &app,
+        "PATCH",
+        "/api/months/settings",
+        Some(json!({ "salary": 1 })),
+    )
+    .await;
+    assert!(status.is_client_error(), "status = {status}");
 }

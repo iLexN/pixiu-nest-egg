@@ -6,28 +6,36 @@ import {
   type Bond,
   type BondCoupon,
   type BondSummary,
-  type ManualAsset,
+  type CashAccount,
 } from '../api'
 import { fmtMoney, fmtPercent, signClass, todayIso } from '../format'
 import DateInput from '../components/DateInput.vue'
 import RowActions from '../components/RowActions.vue'
 
 const summary = ref<BondSummary | null>(null)
-const assets = ref<ManualAsset[]>([])
+const accounts = ref<CashAccount[]>([])
 const message = ref('')
 const error = ref('')
 
-const cashAssets = computed(() => assets.value.filter((asset) => asset.kind === 'cash'))
+/** HKD cash accounts a bond receipt can bank into. */
+const cashAccounts = computed(() =>
+  accounts.value.filter((account) => account.currency === 'HKD'),
+)
+
+/** The HKD default receipt account, or none (preselects 不存入). */
+const defaultHkdAccount = computed(() =>
+  cashAccounts.value.find((account) => account.is_default_receipt),
+)
 
 async function load() {
   error.value = ''
   try {
-    const [summaryData, assetsData] = await Promise.all([
+    const [summaryData, accountsData] = await Promise.all([
       api.bondSummary(),
-      api.listManualAssets(),
+      api.listCashAccounts(),
     ])
     summary.value = summaryData
-    assets.value = assetsData
+    accounts.value = accountsData
   } catch (err) {
     error.value = err instanceof ApiError ? err.message : String(err)
   }
@@ -242,11 +250,15 @@ async function saveFix() {
 const receiving = ref<{
   coupon: BondCoupon
   amount: string | number
-  bank_in: boolean
+  account_id: number | null
 } | null>(null)
 
 function startReceive(coupon: BondCoupon) {
-  receiving.value = { coupon, amount: coupon.expected ?? '', bank_in: true }
+  receiving.value = {
+    coupon,
+    amount: coupon.expected ?? '',
+    account_id: defaultHkdAccount.value?.id ?? null,
+  }
 }
 
 async function saveReceive() {
@@ -260,7 +272,9 @@ async function saveReceive() {
   try {
     await api.updateCoupon(current.coupon.id, {
       received_amount: amount,
-      bank_in: current.bank_in,
+      ...(current.account_id === null
+        ? { bank_in: false }
+        : { account_id: current.account_id }),
     })
     receiving.value = null
     message.value = '已記錄收訖'
@@ -276,7 +290,7 @@ async function saveReceive() {
 const receivingBond = ref<{
   bond: Bond
   received_at: string
-  credit_asset_id: number | null
+  account_id: number | null
   credit_amount: string | number
 } | null>(null)
 
@@ -284,7 +298,7 @@ function startBondReceive(bond: Bond) {
   receivingBond.value = {
     bond,
     received_at: todayIso(),
-    credit_asset_id: null,
+    account_id: defaultHkdAccount.value?.id ?? null,
     credit_amount: bond.principal,
   }
 }
@@ -293,14 +307,16 @@ async function saveBondReceive() {
   const current = receivingBond.value
   if (!current) return
   const creditAmount = numOrNull(current.credit_amount)
-  if (current.credit_asset_id !== null && creditAmount === null) {
+  if (current.account_id !== null && creditAmount === null) {
     error.value = '存入金額必須是數字'
     return
   }
   try {
     await api.receiveBond(current.bond.id, {
       received_at: current.received_at || undefined,
-      credit_asset_id: current.credit_asset_id ?? undefined,
+      ...(current.account_id === null
+        ? { bank_in: false }
+        : { account_id: current.account_id }),
       credit_amount: creditAmount ?? undefined,
     })
     receivingBond.value = null
@@ -525,9 +541,14 @@ onMounted(load)
           實收金額
           <input v-model="receiving.amount" type="number" step="any" inputmode="decimal" required />
         </label>
-        <label class="checkbox">
-          <input v-model="receiving.bank_in" type="checkbox" />
-          存入活期 HS
+        <label>
+          存入活期
+          <select v-model="receiving.account_id">
+            <option :value="null">不存入</option>
+            <option v-for="account in cashAccounts" :key="account.id" :value="account.id">
+              {{ account.label }}（{{ fmtMoney(account.amount) }}）
+            </option>
+          </select>
         </label>
         <div class="form-actions">
           <button type="submit">收訖</button>
@@ -545,14 +566,14 @@ onMounted(load)
         </label>
         <label>
           存入活期
-          <select v-model="receivingBond.credit_asset_id">
+          <select v-model="receivingBond.account_id">
             <option :value="null">不存入</option>
-            <option v-for="asset in cashAssets" :key="asset.id" :value="asset.id">
-              {{ asset.label }}（{{ fmtMoney(asset.amount) }}）
+            <option v-for="account in cashAccounts" :key="account.id" :value="account.id">
+              {{ account.label }}（{{ fmtMoney(account.amount) }}）
             </option>
           </select>
         </label>
-        <label v-if="receivingBond.credit_asset_id !== null">
+        <label v-if="receivingBond.account_id !== null">
           存入金額
           <input
             v-model="receivingBond.credit_amount"

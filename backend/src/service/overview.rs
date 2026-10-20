@@ -1,23 +1,29 @@
 use chrono::Datelike;
 use sqlx::SqlitePool;
 
-use crate::calc::{liquidity_tiers, live_totals, month_running_averages, trailing_averages};
-use crate::models::{
-    IbkrBlock, ManualAsset, ManualAssetKind, ManualAssetLiquidity, OverviewAssetRow,
-    OverviewResponse, SemiLiquid, TwelveMonthAverages,
+use crate::calc::{
+    FieldError, liquidity_tiers, live_totals, month_running_averages, trailing_averages,
 };
-use crate::store::{StoreError, today};
+use crate::models::{
+    Currency, IbkrBlock, IbkrPatch, ManualAssetLiquidity, OverviewAssetRow, OverviewResponse,
+    SemiLiquid, TwelveMonthAverages,
+};
+use crate::service::ServiceError;
+use crate::store::{StoreError, cash_accounts, ibkr as ibkr_store, settings, today};
 
 /// The IBKR block: stored inputs plus the derived 美股!B7/C1/C2 figures.
+/// The cash figures are the `broker` cash_accounts rows; the reported total
+/// is the `ibkr.reported_value` setting; the rate is the fx_rates USD row.
 pub async fn ibkr_block(pool: &SqlitePool) -> Result<IbkrBlock, StoreError> {
-    let transferred_hkd = crate::store::overview::transferred_hkd(pool).await?;
-    let now_value =
-        crate::store::meta::meta_f64(pool, crate::store::overview::IBKR_NOW_VALUE_KEY).await?;
-    let hkd_cash =
-        crate::store::meta::meta_f64(pool, crate::store::overview::IBKR_HKD_CASH_KEY).await?;
-    let usd_cash =
-        crate::store::meta::meta_f64(pool, crate::store::overview::IBKR_USD_CASH_KEY).await?;
-    let rate = crate::store::meta::meta_f64(pool, crate::store::aia::RATE_KEY).await?;
+    let transferred_hkd = ibkr_store::transferred_hkd(pool).await?;
+    let now_value = settings::Settings::load(pool).await?.ibkr_reported_value;
+    let hkd_cash = cash_accounts::broker(pool, Currency::Hkd)
+        .await?
+        .map(|account| account.amount);
+    let usd_cash = cash_accounts::broker(pool, Currency::Usd)
+        .await?
+        .map(|account| account.amount);
+    let rate = crate::store::fx::usd_rate(pool).await?;
     let stock_value_usd =
         super::summary::market_value_only(pool, crate::models::Market::Us).await?;
 
@@ -50,14 +56,84 @@ pub async fn ibkr_block(pool: &SqlitePool) -> Result<IbkrBlock, StoreError> {
     })
 }
 
+/// `PATCH /api/ibkr`: validate the patch, then one transaction appends the
+/// transfer row, stores the reported total, and sets the broker account
+/// amounts (a `null` cash value sets 0).
+pub async fn update_ibkr(pool: &SqlitePool, patch: &IbkrPatch) -> Result<IbkrBlock, ServiceError> {
+    let mut errors = Vec::new();
+    for (field, value) in [
+        ("now_value", patch.now_value),
+        ("hkd_cash", patch.hkd_cash),
+        ("usd_cash", patch.usd_cash),
+    ] {
+        if let Some(Some(value)) = value
+            && (!value.is_finite() || value < 0.0)
+        {
+            errors.push(FieldError::new(field, "value must not be negative"));
+        }
+    }
+    // A transfer delta may be negative — it records a withdrawal or undoes a
+    // mistyped entry; it must only be finite.
+    if let Some(delta) = patch.transfer_hkd
+        && !delta.is_finite()
+    {
+        errors.push(FieldError::new("transfer_hdk", "value must be a number"));
+    }
+    let transfer_date = match &patch.transfer_date {
+        Some(date) => match chrono::NaiveDate::parse_from_str(date, "%Y-%m-%d") {
+            Ok(date) => date,
+            Err(_) => {
+                errors.push(FieldError::new("transfer_date", "date must be YYYY-MM-DD"));
+                today()
+            }
+        },
+        None => today(),
+    };
+    if !errors.is_empty() {
+        return Err(ServiceError::Validation(errors));
+    }
+
+    let now = crate::store::now_timestamp();
+    let mut tx = pool.begin().await.map_err(StoreError::from)?;
+    if let Some(delta) = patch.transfer_hkd.filter(|delta| *delta != 0.0) {
+        ibkr_store::insert_transfer(&mut *tx, &transfer_date.to_string(), delta).await?;
+    }
+    if let Some(value) = patch.now_value {
+        settings::SettingsPatch {
+            ibkr_reported_value: Some(value),
+            ..Default::default()
+        }
+        .apply(&mut tx)
+        .await?;
+    }
+    for (currency, value) in [
+        (Currency::Hkd, patch.hkd_cash),
+        (Currency::Usd, patch.usd_cash),
+    ] {
+        if let Some(value) = value {
+            let account = cash_accounts::broker(&mut *tx, currency)
+                .await?
+                .ok_or_else(|| {
+                    ServiceError::Conflict(format!("no IBKR {} account", currency.as_str()))
+                })?;
+            // A `null` cash cell records 0, not "unset".
+            cash_accounts::set_amount(&mut tx, account.id, value.unwrap_or(0.0), &now).await?;
+        }
+    }
+    tx.commit().await?;
+    ibkr_block(pool).await.map_err(ServiceError::from)
+}
+
 /// `Overview!A3:C18` plus the B1/H1/J1 headline, derived on read.
 pub async fn build(pool: &SqlitePool) -> Result<OverviewResponse, StoreError> {
     let input = super::months::live_totals_input(pool).await?;
     let totals = live_totals(&input);
     let ibkr = ibkr_block(pool).await?;
-    let salary = crate::store::meta::meta_f64(pool, crate::store::months::SALARY_KEY).await?;
+    let stored = settings::Settings::load(pool).await?;
+    let salary = stored.salary;
     let semi_target = super::months::semi_liquid_target(pool).await?;
     let manual = crate::store::months::load_assets(pool).await?;
+    let bank_accounts = cash_accounts::load_all(pool).await?;
     let items = crate::store::months::load_all_items(pool).await?;
 
     let aia_hkd = input.usd_hkd_rate.map(|rate| input.aia_value_usd * rate);
@@ -70,10 +146,7 @@ pub async fn build(pool: &SqlitePool) -> Result<OverviewResponse, StoreError> {
     // Manual `asset` rows also feed the 策略 tiers by their liquidity.
     let mut manual_short = 0.0;
     let mut manual_long = 0.0;
-    for asset in manual
-        .iter()
-        .filter(|asset| asset.kind == ManualAssetKind::Asset)
-    {
+    for asset in manual.iter() {
         match asset.liquidity {
             ManualAssetLiquidity::Short => manual_short += asset.amount,
             ManualAssetLiquidity::Long => manual_long += asset.amount,
@@ -96,9 +169,10 @@ pub async fn build(pool: &SqlitePool) -> Result<OverviewResponse, StoreError> {
             .map(|amount| amount / assets_sum);
     }
 
-    let cash_rows: Vec<ManualAsset> = manual
+    // The bank accounts only — broker cash lives in the IBKR block.
+    let cash_rows: Vec<crate::models::CashAccount> = bank_accounts
         .into_iter()
-        .filter(|asset| asset.kind == ManualAssetKind::Cash)
+        .filter(|account| account.role == crate::models::CashRole::Bank)
         .collect();
     let semi_total = input.deposits_active_principal + input.cash_sum;
     let semi_liquid = SemiLiquid {
@@ -144,30 +218,15 @@ pub async fn build(pool: &SqlitePool) -> Result<OverviewResponse, StoreError> {
     // J29:N35 Money Master — the bank challenge's stored figures plus the
     // derived month/coming-save (each with an optional meta override).
     let money_master = crate::calc::money_master(&crate::calc::MoneyMasterInput {
-        start_date: crate::store::meta::meta_get(pool, crate::store::months::MM_START_DATE_KEY)
-            .await?
-            .and_then(|date| chrono::NaiveDate::parse_from_str(&date, "%Y-%m-%d").ok()),
-        month_now_override: crate::store::meta::meta_f64(
-            pool,
-            crate::store::months::MM_MONTH_NOW_KEY,
-        )
-        .await?,
-        saved: crate::store::meta::meta_f64(pool, crate::store::months::MM_SAVED_KEY).await?,
-        coming_save_override: crate::store::meta::meta_f64(
-            pool,
-            crate::store::months::MM_COMING_SAVE_KEY,
-        )
-        .await?,
-        target_months: crate::store::meta::meta_f64(
-            pool,
-            crate::store::months::MM_TARGET_MONTHS_KEY,
-        )
-        .await?,
-        target_amount: crate::store::meta::meta_f64(
-            pool,
-            crate::store::months::MM_TARGET_AMOUNT_KEY,
-        )
-        .await?,
+        start_date: stored
+            .money_master_start_date
+            .as_deref()
+            .and_then(|date| chrono::NaiveDate::parse_from_str(date, "%Y-%m-%d").ok()),
+        month_now_override: stored.money_master_month_now,
+        saved: stored.money_master_saved,
+        coming_save_override: stored.money_master_coming_save,
+        target_months: stored.money_master_target_months,
+        target_amount: stored.money_master_target_amount,
         salary,
         today: today(),
     });
@@ -204,10 +263,8 @@ pub async fn build(pool: &SqlitePool) -> Result<OverviewResponse, StoreError> {
         total_assets: totals.total_assets,
         living_budget: averages.living_budget,
         salary,
-        goal1_amount: crate::store::meta::meta_f64(pool, crate::store::months::GOAL1_AMOUNT_KEY)
-            .await?,
-        goal2_amount: crate::store::meta::meta_f64(pool, crate::store::months::GOAL2_AMOUNT_KEY)
-            .await?,
+        goal1_amount: stored.goal1_amount,
+        goal2_amount: stored.goal2_amount,
         goal3_inflation,
         goal3_years,
         final_replacement,

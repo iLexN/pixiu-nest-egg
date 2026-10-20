@@ -4,11 +4,11 @@ use axum::http::StatusCode;
 use serde::Serialize;
 
 use super::AppState;
+use super::patch::{merge, merge_text};
 use crate::calc::{MpfAccountInput, MpfTotals, mpf_totals, validate_mpf_account};
 use crate::error::{ApiError, ErrorBody};
 use crate::models::{MpfAccount, MpfAccountPatch, MpfHistoryRow, MpfNotePatch, NewMpfAccount};
 use crate::service::mpf::present_account;
-use crate::store::meta::{meta_f64, meta_get, meta_put};
 use crate::store::mpf;
 use crate::store::today;
 
@@ -41,13 +41,9 @@ pub async fn overview(State(state): State<AppState>) -> Result<Json<MpfResponse>
         .iter()
         .map(|account| mpf::facts_of(account, &history))
         .collect();
-    let totals = mpf_totals(
-        &facts,
-        today,
-        meta_f64(&state.pool, mpf::SEED_MAX_RATE_KEY).await?,
-        meta_f64(&state.pool, mpf::SEED_MAX_GAIN_KEY).await?,
-    );
-    let note = meta_get(&state.pool, mpf::NOTE_KEY).await?;
+    let seed_max = crate::store::settings::mpf_seed_max(&state.pool).await?;
+    let totals = mpf_totals(&facts, today, seed_max.0, seed_max.1);
+    let note = crate::store::settings::mpf_note(&state.pool).await?;
     Ok(Json(MpfResponse {
         today: today.to_string(),
         accounts,
@@ -119,24 +115,12 @@ pub async fn update(
 ) -> Result<Json<MpfAccount>, ApiError> {
     let existing = mpf::load_stored(&state.pool, id).await?;
 
-    let merge_text = |patch: Option<Option<String>>, existing: Option<String>| match patch {
-        Some(value) => value
-            .map(|value| value.trim().to_string())
-            .filter(|value| !value.is_empty()),
-        None => existing,
-    };
-    let merge_num = |patch: Option<Option<f64>>, existing: f64| match patch {
-        Some(Some(value)) => value,
-        Some(None) => existing,
-        None => existing,
-    };
-
     let label = patch.label.unwrap_or(existing.label);
     let trustee = merge_text(patch.trustee, existing.trustee);
     let plan_name = merge_text(patch.plan_name, existing.plan_name);
     let member_no = merge_text(patch.member_no, existing.member_no);
-    let contributions = merge_num(patch.contributions, existing.contributions);
-    let balance = merge_num(patch.balance, existing.balance);
+    let contributions = merge(patch.contributions.flatten(), existing.contributions);
+    let balance = merge(patch.balance.flatten(), existing.balance);
 
     validate_mpf_account(MpfAccountInput {
         label: &label,
@@ -221,9 +205,9 @@ pub async fn update_note(
     State(state): State<AppState>,
     Json(body): Json<MpfNotePatch>,
 ) -> Result<Json<NoteResponse>, ApiError> {
-    meta_put(&state.pool, mpf::NOTE_KEY, body.note.as_deref()).await?;
+    crate::store::settings::set_mpf_note(&state.pool, body.note.as_deref()).await?;
     Ok(Json(NoteResponse {
-        note: meta_get(&state.pool, mpf::NOTE_KEY).await?,
+        note: crate::store::settings::mpf_note(&state.pool).await?,
     }))
 }
 

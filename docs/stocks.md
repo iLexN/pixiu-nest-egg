@@ -295,15 +295,20 @@ The snapshots are stored, not recomputed: buying more of the same stock later do
 
 ```text
 收訖 on a pending row → DividendReceiveForm
-  → PATCH /api/dividends/:id { received_amount, received_price?, bank_in? }
-    — or, US only, { gross_amount, withholding_tax?, received_price?, bank_in? }
+  → PATCH /api/dividends/:id { received_amount, received_price?, account_id? }
+    — or, US only, { gross_amount, withholding_tax?, received_price?, account_id? }
     and the backend stores received_amount = gross_amount − withholding_tax
+    (不存入 sends bank_in: false instead of account_id)
   → status becomes received; both rates now use the received amount
   → received_price omitted or null → the stock's current 現價 is stored
     as the receipt snapshot (NULL when the stock has no 現價)
-  → banks the amount — HK → HS cash row (also records the div:<id>
-    adjustment month_item for the pay month); US → the ibkr.usd_cash
-    meta value (no month item — the money never touches 活期)
+  → banks the amount via service::receipts into the chosen or default
+    cash_accounts row of the dividend's currency — HK → the HKD default
+    (also records the div:<id> adjustment month_item for the pay month);
+    US → the USD default (the IBKR USD broker row; no month item — the
+    money never touches 活期). The row and amount land on the dividend's
+    credited_account_id/credited_amount so clearing reverses the exact
+    credit
   → 同時更新現價 checked → a separate PATCH /api/stocks/:id sets manual_price
 ```
 

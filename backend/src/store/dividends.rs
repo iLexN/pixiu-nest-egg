@@ -7,11 +7,11 @@ use crate::calc::{
     dividend_variance, yield_on_cost, yield_on_price,
 };
 use crate::models::{Dividend, DividendStatus, Market, TradeType};
-use crate::store::{StoreError, now_timestamp};
+use crate::store::{Credit, StoreError, now_timestamp};
 
 pub const DIVIDEND_SELECT: &str = "SELECT d.id, d.stock_id, s.market, s.code, d.pay_date, \
      d.per_share, d.shares_held, d.buy_cost, d.estimated_amount, d.received_amount, \
-     d.received_price, d.withholding_tax, d.note \
+     d.received_price, d.withholding_tax, d.credited_account_id, d.credited_amount, d.note \
      FROM dividends d JOIN stocks s ON s.id = d.stock_id";
 
 pub fn row_to_dividend(row: &SqliteRow) -> Result<Dividend, StoreError> {
@@ -42,6 +42,8 @@ pub fn row_to_dividend(row: &SqliteRow) -> Result<Dividend, StoreError> {
         received_price,
         withholding_tax,
         gross_amount,
+        credited_account_id: row.try_get("credited_account_id")?,
+        credited_amount: row.try_get("credited_amount")?,
         note: row.try_get("note")?,
         status: if received_amount.is_some() {
             DividendStatus::Received
@@ -227,39 +229,38 @@ pub async fn update_dividend(
     Ok(())
 }
 
-/// The stored credited_amount of a dividend, inside the caller's transaction.
-pub async fn credited_amount(
+/// The stored receipt credit of a dividend, inside the caller's transaction.
+pub async fn credit(
     conn: &mut sqlx::SqliteConnection,
     id: i64,
-) -> Result<Option<f64>, StoreError> {
-    Ok(
-        sqlx::query_scalar("SELECT credited_amount FROM dividends WHERE id = ?")
+) -> Result<Option<Credit>, StoreError> {
+    let row =
+        sqlx::query("SELECT credited_account_id, credited_amount FROM dividends WHERE id = ?")
             .bind(id)
-            .fetch_one(&mut *conn)
-            .await?,
-    )
+            .fetch_optional(&mut *conn)
+            .await?
+            .ok_or_else(|| StoreError::NotFound(format!("dividend {id} not found")))?;
+    let account_id: Option<i64> = row.try_get("credited_account_id")?;
+    let amount: Option<f64> = row.try_get("credited_amount")?;
+    Ok(match (account_id, amount) {
+        (Some(account_id), Some(amount)) => Some(Credit { account_id, amount }),
+        _ => None,
+    })
 }
 
-pub async fn set_credited_amount(
+/// Write (or clear) a dividend's recorded credit, inside the caller's
+/// transaction.
+pub async fn set_credit(
     conn: &mut sqlx::SqliteConnection,
     id: i64,
-    amount: Option<f64>,
+    credit: Option<Credit>,
 ) -> Result<(), StoreError> {
-    match amount {
-        Some(_) => {
-            sqlx::query("UPDATE dividends SET credited_amount = ? WHERE id = ?")
-                .bind(amount)
-                .bind(id)
-                .execute(&mut *conn)
-                .await?;
-        }
-        None => {
-            sqlx::query("UPDATE dividends SET credited_amount = NULL WHERE id = ?")
-                .bind(id)
-                .execute(&mut *conn)
-                .await?;
-        }
-    }
+    sqlx::query("UPDATE dividends SET credited_account_id = ?, credited_amount = ? WHERE id = ?")
+        .bind(credit.map(|c| c.account_id))
+        .bind(credit.map(|c| c.amount))
+        .bind(id)
+        .execute(&mut *conn)
+        .await?;
     Ok(())
 }
 

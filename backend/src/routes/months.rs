@@ -6,7 +6,8 @@ use axum::http::StatusCode;
 use chrono::Datelike;
 use serde::{Deserialize, Serialize};
 
-use super::{AppState, now_timestamp, parse_ym, today};
+use super::patch::{merge, merge_opt, merge_text};
+use super::{AppState, parse_ym};
 use crate::calc::{
     FieldError, MonthRunningAverages, MonthYearSummary, build_suggestions, interest_components,
     live_totals, month_derived_with_tail, month_item_sums, month_running_averages,
@@ -15,10 +16,10 @@ use crate::calc::{
 use crate::error::{ApiError, ErrorBody};
 use crate::models::{
     InterestComponent, ManualAsset, ManualAssetPatch, MonthItem, MonthItemCategory, MonthItemPatch,
-    MonthSettings, MonthSettingsPatch, MonthStat, MonthStatPatch, MonthSuggestion, NewManualAsset,
-    NewMonthItem,
+    MonthStat, MonthStatPatch, MonthSuggestion, NewManualAsset, NewMonthItem,
 };
 use crate::store::months as store;
+use crate::store::{now_timestamp, today};
 
 #[derive(Debug, Deserialize, utoipa::ToSchema, utoipa::IntoParams)]
 pub struct ListQuery {
@@ -139,235 +140,6 @@ pub async fn summary(
     }))
 }
 
-#[utoipa::path(
-    get,
-    path = "/api/months/settings",
-    tag = "months",
-    responses(
-        (status = 200, description = "Salary and current-year pool rate", body = MonthSettings),
-    )
-)]
-pub async fn settings(State(state): State<AppState>) -> Result<Json<MonthSettings>, ApiError> {
-    let pool_rate_year = today().year();
-    let (goal3_inflation, goal3_years, final_replacement) =
-        crate::service::months::goal_constants(&state.pool).await?;
-    Ok(Json(MonthSettings {
-        salary: crate::store::meta::meta_f64(&state.pool, store::SALARY_KEY).await?,
-        pool_rate: crate::store::meta::meta_f64(&state.pool, &store::pool_rate_key(pool_rate_year))
-            .await?,
-        pool_rate_year,
-        bill_amount: crate::store::meta::meta_f64(&state.pool, store::BILL_AMOUNT_KEY)
-            .await?
-            .unwrap_or(store::DEFAULT_BILL_AMOUNT),
-        semi_liquid_target: crate::service::months::semi_liquid_target(&state.pool).await?,
-        money_master_start_date: crate::store::meta::meta_get(
-            &state.pool,
-            store::MM_START_DATE_KEY,
-        )
-        .await?,
-        money_master_saved: crate::store::meta::meta_f64(&state.pool, store::MM_SAVED_KEY).await?,
-        money_master_target_months: crate::store::meta::meta_f64(
-            &state.pool,
-            store::MM_TARGET_MONTHS_KEY,
-        )
-        .await?,
-        money_master_target_amount: crate::store::meta::meta_f64(
-            &state.pool,
-            store::MM_TARGET_AMOUNT_KEY,
-        )
-        .await?,
-        money_master_month_now: crate::store::meta::meta_f64(&state.pool, store::MM_MONTH_NOW_KEY)
-            .await?,
-        money_master_coming_save: crate::store::meta::meta_f64(
-            &state.pool,
-            store::MM_COMING_SAVE_KEY,
-        )
-        .await?,
-        goal1_amount: crate::store::meta::meta_f64(&state.pool, store::GOAL1_AMOUNT_KEY).await?,
-        goal2_amount: crate::store::meta::meta_f64(&state.pool, store::GOAL2_AMOUNT_KEY).await?,
-        goal3_inflation,
-        goal3_years,
-        final_replacement,
-    }))
-}
-
-#[utoipa::path(
-    patch,
-    path = "/api/months/settings",
-    tag = "months",
-    request_body = MonthSettingsPatch,
-    responses(
-        (status = 200, description = "Updated settings", body = MonthSettings),
-        (status = 400, description = "Missing or invalid fields", body = ErrorBody),
-    )
-)]
-pub async fn update_settings(
-    State(state): State<AppState>,
-    Json(patch): Json<MonthSettingsPatch>,
-) -> Result<Json<MonthSettings>, ApiError> {
-    let mut errors = Vec::new();
-    if let Some(Some(salary)) = patch.salary
-        && (!salary.is_finite() || salary < 0.0)
-    {
-        errors.push(FieldError::new("salary", "salary must not be negative"));
-    }
-    if let Some(Some(rate)) = patch.pool_rate
-        && (!rate.is_finite() || !(0.0..1.0).contains(&rate))
-    {
-        errors.push(FieldError::new(
-            "pool_rate",
-            "pool rate is stored as a fraction (0.337 = 33.7%) and must be less than 1",
-        ));
-    }
-    if let Some(Some(amount)) = patch.bill_amount
-        && (!amount.is_finite() || amount < 0.0)
-    {
-        errors.push(FieldError::new(
-            "bill_amount",
-            "bill amount must not be negative",
-        ));
-    }
-    if let Some(Some(ratio)) = patch.semi_liquid_target
-        && (!ratio.is_finite() || !(0.0..1.0).contains(&ratio))
-    {
-        errors.push(FieldError::new(
-            "semi_liquid_target",
-            "semi-liquid target is stored as a fraction (0.25 = 25%) and must be less than 1",
-        ));
-    }
-    if let Some(Some(date)) = &patch.money_master_start_date
-        && chrono::NaiveDate::parse_from_str(date, "%Y-%m-%d").is_err()
-    {
-        errors.push(FieldError::new(
-            "money_master_start_date",
-            "date must be YYYY-MM-DD",
-        ));
-    }
-    for (field, value) in [
-        ("money_master_month_now", patch.money_master_month_now),
-        (
-            "money_master_target_months",
-            patch.money_master_target_months,
-        ),
-    ] {
-        if let Some(Some(value)) = value
-            && (!value.is_finite() || value <= 0.0 || value.fract() != 0.0)
-        {
-            errors.push(FieldError::new(field, "must be a positive whole number"));
-        }
-    }
-    if let Some(Some(amount)) = patch.money_master_target_amount
-        && (!amount.is_finite() || amount <= 0.0)
-    {
-        errors.push(FieldError::new(
-            "money_master_target_amount",
-            "must be positive",
-        ));
-    }
-    // The bank's saved figure and coming-save are sign-free — coming save
-    // legitimately goes negative while the challenge runs ahead of target.
-    for (field, value) in [
-        ("money_master_saved", patch.money_master_saved),
-        ("money_master_coming_save", patch.money_master_coming_save),
-    ] {
-        if let Some(Some(value)) = value
-            && !value.is_finite()
-        {
-            errors.push(FieldError::new(field, "must be a number"));
-        }
-    }
-    for (field, value) in [
-        ("goal1_amount", patch.goal1_amount),
-        ("goal2_amount", patch.goal2_amount),
-    ] {
-        if let Some(Some(value)) = value
-            && (!value.is_finite() || value < 0.0)
-        {
-            errors.push(FieldError::new(field, "goal amount must not be negative"));
-        }
-    }
-    for (field, value) in [
-        ("goal3_inflation", patch.goal3_inflation),
-        ("goal3_years", patch.goal3_years),
-        ("final_replacement", patch.final_replacement),
-    ] {
-        if let Some(Some(value)) = value
-            && (!value.is_finite() || value <= 0.0)
-        {
-            errors.push(FieldError::new(field, "must be positive"));
-        }
-    }
-    if !errors.is_empty() {
-        return Err(ApiError::Validation(errors));
-    }
-
-    if let Some(salary) = patch.salary {
-        crate::store::meta::meta_put(
-            &state.pool,
-            store::SALARY_KEY,
-            salary.map(|salary| salary.to_string()).as_deref(),
-        )
-        .await?;
-    }
-    if let Some(rate) = patch.pool_rate {
-        let year = patch.pool_rate_year.unwrap_or_else(|| today().year());
-        crate::store::meta::meta_put(
-            &state.pool,
-            &store::pool_rate_key(year),
-            rate.map(|rate| rate.to_string()).as_deref(),
-        )
-        .await?;
-    }
-    if let Some(amount) = patch.bill_amount {
-        crate::store::meta::meta_put(
-            &state.pool,
-            store::BILL_AMOUNT_KEY,
-            amount.map(|amount| amount.to_string()).as_deref(),
-        )
-        .await?;
-    }
-    if let Some(ratio) = patch.semi_liquid_target {
-        crate::store::meta::meta_put(
-            &state.pool,
-            store::SEMI_LIQUID_TARGET_KEY,
-            ratio.map(|ratio| ratio.to_string()).as_deref(),
-        )
-        .await?;
-    }
-    if let Some(date) = &patch.money_master_start_date {
-        crate::store::meta::meta_put(&state.pool, store::MM_START_DATE_KEY, date.as_deref())
-            .await?;
-    }
-    for (key, value) in [
-        (store::MM_SAVED_KEY, patch.money_master_saved),
-        (
-            store::MM_TARGET_MONTHS_KEY,
-            patch.money_master_target_months,
-        ),
-        (
-            store::MM_TARGET_AMOUNT_KEY,
-            patch.money_master_target_amount,
-        ),
-        (store::MM_MONTH_NOW_KEY, patch.money_master_month_now),
-        (store::MM_COMING_SAVE_KEY, patch.money_master_coming_save),
-        (store::GOAL1_AMOUNT_KEY, patch.goal1_amount),
-        (store::GOAL2_AMOUNT_KEY, patch.goal2_amount),
-        (store::GOAL3_INFLATION_KEY, patch.goal3_inflation),
-        (store::GOAL3_YEARS_KEY, patch.goal3_years),
-        (store::FINAL_REPLACEMENT_KEY, patch.final_replacement),
-    ] {
-        if let Some(value) = value {
-            crate::store::meta::meta_put(
-                &state.pool,
-                key,
-                value.map(|value| value.to_string()).as_deref(),
-            )
-            .await?;
-        }
-    }
-    settings(State(state)).await
-}
-
 #[derive(Debug, Serialize, utoipa::ToSchema)]
 pub struct MonthDetailResponse {
     pub month: MonthStat,
@@ -482,7 +254,11 @@ pub async fn upsert(
             let liquid_assets = patch.liquid_assets.unwrap_or(Some(live.liquid_assets));
             let salary = match patch.salary {
                 Some(salary) => Some(salary),
-                None => crate::store::meta::meta_f64(&state.pool, store::SALARY_KEY).await?,
+                None => {
+                    crate::store::settings::Settings::load(&state.pool)
+                        .await?
+                        .salary
+                }
             };
             store::insert_month(
                 &state.pool,
@@ -499,14 +275,6 @@ pub async fn upsert(
             .await?;
         }
         Some(existing) => {
-            let merge = |patch: Option<f64>, existing: Option<f64>| patch.or(existing);
-            let merge_num = |patch: Option<f64>, existing: f64| patch.unwrap_or(existing);
-            let merge_text = |patch: Option<Option<String>>, existing: Option<String>| match patch {
-                Some(value) => value
-                    .map(|value| value.trim().to_string())
-                    .filter(|value| !value.is_empty()),
-                None => existing,
-            };
             // A present field wins over recapture, recapture wins over the
             // stored value, and `null` stores NULL (live).
             let input = if patch.recapture == Some(true) {
@@ -533,10 +301,10 @@ pub async fn upsert(
                 &state.pool,
                 &month_key,
                 start_cash,
-                merge(patch.salary, existing.salary),
+                merge_opt(patch.salary, existing.salary),
                 total_assets,
                 liquid_assets,
-                merge_num(patch.pool_input, existing.pool_input),
+                merge(patch.pool_input, existing.pool_input),
                 patch
                     .end_cash_override
                     .unwrap_or(existing.end_cash_override),
@@ -667,12 +435,6 @@ pub async fn update_item(
 ) -> Result<Json<MonthItem>, ApiError> {
     let existing = store::load_item(&state.pool, id).await?;
 
-    let merge_text = |patch: Option<Option<String>>, existing: Option<String>| match patch {
-        Some(value) => value
-            .map(|value| value.trim().to_string())
-            .filter(|value| !value.is_empty()),
-        None => existing,
-    };
     let category = patch.category.unwrap_or(existing.category);
     let label = merge_text(patch.label, existing.label);
     let amount = patch.amount.unwrap_or(existing.amount);
@@ -808,7 +570,6 @@ pub async fn create_asset(
     let id = store::insert_asset(
         &state.pool,
         &label,
-        body.kind.as_str(),
         liquidity.as_str(),
         body.amount,
         sort_order,
@@ -839,19 +600,10 @@ pub async fn update_asset(
 ) -> Result<Json<ManualAsset>, ApiError> {
     let existing = store::load_asset(&state.pool, id).await?;
     let label = patch.label.unwrap_or(existing.label);
-    let kind = patch.kind.unwrap_or(existing.kind);
     let liquidity = patch.liquidity.unwrap_or(existing.liquidity);
     let amount = patch.amount.unwrap_or(existing.amount);
     let label = validate_asset(&label, amount)?;
-    store::update_asset(
-        &state.pool,
-        id,
-        &label,
-        kind.as_str(),
-        liquidity.as_str(),
-        amount,
-    )
-    .await?;
+    store::update_asset(&state.pool, id, &label, liquidity.as_str(), amount).await?;
     Ok(Json(store::load_asset(&state.pool, id).await?))
 }
 
@@ -879,7 +631,8 @@ pub async fn remove_asset(
 mod tests {
     use super::*;
     use crate::db::connect_memory;
-    use crate::models::{ManualAssetKind, ManualAssetLiquidity};
+    use crate::models::{AppSettingsPatch, ManualAssetLiquidity};
+    use crate::routes::settings;
 
     #[tokio::test]
     async fn create_asset_defaults_liquidity_to_long() {
@@ -888,7 +641,6 @@ mod tests {
             State(AppState { pool: pool.clone() }),
             Json(NewManualAsset {
                 label: "HS人壽".to_string(),
-                kind: ManualAssetKind::Asset,
                 liquidity: None,
                 amount: 69440.47,
             }),
@@ -907,7 +659,6 @@ mod tests {
             State(state.clone()),
             Json(NewManualAsset {
                 label: "Irene".to_string(),
-                kind: ManualAssetKind::Asset,
                 liquidity: None,
                 amount: 20000.0,
             }),
@@ -939,12 +690,15 @@ mod tests {
         let state = AppState { pool: pool.clone() };
 
         // While unset the effective ratio is the sheet's 25% literal.
-        let current = settings(State(state.clone())).await.expect("settings").0;
+        let current = settings::get(State(state.clone()))
+            .await
+            .expect("settings")
+            .0;
         assert_eq!(current.semi_liquid_target, 0.25);
 
-        let updated = update_settings(
+        let updated = settings::update(
             State(state.clone()),
-            Json(MonthSettingsPatch {
+            Json(AppSettingsPatch {
                 semi_liquid_target: Some(Some(0.3)),
                 ..Default::default()
             }),
@@ -961,9 +715,9 @@ mod tests {
         );
 
         // `null` clears the stored value — back to the default.
-        let reset = update_settings(
+        let reset = settings::update(
             State(state.clone()),
-            Json(MonthSettingsPatch {
+            Json(AppSettingsPatch {
                 semi_liquid_target: Some(None),
                 ..Default::default()
             }),
@@ -974,9 +728,9 @@ mod tests {
         assert_eq!(reset.semi_liquid_target, 0.25);
 
         // A share of 100%+ is meaningless for the buffer and rejected.
-        let err = update_settings(
+        let err = settings::update(
             State(state),
-            Json(MonthSettingsPatch {
+            Json(AppSettingsPatch {
                 semi_liquid_target: Some(Some(1.5)),
                 ..Default::default()
             }),
@@ -992,7 +746,10 @@ mod tests {
         let state = AppState { pool };
 
         // The constants fall back to the sheet literals while unset.
-        let current = settings(State(state.clone())).await.expect("settings").0;
+        let current = settings::get(State(state.clone()))
+            .await
+            .expect("settings")
+            .0;
         assert_eq!(current.goal1_amount, None);
         assert_eq!(current.goal2_amount, None);
         assert_eq!(
@@ -1008,9 +765,9 @@ mod tests {
             crate::service::months::DEFAULT_FINAL_REPLACEMENT
         );
 
-        let updated = update_settings(
+        let updated = settings::update(
             State(state.clone()),
-            Json(MonthSettingsPatch {
+            Json(AppSettingsPatch {
                 goal1_amount: Some(Some(1_550_000.0)),
                 goal3_inflation: Some(Some(1.05)),
                 ..Default::default()
@@ -1027,9 +784,9 @@ mod tests {
         );
 
         // `null` clears an amount and resets a constant to its default.
-        let reset = update_settings(
+        let reset = settings::update(
             State(state.clone()),
-            Json(MonthSettingsPatch {
+            Json(AppSettingsPatch {
                 goal1_amount: Some(None),
                 goal3_inflation: Some(None),
                 ..Default::default()
@@ -1046,20 +803,20 @@ mod tests {
 
         // Negative amounts and non-positive constants are rejected.
         for patch in [
-            MonthSettingsPatch {
+            AppSettingsPatch {
                 goal1_amount: Some(Some(-1.0)),
                 ..Default::default()
             },
-            MonthSettingsPatch {
+            AppSettingsPatch {
                 goal3_years: Some(Some(0.0)),
                 ..Default::default()
             },
-            MonthSettingsPatch {
+            AppSettingsPatch {
                 final_replacement: Some(Some(-0.5)),
                 ..Default::default()
             },
         ] {
-            let err = update_settings(State(state.clone()), Json(patch))
+            let err = settings::update(State(state.clone()), Json(patch))
                 .await
                 .expect_err("rejected");
             assert!(matches!(err, ApiError::Validation(_)));

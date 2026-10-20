@@ -45,8 +45,11 @@ where
     Ok(())
 }
 
-pub async fn meta_f64(pool: &SqlitePool, key: &str) -> Result<Option<f64>, StoreError> {
-    Ok(meta_get(pool, key)
+pub async fn meta_f64<'e, E>(exec: E, key: &str) -> Result<Option<f64>, StoreError>
+where
+    E: sqlx::Executor<'e, Database = sqlx::Sqlite>,
+{
+    Ok(meta_get(exec, key)
         .await?
         .and_then(|raw| raw.parse::<f64>().ok()))
 }

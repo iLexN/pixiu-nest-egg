@@ -55,7 +55,7 @@ One row per 定期 deposit (from 定期Info's 表_定期List). Nullable columns 
 | `interest` | 利息 (expected; the 收訖 form can correct it to the amount actually received) |
 | `end_date` | `YYYY-MM-DD` text date, required |
 | `received_at` | 收訖日 (`YYYY-MM-DD`); NULL while the deposit is still on the books — it stays in 未到期定期 until 收訖 and its interest counts in Month Stat 利息 only once received |
-| `credited_asset_id`, `credited_amount` | The cash `manual_assets` row and amount the 收訖 action credited (optional); records where the bank-in went |
+| `credited_account_id`, `credited_amount` | The `cash_accounts` row and amount the 收訖 action credited (optional); records where the bank-in went |
 | `note1`, `note2` | Optional notes |
 | `sort_order` | Display order; new entries append |
 | `created_at`, `updated_at` | Audit timestamps |
@@ -93,11 +93,16 @@ One row per 派息 event per stock (from the trade sheets' J–O block). The sna
 | `buy_cost` | 總買入成本 snapshot on the pay date |
 | `estimated_amount` | 預期派息, optional |
 | `received_amount` | 實收派息; empty while pending |
-| `credited_amount` | What the 收訖 bank-in credited (HS cash for HK, `ibkr.usd_cash` for US); NULL = nothing credited, so clearing the receipt reverses exactly |
+| `credited_account_id` | The `cash_accounts` row the 收訖 bank-in credited (HKD default for HK dividends, the USD default — IBKR USD — for US); NULL = nothing credited |
+| `credited_amount` | What the 收訖 bank-in credited; NULL = nothing credited, so clearing the receipt reverses exactly |
 | `received_price` | 現價 snapshot at receipt, optional |
 | `withholding_tax` | Tax withheld from the gross 派息 (US dividends), optional |
 | `note` | Optional free-text note (rows migrated from the workbook keep the sheet's M formula) |
 | `created_at`, `updated_at` | Audit timestamps |
+
+### `aia_policies` and `aia_events`
+
+`aia_policies` holds one row per AIA policy (the sheet's D–O table): `label`, `policy_no`, `next_pay_date`, `premium_usd`, `value_usd` (with `value_updated_at`), `remaining_years`, `withdrew_usd`, `note`, `link`, `excluded` (in the account but not the user's money), `in_account` (the user's money held in someone else's account), `sort_order`. `aia_events` logs one premium `payment` or `withdrawal` per row (`policy_id`, `event_date`, `amount_usd`, `note`); its `prev_next_pay_date`/`prev_remaining_years` snapshot the policy fields the event touched so deleting the event restores them exactly. The USD→HKD rate the balances display in lives in `fx_rates`. Balance %% and the totals are derived on read.
 
 ### `year_snapshots`
 
@@ -145,7 +150,7 @@ When a contributions/balance update arrives in a later month and whole calendar 
 
 ### `app_meta`
 
-A generic key-value table for section-level state that no account row can hold. Currently: `mpf.note` (the MPF page's free-text note), the portfolio-level stored maxima `mpf.seed_max_rate` / `mpf.seed_max_gain`, the Overview settings `overview.salary` / `overview.pool_rate.<year>` / `overview.semi_liquid_target` (the 半流動資金 buffer's target share of 流動資產, `0.25` while unset), the 目標 settings `overview.goal1_amount` / `overview.goal2_amount` (the 1st/2nd milestone targets, mirroring `Overview!K12`/`K18`, unset blanks the milestone) / `overview.goal3_inflation` / `overview.goal3_years` / `overview.final_replacement` (the 3rd/Final formula constants, `1.07` / `30` / `0.7` while unset), the forecast's 差餉 charge `forecast.bill_amount` (2158 while unset), the manual USD→HKD rate `aia.usd_hkd_rate` and the AIA page's free-text note `aia.note`, and the 美股 sheet's IBKR account cells `ibkr.now_value` / `ibkr.hkd_cash` / `ibkr.usd_cash`.
+A generic key-value table for section-level state that no account row can hold. Currently: `mpf.note` (the MPF page's free-text note), the portfolio-level stored maxima `mpf.seed_max_rate` / `mpf.seed_max_gain`, the ledger setting `ledger.salary`, the 策略 setting `strategy.semi_liquid_target` (the 半流動資金 buffer's target share of 流動資產, `0.25` while unset), the 目標 settings `goals.goal1_amount` / `goals.goal2_amount` (the 1st/2nd milestone targets, mirroring `Overview!K12`/`K18`, unset blanks the milestone) / `goals.goal3_inflation` / `goals.goal3_years` / `goals.final_replacement` (the 3rd/Final formula constants, `1.07` / `30` / `0.7` while unset), the Money Master challenge settings `money_master.start_date` / `money_master.saved` / `money_master.target_months` / `money_master.target_amount` (the bank challenge's start date, saved figure, and targets) and the optional overrides `money_master.month_now` / `money_master.coming_save`, the forecast's 差餉 charge `forecast.bill_amount` (2158 while unset), the AIA page's free-text note `aia.note`, and the 美股 sheet's reported total `ibkr.reported_value`.
 
 | Column | Meaning |
 |---|---|
@@ -182,7 +187,7 @@ One row per 債券 (from the `債券` sheet's registry table). The sheet only ev
 | `principal` | Face value, e.g. 50000 |
 | `maturity_date` | `YYYY-MM-DD` text date (the sheet's `end` column) |
 | `received_at` | 本金收訖日 (`YYYY-MM-DD`); NULL while the matured bond's principal return is unconfirmed |
-| `credited_asset_id`, `credited_amount` | The cash `manual_assets` row and amount the 收訖 action credited (optional); records where the bank-in went |
+| `credited_account_id`, `credited_amount` | The `cash_accounts` row and amount the 收訖 action credited (optional); records where the bank-in went |
 | `note` | Optional free-text note |
 | `sort_order` | Display order; new entries append |
 | `created_at`, `updated_at` | Audit timestamps |
@@ -202,7 +207,8 @@ One row per coupon date per bond (from the bond's 付息日 block in the `債券
 | `annual_rate` | 年息率 as a fraction (0.04 = 4%); NULL = 待定 |
 | `per_10k` | 每1萬港元債券利息; NULL = 待定 |
 | `received_amount` | 實收利息; empty while unreceived |
-| `credited_amount` | What the 收訖 bank-in credited to the HS cash row; NULL = nothing credited |
+| `credited_account_id` | The `cash_accounts` row the 收訖 bank-in credited (the HKD default — HS); NULL = nothing credited |
+| `credited_amount` | What the 收訖 bank-in credited; NULL = nothing credited |
 | `note` | Optional free-text note |
 | `created_at`, `updated_at` | Audit timestamps |
 
@@ -241,7 +247,41 @@ One row per year, keyed by `year`, holding the YearInReview figures that cannot 
 
 ### `manual_assets`
 
-The manual Overview cells as rows: `label`, `kind` (`cash` = 活期 like HS/渣打, `asset` = 資產 like Irene/HS人壽), `liquidity` (`short`/`long`, default `long`), `amount`, `sort_order`. They feed the live 總數/流動資產 derivation and are editable inline on the 總覽 tab. `liquidity` places `asset` rows in the Overview 策略 block's 短期可取回 or 長期可取回; `cash` rows carry it (the column is NOT NULL) but it has no effect on them.
+The manual 資產 Overview cells as rows: `label`, `liquidity` (`short`/`long`, default `long`), `amount`, `sort_order`, `updated_at`. They feed the live 總數/流動資產 derivation and are editable inline on the 總覽 tab. `liquidity` places a row in the Overview 策略 block's 短期可取回 or 長期可取回.
+
+### `cash_accounts`
+
+One row per 活期 cash account: the bank rows (HS, 渣打) plus the IBKR broker cash in each currency.
+
+| Column | Meaning |
+|---|---|
+| `id` | Internal account ID; the cash `manual_assets` rows kept their ids on migration |
+| `label` | Display name, unique |
+| `currency` | `HKD` or `USD` |
+| `role` | `bank` (活期) or `broker` (IBKR cash); bank accounts are HKD-only |
+| `amount` | Current balance in the account's currency |
+| `is_default_receipt` | `1` marks the bank-in target for the currency — at most one default per currency |
+| `sort_order` | Display order |
+| `updated_at` | Last write timestamp |
+
+### `fx_rates`
+
+The stored exchange rate to HKD per foreign currency — today only `USD`, carrying the manual `Overview!N3` rate the app cannot fetch.
+
+| Column | Meaning |
+|---|---|
+| `currency` | `USD` (the only supported code so far); primary key |
+| `rate_to_hkd` | HKD per unit; must be positive |
+| `updated_at` | Last write timestamp |
+
+### `pool_rates`
+
+The 開心Pool yearly rate — one row per year.
+
+| Column | Meaning |
+|---|---|
+| `year` | Calendar year; primary key |
+| `rate` | The year's pool rate as a fraction (0.337 = 33.7%); `0 <= rate < 1` |
 
 ### `ibkr_transfers`
 

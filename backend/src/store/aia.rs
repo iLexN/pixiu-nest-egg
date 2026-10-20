@@ -6,14 +6,6 @@ use crate::calc::{AiaPolicyFacts, SuggestionAiaPayment, ValidatedAiaPolicy, aia_
 use crate::models::{AiaEvent, AiaEventKind, AiaPolicy};
 use crate::store::{StoreError, now_timestamp};
 
-/// `app_meta` key holding the manual USD→HKD rate (the workbook's
-/// `Overview!N3` GOOGLEFINANCE cell, which the app cannot fetch).
-pub const RATE_KEY: &str = "aia.usd_hkd_rate";
-
-/// `app_meta` key holding the section's free-text note — the same facility
-/// as the MPF page's `mpf.note`.
-pub const NOTE_KEY: &str = "aia.note";
-
 pub const AIA_SELECT: &str = "SELECT p.id, p.label, p.policy_no, p.next_pay_date, \
      p.premium_usd, p.value_usd, p.value_updated_at, p.remaining_years, \
      p.withdrew_usd, p.note, p.link, p.excluded, p.in_account, p.sort_order \

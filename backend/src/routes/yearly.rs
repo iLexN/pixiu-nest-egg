@@ -1,26 +1,18 @@
 use axum::Json;
 use axum::extract::{Path, Query, State};
-use chrono::Datelike;
-use serde::{Deserialize, Serialize};
-use sqlx::SqlitePool;
+use serde::Deserialize;
 
-use super::{AppState, now_timestamp, parse_market, today};
-use crate::calc::{YearRow, yearly_rows};
+use super::patch::merge_num;
+use super::{AppState, parse_market};
 use crate::error::{ApiError, ErrorBody};
-use crate::models::{Market, YearlyPatch};
+use crate::models::YearlyPatch;
+use crate::service::yearly::{YearlyResponse, build};
+use crate::store::now_timestamp;
 use crate::store::yearly as store;
 
 #[derive(Debug, Deserialize, utoipa::ToSchema, utoipa::IntoParams)]
 pub struct YearlyQuery {
     pub market: String,
-}
-
-#[derive(Debug, Serialize, utoipa::ToSchema)]
-pub struct YearlyResponse {
-    pub market: Market,
-    /// The date the response was generated.
-    pub today: String,
-    pub years: Vec<YearRow>,
 }
 
 #[utoipa::path(
@@ -39,30 +31,6 @@ pub async fn list(
 ) -> Result<Json<YearlyResponse>, ApiError> {
     let market = parse_market(&query.market)?;
     Ok(Json(build(&state.pool, market).await?))
-}
-
-/// Every figure here is derived from stored trades, dividends and snapshots
-/// on each read.
-pub async fn build(pool: &SqlitePool, market: Market) -> Result<YearlyResponse, ApiError> {
-    let trades = crate::store::trades::market_dated_trade_facts(pool, market).await?;
-    let dividends = crate::store::dividends::market_dividend_facts(pool, market).await?;
-    let snapshots = store::load_snapshots(pool, market).await?;
-    let live_market_value = crate::service::summary::build(pool, market)
-        .await?
-        .totals
-        .market_value;
-
-    Ok(YearlyResponse {
-        market,
-        today: today().to_string(),
-        years: yearly_rows(
-            &trades,
-            &dividends,
-            &snapshots,
-            live_market_value,
-            today().year(),
-        ),
-    })
 }
 
 fn validate_figure(field: &str, value: Option<f64>) -> Result<Option<f64>, ApiError> {
@@ -120,18 +88,15 @@ pub async fn update(
     }
 
     let existing = store::load_snapshot(&state.pool, market, year).await?;
-    let merge = |patch: Option<Option<f64>>, field: &str, existing: Option<f64>| {
-        validate_figure(field, patch.unwrap_or(existing))
-    };
-    let merge_signed = |patch: Option<Option<f64>>, field: &str, existing: Option<f64>| {
-        validate_signed_figure(field, patch.unwrap_or(existing))
-    };
     let (invested, cost, market_value, sold_pl) = match &existing {
         Some(existing) => (
-            merge(patch.invested, "invested", existing.invested)?,
-            merge(patch.cost, "cost", existing.cost)?,
-            merge(patch.market_value, "market_value", existing.market_value)?,
-            merge_signed(patch.sold_pl, "sold_pl", existing.sold_pl)?,
+            validate_figure("invested", merge_num(patch.invested, existing.invested))?,
+            validate_figure("cost", merge_num(patch.cost, existing.cost))?,
+            validate_figure(
+                "market_value",
+                merge_num(patch.market_value, existing.market_value),
+            )?,
+            validate_signed_figure("sold_pl", merge_num(patch.sold_pl, existing.sold_pl))?,
         ),
         None => (
             validate_figure("invested", patch.invested.flatten())?,

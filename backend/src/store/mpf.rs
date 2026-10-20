@@ -9,10 +9,6 @@ use crate::calc::{MpfAccountFacts, MpfPoint, mpf_figures, mpf_gap_month_ends};
 use crate::models::MpfHistoryRow;
 use crate::store::{StoreError, now_timestamp};
 
-pub const NOTE_KEY: &str = "mpf.note";
-pub const SEED_MAX_RATE_KEY: &str = "mpf.seed_max_rate";
-pub const SEED_MAX_GAIN_KEY: &str = "mpf.seed_max_gain";
-
 const MPF_COLUMNS: &str = "id, label, trustee, contributions, balance, plan_name, \
      member_no, sort_order, seed_max_rate, seed_max_gain, created_at";
 

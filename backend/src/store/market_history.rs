@@ -10,17 +10,6 @@ use crate::calc::{MpfPoint, mpf_gap_month_ends};
 use crate::models::Market;
 use crate::store::StoreError;
 
-/// `app_meta` key holding the workbook's seeded max 未實現報酬率 for a
-/// market — a floor for the derived 最高, exactly like `mpf.seed_max_rate`.
-pub fn seed_max_percent_key(market: Market) -> String {
-    format!("market.{}.seed_max_percent", market.as_str())
-}
-
-/// `app_meta` key holding the workbook's seeded max 未實現金額 for a market.
-pub fn seed_max_amount_key(market: Market) -> String {
-    format!("market.{}.seed_max_amount", market.as_str())
-}
-
 /// Record the market's totals for `today`: backfill a synthetic month-end
 /// row for every fully elapsed month with no records (carrying the last
 /// stored values), then upsert today's row so same-day rebuilds replace

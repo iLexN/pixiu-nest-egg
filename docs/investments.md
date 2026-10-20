@@ -1,6 +1,6 @@
 # Investments flows — MPF, 債券, AIA
 
-Part of the [data-flow guide](DATA_FLOW.md). Table definitions: [`mpf_accounts`, `mpf_history`, `bonds`, `bond_coupons`, `app_meta`](database.md).
+Part of the [data-flow guide](DATA_FLOW.md). Table definitions: [`mpf_accounts`, `mpf_history`, `bonds`, `bond_coupons`, `cash_accounts`, `fx_rates`, `app_meta`](database.md).
 
 ## Update MPF figures in MPF → 總覽
 
@@ -44,9 +44,10 @@ BondsView (債券 → 總覽)
       → Σ active principal, active bonds with their coupon schedules,
         matured bonds for history, and the unpaid coupons ordered by pay date
   → 收訖 on an unreceived matured bond → POST /api/bonds/:id/receive
-      → UPDATE bonds SET received_at (+ credited_asset_id/credited_amount
+      → UPDATE bonds SET received_at (+ credited_account_id/credited_amount
         when 存入活期 is picked)
-      → UPDATE manual_assets amount += credited (cash rows only)
+      → UPDATE cash_accounts amount += credited — the chosen account_id or
+        the HKD default receipt account (不存入 sends bank_in: false)
       → INSERT the bond-end:<id> adjustment month_item for the maturity
         month (skipped when already stored or the month has no row)
 ```
@@ -75,10 +76,11 @@ Coupon receipt is per-coupon (each 付息日's `received_amount`); bond 收訖 c
   → status becomes PENDING; the expected amount now shows
 
 收訖 on a pending row
-  → PATCH /api/coupons/:id { received_amount, bank_in? }
+  → PATCH /api/coupons/:id { received_amount, account_id? }
   → status becomes RECEIVED; variance = received − expected shows
-  → banks the amount into the HS cash manual asset (uncheck 存入活期 to skip)
-    and records the coupon:<id> adjustment month_item for the pay month
+  → banks the amount into the chosen or default HKD cash_accounts row
+    (不存入 sends bank_in: false) and records the coupon:<id> adjustment
+    month_item for the pay month
 ```
 
 Rate fields are entered as a percent (4); the API stores the fraction. Clearing `received_amount` flips the coupon back to pending, reverses the stored bank credit, and deletes the coupon item. A matured bond's coupons stay editable — the receipt history remains completable after maturity.
@@ -107,10 +109,10 @@ The 備註 block saves free text via `PATCH /api/aia/note` into `app_meta` (`aia
   → changing value_usd refreshes value_updated_at
 
 編輯 on the USD → HKD card
-  → PATCH /api/aia/rate
-  → writes app_meta key aia.usd_hkd_rate — entered manually (it mirrors
-    the workbook's Overview!N3 GOOGLEFINANCE cell); all HKD figures
-    derive from it and are absent while unset
+  → PATCH /api/fx-rates/USD { rate }
+  → upserts the fx_rates row — entered manually (it mirrors the
+    workbook's Overview!N3 GOOGLEFINANCE cell); all HKD figures derive
+    from it and are absent while unset (null clears the rate)
 ```
 
 ## Record a premium payment or withdrawal

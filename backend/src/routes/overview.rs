@@ -1,8 +1,7 @@
 use axum::Json;
 use axum::extract::State;
 
-use super::{AppState, today};
-use crate::calc::FieldError;
+use super::AppState;
 use crate::error::{ApiError, ErrorBody};
 use crate::models::{IbkrBlock, IbkrPatch, OverviewResponse};
 
@@ -35,57 +34,7 @@ pub async fn update_ibkr(
     State(state): State<AppState>,
     Json(patch): Json<IbkrPatch>,
 ) -> Result<Json<IbkrBlock>, ApiError> {
-    let mut errors = Vec::new();
-    for (field, value) in [
-        ("now_value", patch.now_value),
-        ("hkd_cash", patch.hkd_cash),
-        ("usd_cash", patch.usd_cash),
-    ] {
-        if let Some(Some(value)) = value
-            && (!value.is_finite() || value < 0.0)
-        {
-            errors.push(FieldError::new(field, "value must not be negative"));
-        }
-    }
-    // A transfer delta may be negative — it records a withdrawal or undoes a
-    // mistyped entry; it must only be finite.
-    if let Some(delta) = patch.transfer_hkd
-        && !delta.is_finite()
-    {
-        errors.push(FieldError::new("transfer_hdk", "value must be a number"));
-    }
-    let transfer_date = match &patch.transfer_date {
-        Some(date) => match chrono::NaiveDate::parse_from_str(date, "%Y-%m-%d") {
-            Ok(date) => date,
-            Err(_) => {
-                errors.push(FieldError::new("transfer_date", "date must be YYYY-MM-DD"));
-                today()
-            }
-        },
-        None => today(),
-    };
-    if !errors.is_empty() {
-        return Err(ApiError::Validation(errors));
-    }
-    if let Some(delta) = patch.transfer_hkd.filter(|delta| *delta != 0.0) {
-        crate::store::overview::insert_transfer(&state.pool, &transfer_date.to_string(), delta)
-            .await?;
-    }
-    for (key, value) in [
-        (crate::store::overview::IBKR_NOW_VALUE_KEY, patch.now_value),
-        (crate::store::overview::IBKR_HKD_CASH_KEY, patch.hkd_cash),
-        (crate::store::overview::IBKR_USD_CASH_KEY, patch.usd_cash),
-    ] {
-        if let Some(value) = value {
-            crate::store::meta::meta_put(
-                &state.pool,
-                key,
-                value.map(|value| value.to_string()).as_deref(),
-            )
-            .await?;
-        }
-    }
-    crate::service::overview::ibkr_block(&state.pool)
+    crate::service::overview::update_ibkr(&state.pool, &patch)
         .await
         .map(Json)
         .map_err(ApiError::from)
@@ -108,18 +57,21 @@ pub async fn overview(State(state): State<AppState>) -> Result<Json<OverviewResp
 mod tests {
     use super::*;
     use crate::db::connect_memory;
+    use crate::models::Currency;
     use crate::service::overview::ibkr_block;
 
     #[tokio::test]
     async fn overview_uses_the_configured_semi_liquid_target() {
         let pool = connect_memory().await.expect("memory db");
-        crate::store::meta::meta_put(
-            &pool,
-            crate::store::months::SEMI_LIQUID_TARGET_KEY,
-            Some("0.3"),
-        )
+        let mut conn = pool.acquire().await.unwrap();
+        crate::store::settings::SettingsPatch {
+            semi_liquid_target: Some(Some(0.3)),
+            ..Default::default()
+        }
+        .apply(&mut conn)
         .await
         .unwrap();
+        drop(conn);
 
         let response = overview(State(AppState { pool }))
             .await
@@ -133,16 +85,16 @@ mod tests {
     #[tokio::test]
     async fn overview_reports_the_goals_block() {
         let pool = connect_memory().await.expect("memory db");
-        crate::store::meta::meta_put(
-            &pool,
-            crate::store::months::GOAL1_AMOUNT_KEY,
-            Some("1550000"),
-        )
+        let mut conn = pool.acquire().await.unwrap();
+        crate::store::settings::SettingsPatch {
+            goal1_amount: Some(Some(1550000.0)),
+            goal3_years: Some(Some(25.0)),
+            ..Default::default()
+        }
+        .apply(&mut conn)
         .await
         .unwrap();
-        crate::store::meta::meta_put(&pool, crate::store::months::GOAL3_YEARS_KEY, Some("25"))
-            .await
-            .unwrap();
+        drop(conn);
 
         let goals = overview(State(AppState { pool }))
             .await
@@ -171,28 +123,18 @@ mod tests {
         .execute(&pool)
         .await
         .unwrap();
-        crate::store::meta::meta_put(
-            &pool,
-            crate::store::overview::IBKR_NOW_VALUE_KEY,
-            Some("134232.01"),
-        )
+        let mut conn = pool.acquire().await.unwrap();
+        crate::store::settings::SettingsPatch {
+            ibkr_reported_value: Some(Some(134232.01)),
+            ..Default::default()
+        }
+        .apply(&mut conn)
         .await
         .unwrap();
-        crate::store::meta::meta_put(
-            &pool,
-            crate::store::overview::IBKR_HKD_CASH_KEY,
-            Some("765.419"),
-        )
-        .await
-        .unwrap();
-        crate::store::meta::meta_put(
-            &pool,
-            crate::store::overview::IBKR_USD_CASH_KEY,
-            Some("1200.25"),
-        )
-        .await
-        .unwrap();
-        crate::store::meta::meta_put(&pool, crate::store::aia::RATE_KEY, Some("7.845135"))
+        drop(conn);
+        seed_broker(&pool, Currency::Hkd, 765.419).await;
+        seed_broker(&pool, Currency::Usd, 1200.25).await;
+        crate::store::fx::set(&pool, Currency::Usd, 7.845135, "2026-01-05T00:00:00")
             .await
             .unwrap();
 
@@ -204,16 +146,28 @@ mod tests {
         assert!(block.vs_now_value.unwrap() < 0.0);
     }
 
-    #[tokio::test]
-    async fn ibkr_block_is_rate_dependent() {
-        let pool = connect_memory().await.expect("memory db");
-        crate::store::meta::meta_put(
-            &pool,
-            crate::store::overview::IBKR_HKD_CASH_KEY,
-            Some("765.42"),
+    /// A broker cash_accounts row set to `amount` — the group-2 migration
+    /// seeds them on every DB, so `set_amount` on the broker row suffices.
+    async fn seed_broker(pool: &sqlx::SqlitePool, currency: Currency, amount: f64) {
+        let account = crate::store::cash_accounts::broker(pool, currency)
+            .await
+            .unwrap()
+            .expect("broker account");
+        let mut conn = pool.acquire().await.unwrap();
+        crate::store::cash_accounts::set_amount(
+            &mut conn,
+            account.id,
+            amount,
+            "2026-01-05T00:00:00",
         )
         .await
         .unwrap();
+    }
+
+    #[tokio::test]
+    async fn ibkr_block_is_rate_dependent() {
+        let pool = connect_memory().await.expect("memory db");
+        seed_broker(&pool, Currency::Hkd, 765.42).await;
         let block = ibkr_block(&pool).await.unwrap();
         assert!(block.computed_total_hkd.is_none());
         assert!(block.net.is_none());
@@ -271,13 +225,7 @@ mod tests {
         .expect_err("negative rejected");
         assert!(matches!(err, ApiError::Validation(_)));
 
-        crate::store::meta::meta_put(
-            &pool,
-            crate::store::overview::IBKR_HKD_CASH_KEY,
-            Some("100"),
-        )
-        .await
-        .unwrap();
+        seed_broker(&pool, Currency::Hkd, 100.0).await;
         let _ = update_ibkr(
             State(state),
             Json(IbkrPatch {
@@ -288,10 +236,35 @@ mod tests {
         .await
         .unwrap();
         assert_eq!(
-            crate::store::meta::meta_get(&pool, crate::store::overview::IBKR_HKD_CASH_KEY)
+            crate::store::cash_accounts::broker(&pool, Currency::Hkd)
                 .await
-                .unwrap(),
-            None
+                .unwrap()
+                .map(|account| account.amount),
+            Some(0.0)
+        );
+    }
+
+    #[tokio::test]
+    async fn update_ibkr_sets_the_usd_broker_account() {
+        let pool = connect_memory().await.expect("memory db");
+        let state = AppState { pool: pool.clone() };
+        let block = update_ibkr(
+            State(state),
+            Json(IbkrPatch {
+                usd_cash: Some(Some(1200.25)),
+                ..Default::default()
+            }),
+        )
+        .await
+        .unwrap()
+        .0;
+        assert_eq!(block.usd_cash, Some(1200.25));
+        assert_eq!(
+            crate::store::cash_accounts::broker(&pool, Currency::Usd)
+                .await
+                .unwrap()
+                .map(|account| account.amount),
+            Some(1200.25)
         );
     }
 }

@@ -61,16 +61,7 @@ pub async fn build(pool: &SqlitePool, market: Market) -> Result<SummaryResponse,
     // The workbook's cached max cells seed `app_meta` marks that floor the
     // derived 最高 — real records can still exceed them. 最高 reports
     // whenever marks or history exist, even while the market is unpriced.
-    let seed_percent = crate::store::meta::meta_f64(
-        pool,
-        &crate::store::market_history::seed_max_percent_key(market),
-    )
-    .await?;
-    let seed_amount = crate::store::meta::meta_f64(
-        pool,
-        &crate::store::market_history::seed_max_amount_key(market),
-    )
-    .await?;
+    let (seed_percent, seed_amount) = crate::store::settings::market_seed_max(pool, market).await?;
     let current = totals.market_value.map(|market_value| MpfPoint {
         recorded_on: today,
         contributions: totals.buy_cost_priced,

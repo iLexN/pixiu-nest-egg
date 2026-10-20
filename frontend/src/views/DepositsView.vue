@@ -5,21 +5,24 @@ import DepositTable from '../components/DepositTable.vue'
 import {
   api,
   ApiError,
+  type CashAccount,
   type Deposit,
   type DepositSummary,
-  type ManualAsset,
 } from '../api'
 import { fmtBank, fmtMoney, todayIso } from '../format'
 
 const summary = ref<DepositSummary | null>(null)
-const assets = ref<ManualAsset[]>([])
+const accounts = ref<CashAccount[]>([])
 const message = ref('')
 const error = ref('')
 const editing = ref<Deposit | null>(null)
 
-const cashAssets = computed(() => assets.value.filter((asset) => asset.kind === 'cash'))
+/** HKD cash accounts a deposit can bank into. */
+const cashAccounts = computed(() =>
+  accounts.value.filter((account) => account.currency === 'HKD'),
+)
 
-/** Bank code → the cash manual_asset label it deposits into. */
+/** Bank code → the cash account label it deposits into. */
 const BANK_ASSET_LABELS: Record<string, string> = { SC: '渣打', HS: 'HS' }
 
 function numOrNull(raw: string | number): number | null {
@@ -30,12 +33,12 @@ function numOrNull(raw: string | number): number | null {
 async function load() {
   error.value = ''
   try {
-    const [summaryData, assetsData] = await Promise.all([
+    const [summaryData, accountsData] = await Promise.all([
       api.depositSummary(),
-      api.listManualAssets(),
+      api.listCashAccounts(),
     ])
     summary.value = summaryData
-    assets.value = assetsData
+    accounts.value = accountsData
   } catch (err) {
     error.value = err instanceof ApiError ? err.message : String(err)
   }
@@ -66,7 +69,7 @@ const receiving = ref<{
   deposit: Deposit
   received_at: string
   interest: string | number
-  credit_asset_id: number | null
+  account_id: number | null
 } | null>(null)
 
 /** What the cash row will be credited: principal + 實收利息 (display only). */
@@ -80,13 +83,18 @@ const receivePreview = computed(() => {
 })
 
 function startReceive(deposit: Deposit) {
-  const assetLabel = deposit.bank ? (BANK_ASSET_LABELS[deposit.bank] ?? deposit.bank) : ''
-  const matched = cashAssets.value.find((asset) => asset.label === assetLabel)
+  // The deposit's own bank row wins; otherwise the currency's default receipt
+  // account, else 不存入.
+  const accountLabel = deposit.bank
+    ? (BANK_ASSET_LABELS[deposit.bank] ?? deposit.bank)
+    : ''
+  const matched = cashAccounts.value.find((account) => account.label === accountLabel)
+  const fallback = cashAccounts.value.find((account) => account.is_default_receipt)
   receiving.value = {
     deposit,
     received_at: todayIso(),
     interest: deposit.interest ?? '',
-    credit_asset_id: matched?.id ?? null,
+    account_id: (matched ?? fallback)?.id ?? null,
   }
 }
 
@@ -102,7 +110,9 @@ async function saveReceive() {
     await api.receiveDeposit(current.deposit.id, {
       received_at: current.received_at || undefined,
       interest: interest ?? undefined,
-      credit_asset_id: current.credit_asset_id ?? undefined,
+      ...(current.account_id === null
+        ? { bank_in: false }
+        : { account_id: current.account_id }),
     })
     receiving.value = null
     message.value = '已記錄收訖'
@@ -168,14 +178,14 @@ onMounted(load)
         </label>
         <label>
           存入活期
-          <select v-model="receiving.credit_asset_id">
+          <select v-model="receiving.account_id">
             <option :value="null">不存入</option>
-            <option v-for="asset in cashAssets" :key="asset.id" :value="asset.id">
-              {{ asset.label }}（{{ fmtMoney(asset.amount) }}）
+            <option v-for="account in cashAccounts" :key="account.id" :value="account.id">
+              {{ account.label }}（{{ fmtMoney(account.amount) }}）
             </option>
           </select>
         </label>
-        <p v-if="receiving.credit_asset_id !== null" class="muted">
+        <p v-if="receiving.account_id !== null" class="muted">
           存入 {{ fmtMoney(receivePreview) }}（本金 + 實收利息）
         </p>
         <div class="form-actions">

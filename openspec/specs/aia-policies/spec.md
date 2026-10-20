@@ -8,7 +8,7 @@ Tracks the user's AIA insurance and annuity policies — premium paid in USD, cu
 
 ### Requirement: AIA policy registry
 
-The system SHALL store one record per policy line with `label` (plan or group name, e.g. `年金 - 2024 - 2029`), optional `policy_no` (e.g. `B632611401`), optional `next_pay_date` (the next premium-due date), `premium_usd` (the sheet's `buy usd`), `value_usd` (the sheet's `now usd`) with `value_updated_at`, optional `remaining_years`, `withdrew_usd` (the sheet's `Withdrew`, cumulative), optional `note`, optional `link`, and `sort_order`. The API SHALL expose `GET /api/aia/policies`, `POST /api/aia/policies`, `PATCH /api/aia/policies/:id`, and `DELETE /api/aia/policies/:id`. A policy SHALL be deletable regardless of its figures; deleting it SHALL also delete its payment/withdrawal events.
+The system SHALL store one record per policy line with `label` (plan or group name, e.g. `年金 - 2024 - 2029`), optional `policy_no` (e.g. `B632611401`), optional `next_pay_date` (the next premium-due date), `premium_usd` (the sheet's `buy usd`), `value_usd` (the sheet's `now usd`) with `value_updated_at`, optional `remaining_years`, `withdrew_usd` (the sheet's `Withdrew`, cumulative), optional `note`, optional `link`, and `sort_order`.
 
 #### Scenario: Create a policy
 
@@ -24,6 +24,24 @@ The system SHALL store one record per policy line with `label` (plan or group na
 
 - **WHEN** a policy is deleted
 - **THEN** it no longer appears in the policy list or the summary totals
+
+### Requirement: AIA policy endpoints
+
+The API SHALL expose `GET /api/aia/policies`, `POST /api/aia/policies`, `PATCH /api/aia/policies/:id`, and `DELETE /api/aia/policies/:id`.
+
+#### Scenario: Endpoints round-trip
+
+- **WHEN** a policy is created, listed, patched, and deleted through the API
+- **THEN** `GET /api/aia/policies`, `POST /api/aia/policies`, `PATCH /api/aia/policies/:id`, and `DELETE /api/aia/policies/:id` each respond
+
+### Requirement: AIA policy deletion removes its events
+
+A policy SHALL be deletable regardless of its figures; deleting it SHALL also delete its payment/withdrawal events.
+
+#### Scenario: Delete removes events
+
+- **WHEN** a policy carrying payment/withdrawal events is deleted through `DELETE /api/aia/policies/:id`
+- **THEN** the policy and its events are gone
 
 ### Requirement: Updating the current value
 
@@ -62,23 +80,9 @@ Each policy SHALL carry two boolean flags: `excluded` (default false — the row
 - **WHEN** a policy is flagged `in_account` false
 - **THEN** its value is absent from `display_value` while still counting toward the portfolio totals when not excluded
 
-### Requirement: Manual USD→HKD rate
-
-The system SHALL keep a manual USD→HKD exchange rate (`aia.usd_hkd_rate`) used to derive the HKD totals. The rate SHALL be updatable through `PATCH /api/aia/rate`. When no rate is stored, HKD figures SHALL be absent from the summary.
-
-#### Scenario: Update the rate
-
-- **WHEN** the user patches the rate to `7.8`
-- **THEN** the summary's HKD figures are recomputed with `7.8` on the next request
-
-#### Scenario: No rate stored
-
-- **WHEN** no rate has been set
-- **THEN** the summary reports USD figures only
-
 ### Requirement: AIA summary
 
-`GET /api/aia/summary` SHALL return every policy with its derived `balance_pct`, the stored rate, and totals derived on read: `premium`, `value`, `withdrew` and overall `balance_pct` — `(value + withdrew − premium) ÷ premium` — over non-excluded policies (the sheet's `buy usd` / `now usd` / `drew` / `balance %%` figures), `display_value` over `in_account` policies (the sheet's `AIA display value`), and each USD total converted to HKD via the stored rate. The summary SHALL also report `next_premium_due` — the earliest `next_pay_date` on or after today across all policies — since the date marks a premium the user still owes. All figures SHALL be recomputed from stored rows on each request.
+`GET /api/aia/summary` SHALL return every policy with its derived `balance_pct`, the stored USD rate from the fx-rates capability (`null` while unset). All figures SHALL be recomputed from stored rows on each request.
 
 #### Scenario: Totals mirror the sheet
 
@@ -95,9 +99,32 @@ The system SHALL keep a manual USD→HKD exchange rate (`aia.usd_hkd_rate`) used
 - **WHEN** two policies carry `next_pay_date` `2027-07-01` and `2028-01-15` and today is before both
 - **THEN** the summary's `next_premium_due` is `2027-07-01`
 
+#### Scenario: No rate stored
+
+- **WHEN** no USD rate has been set
+- **THEN** the summary reports USD figures only and its rate is `null`
+
+### Requirement: AIA summary totals
+
+The summary SHALL report totals derived on read: `premium`, `value`, `withdrew` and overall `balance_pct` — `(value + withdrew − premium) ÷ premium` — over non-excluded policies (the sheet's `buy usd` / `now usd` / `drew` / `balance %%` figures), `display_value` over `in_account` policies (the sheet's `AIA display value`), and each USD total converted to HKD via the stored USD rate, absent while no USD rate is stored.
+
+#### Scenario: Summary totals derive on read
+
+- **WHEN** policies hold premiums totalling `124781.98` USD, values totalling `89260.78` USD (one excluded row and one out-of-account row handled per their flags) and withdrawals of `379.07` USD
+- **THEN** the summary reports those totals, a `display_value` of `87274.32` USD, and the HKD conversions of premium, value and withdrew
+
+### Requirement: AIA next premium due
+
+The summary SHALL also report `next_premium_due` — the earliest `next_pay_date` on or after today across all policies — since the date marks a premium the user still owes.
+
+#### Scenario: Earliest upcoming pay date
+
+- **WHEN** policies carry `next_pay_date` values on both sides of today
+- **THEN** the summary's `next_premium_due` is the earliest one on or after today
+
 ### Requirement: Recording a premium payment
 
-The system SHALL expose `POST /api/aia/events` accepting a policy id, `kind` `payment`, a date, a USD amount, an optional note, and an optional `next_pay_date`. Recording a payment SHALL atomically insert the event row, add the amount to the policy's `premium_usd`, decrement `remaining_years` by one when it is set, and advance the policy's `next_pay_date` — to the submitted date when given, otherwise one year after the current `next_pay_date` — collapsing the sheet's three manual edits into one action. The stored event SHALL also keep the policy's prior `next_pay_date` and `remaining_years` so the change can be reversed.
+The system SHALL expose `POST /api/aia/events` accepting a policy id, `kind` `payment`, a date, a USD amount, an optional note, and an optional `next_pay_date`.
 
 #### Scenario: Payment updates everything at once
 
@@ -113,6 +140,24 @@ The system SHALL expose `POST /api/aia/events` accepting a policy id, `kind` `pa
 
 - **WHEN** a payment is recorded on a policy whose `remaining_years` is unset
 - **THEN** only `premium_usd` and `next_pay_date` change
+
+### Requirement: Payment effects on the policy
+
+Recording a payment SHALL atomically insert the event row, add the amount to the policy's `premium_usd`, decrement `remaining_years` by one when it is set, and advance the policy's `next_pay_date` — to the submitted date when given, otherwise one year after the current `next_pay_date` — collapsing the sheet's three manual edits into one action.
+
+#### Scenario: Payment updates premium and due date
+
+- **WHEN** the user records a `8320` payment dated `2026-07-01` on a policy with premium `16640`, `remaining_years` `3` and `next_pay_date` `2026-07-01`
+- **THEN** the policy reports premium `24960`, `remaining_years` `2` and `next_pay_date` `2027-07-01`, and the event row is stored
+
+### Requirement: Payment event keeps the prior values
+
+The stored event SHALL also keep the policy's prior `next_pay_date` and `remaining_years` so the change can be reversed.
+
+#### Scenario: Event snapshots the prior state
+
+- **WHEN** a payment is recorded on a policy with `next_pay_date` `2026-07-01` and `remaining_years` `3`
+- **THEN** the stored event keeps `2026-07-01` and `3` so the change can be reversed
 
 ### Requirement: Recording a withdrawal
 
@@ -139,7 +184,7 @@ The system SHALL store one event row per recorded payment/withdrawal and expose 
 
 ### Requirement: AIA overview page
 
-The frontend SHALL show an AIA view with a totals strip (USD premium / value / withdrew / overall return / display value plus their HKD conversions, and the next premium due date), an editable exchange-rate field, the policy table (label, policy number, next premium due, premium, value, withdrew, remaining years, per-row return, flags, note) with add/edit/delete actions, a 繳費 action recording a premium payment and a 提取 action recording a withdrawal on each row, and a per-policy payment/withdrawal history. The view SHALL reload after every mutation.
+The frontend SHALL show an AIA view with a totals strip (USD premium / value / withdrew / overall return / display value plus their HKD conversions, and the next premium due date), an editable USD exchange-rate field saving through `PATCH /api/fx-rates/USD`. The view SHALL reload after every mutation.
 
 #### Scenario: Table shows derived returns
 
@@ -155,6 +200,15 @@ The frontend SHALL show an AIA view with a totals strip (USD premium / value / w
 
 - **WHEN** the user submits the 繳費 form on a policy with an amount and date
 - **THEN** the view reloads, the row shows the increased premium, decremented remaining years and advanced next date, and the payment appears in the policy's history
+
+### Requirement: AIA policy table and row actions
+
+The AIA view SHALL show the policy table (label, policy number, next premium due, premium, value, withdrew, remaining years, per-row return, flags, note) with add/edit/delete actions, a 繳費 action recording a premium payment and a 提取 action recording a withdrawal on each row, and a per-policy payment/withdrawal history.
+
+#### Scenario: Row shows the per-row return
+
+- **WHEN** a policy has premium `38215`, value `33927.28` and no withdrawals
+- **THEN** its row shows a return of approximately `−11.2%`
 
 ### Requirement: AIA section note
 

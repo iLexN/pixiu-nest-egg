@@ -8,7 +8,7 @@ Defines the app's top-level navigation: which pages are grouped under 股票, �
 
 ### Requirement: Grouped top navigation with roll-ups under 總覽
 
-The app SHALL present a two-level top navigation. The first level SHALL show one button per group: 總覽, 股票, 定期, MPF, 債券, AIA, and 家人, in that order. The second level SHALL show the sub-tabs of the currently active group only — 總覽 SHALL contain 總覽, 月結, 年結 (in that order); 股票 SHALL contain 總覽, 交易記錄, 派息, 管理 (in that order); 定期 SHALL contain 總覽, 記錄 (in that order); MPF SHALL contain 總覽; 債券 SHALL contain 總覽; AIA SHALL contain 總覽; 家人 SHALL contain 定期. There SHALL be no top-level 月結 or 年結 group. The active group and active sub-tab SHALL each be visually marked.
+The app SHALL present a two-level top navigation. The first level SHALL show one button per group: 總覽, 股票, 定期, MPF, 債券, AIA, and 家人, in that order. There SHALL be no top-level 月結 or 年結 group. The active group and active sub-tab SHALL each be visually marked.
 
 #### Scenario: App loads
 
@@ -64,6 +64,15 @@ The app SHALL present a two-level top navigation. The first level SHALL show one
 
 - **WHEN** the app loads
 - **THEN** the first-level nav contains no 月結 and no 年結 button; those pages are reachable only as sub-tabs of 總覽
+
+### Requirement: Sub-tab membership per group
+
+The second level SHALL show the sub-tabs of the currently active group only — 總覽 SHALL contain 總覽, 月結, 年結 (in that order); 股票 SHALL contain 總覽, 交易記錄, 派息, 管理 (in that order); 定期 SHALL contain 總覽, 記錄 (in that order); MPF SHALL contain 總覽; 債券 SHALL contain 總覽; AIA SHALL contain 總覽; 家人 SHALL contain 定期.
+
+#### Scenario: Switching groups
+
+- **WHEN** the user activates the 股票 group
+- **THEN** the second level shows 總覽, 交易記錄, 派息, 管理 in that order and no other group's tabs
 
 ### Requirement: Default page is 總覽 → 總覽
 

@@ -4,6 +4,7 @@ use axum::response::{IntoResponse, Response};
 use serde::Serialize;
 
 use crate::calc::FieldError;
+use crate::service::ServiceError;
 use crate::store::StoreError;
 
 #[derive(Debug, thiserror::Error)]
@@ -30,6 +31,18 @@ impl From<StoreError> for ApiError {
             StoreError::Database(err) => ApiError::Database(err),
             StoreError::NotFound(message) => ApiError::NotFound(message),
             StoreError::Corrupt(message) => ApiError::Conflict(message),
+            StoreError::Conflict(message) => ApiError::Conflict(message),
+        }
+    }
+}
+
+impl From<ServiceError> for ApiError {
+    fn from(err: ServiceError) -> Self {
+        match err {
+            ServiceError::Store(err) => ApiError::from(err),
+            ServiceError::Validation(fields) => ApiError::Validation(fields),
+            ServiceError::NotFound(message) => ApiError::NotFound(message),
+            ServiceError::Conflict(message) => ApiError::Conflict(message),
         }
     }
 }

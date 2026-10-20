@@ -31,6 +31,8 @@ const error = ref('')
 
 // Inline amount edit for manual asset/cash rows (PATCH /api/manual-assets).
 const editingId = ref<number | null>(null)
+/** Which table the inline amount edit targets. */
+const editingTarget = ref<'cash' | 'asset'>('asset')
 const editDraft = ref<number | ''>('')
 
 // ----- 預測 grid (the sheet's Overview!A20:H36) -----
@@ -224,8 +226,9 @@ async function load() {
   }
 }
 
-function startEdit(id: number, current: number | null) {
+function startEdit(id: number, current: number | null, target: 'cash' | 'asset' = 'asset') {
   editingId.value = id
+  editingTarget.value = target
   editDraft.value = current ?? ''
 }
 
@@ -238,7 +241,12 @@ async function saveEdit() {
     return
   }
   try {
-    await api.updateManualAsset(id, { amount })
+    // 活期 cash rows are cash_accounts; asset rows are manual_assets.
+    if (editingTarget.value === 'cash') {
+      await api.updateCashAccount(id, { amount })
+    } else {
+      await api.updateManualAsset(id, { amount })
+    }
     editingId.value = null
     message.value = '已更新'
     error.value = ''
@@ -474,7 +482,7 @@ onMounted(load)
                 v-else
                 type="button"
                 class="link"
-                @click="startEdit(row.id, row.amount)"
+                @click="startEdit(row.id, row.amount, 'cash')"
               >
                 編輯
               </button>

@@ -6,15 +6,15 @@ use serde::{Deserialize, Serialize};
 use sqlx::SqlitePool;
 
 use super::AppState;
+use super::patch::{merge_num, merge_text};
 use crate::calc::{
     DividendFacts, DividendInput, DividendYearRollup, dividend_year_rollups, holdings_snapshot,
     net_from_gross, validate_dividend,
 };
 use crate::error::{ApiError, ErrorBody};
-use crate::models::{Dividend, DividendPatch, Market, NewDividend};
+use crate::models::{Dividend, DividendPatch, NewDividend};
 use crate::store::dividends as store;
-use crate::store::months as months_store;
-use crate::store::{now_timestamp, today};
+use crate::store::today;
 
 #[derive(Debug, Deserialize, utoipa::ToSchema, utoipa::IntoParams)]
 pub struct ListQuery {
@@ -172,17 +172,6 @@ pub async fn update(
     };
     let pay_date = patch.pay_date.unwrap_or(existing.pay_date);
 
-    let merge_num = |patch: Option<Option<f64>>, existing: Option<f64>| match patch {
-        Some(value) => value,
-        None => existing,
-    };
-    let merge_text = |patch: Option<Option<String>>, existing: Option<String>| match patch {
-        Some(value) => value
-            .map(|value| value.trim().to_string())
-            .filter(|value| !value.is_empty()),
-        None => existing,
-    };
-
     // Snapshot fields: explicit patch values win; `refresh_snapshots`
     // re-derives from trades; otherwise the stored snapshots stay frozen.
     let (shares_held, buy_cost) = if patch.refresh_snapshots {
@@ -234,85 +223,23 @@ pub async fn update(
     })
     .map_err(ApiError::Validation)?;
 
-    let now = now_timestamp();
-    let mut tx = state.pool.begin().await?;
-    store::update_dividend(&mut tx, id, stock_id, &validated, note, &now).await?;
-
-    // 收訖: received_amount NULL → set banks the amount (HK → the HS cash
-    // row; US → the IBKR USD cash meta value, already USD) and, for HK,
-    // records the div:<id> month item. Clearing received_amount reverses.
-    let credited_before = store::credited_amount(&mut tx, id).await?;
-    let auto_key = format!("div:{id}");
-    let month = format!("{}-01", &validated.pay_date[..7]);
-    match (existing.received_amount, validated.received_amount) {
-        (None, Some(amount)) => {
-            let mut credited = None;
-            if patch.bank_in.unwrap_or(true) {
-                match stock_market {
-                    Market::Hk => {
-                        if let Some(asset_id) = months_store::hs_cash_asset_id(&mut tx).await? {
-                            months_store::add_manual_asset_amount(&mut tx, amount, &now, asset_id)
-                                .await?;
-                            credited = Some(amount);
-                        }
-                    }
-                    Market::Us => {
-                        credit_ibkr_usd(&mut tx, amount, &now).await?;
-                        credited = Some(amount);
-                    }
-                }
-            }
-            store::set_credited_amount(&mut tx, id, credited).await?;
-            // US dividends land in IBKR, not 活期 — no adjustment item.
-            if stock_market == Market::Hk {
-                months_store::record_receipt_item(
-                    &mut tx,
-                    &month,
-                    &auto_key,
-                    &existing.code,
-                    amount,
-                )
-                .await?;
-            }
-        }
-        (Some(_), None) => {
-            if let Some(amount) = credited_before {
-                match stock_market {
-                    Market::Hk => {
-                        if let Some(asset_id) = months_store::hs_cash_asset_id(&mut tx).await? {
-                            months_store::add_manual_asset_amount(&mut tx, -amount, &now, asset_id)
-                                .await?;
-                        }
-                    }
-                    Market::Us => credit_ibkr_usd(&mut tx, -amount, &now).await?,
-                }
-            }
-            store::set_credited_amount(&mut tx, id, None).await?;
-            months_store::delete_auto_item(&mut tx, &month, &auto_key).await?;
-        }
-        _ => {}
-    }
-    tx.commit().await?;
-
-    Ok(Json(store::load_one(&state.pool, id).await?))
-}
-
-/// `ibkr.usd_cash += amount` — a US dividend receipt lands there directly.
-async fn credit_ibkr_usd(
-    conn: &mut sqlx::SqliteConnection,
-    amount: f64,
-    _now: &str,
-) -> Result<(), ApiError> {
-    let current =
-        crate::store::meta::meta_get(&mut *conn, crate::store::overview::IBKR_USD_CASH_KEY).await?;
-    let total = current.and_then(|v| v.parse::<f64>().ok()).unwrap_or(0.0) + amount;
-    crate::store::meta::meta_put(
-        &mut *conn,
-        crate::store::overview::IBKR_USD_CASH_KEY,
-        Some(&total.to_string()),
+    crate::service::dividends::update(
+        &state.pool,
+        id,
+        &crate::service::dividends::DividendUpdate {
+            stock_id,
+            market: stock_market,
+            validated: &validated,
+            note,
+            existing_received: existing.received_amount,
+            code: &existing.code,
+            bank_in: patch.bank_in.unwrap_or(true),
+            account_id: patch.account_id,
+        },
     )
     .await?;
-    Ok(())
+
+    Ok(Json(store::load_one(&state.pool, id).await?))
 }
 
 #[utoipa::path(

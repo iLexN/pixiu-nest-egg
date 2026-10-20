@@ -1,12 +1,16 @@
 pub mod aia;
 pub mod bonds;
+pub mod cash_accounts;
 pub mod deposits;
 pub mod dividends;
 pub mod family;
 pub mod forecast;
+pub mod fx;
 pub mod months;
 pub mod mpf;
 pub mod overview;
+pub mod patch;
+pub mod settings;
 pub mod stocks;
 pub mod summary;
 pub mod trades;
@@ -78,17 +82,13 @@ pub fn api_router(state: AppState) -> (Router, utoipa::openapi::OpenApi) {
         .routes(utoipa_axum::routes!(mpf::remove_history))
         .routes(utoipa_axum::routes!(aia::list, aia::create))
         .routes(utoipa_axum::routes!(aia::summary))
-        .routes(utoipa_axum::routes!(aia::update_rate))
         .routes(utoipa_axum::routes!(aia::update_note))
         .routes(utoipa_axum::routes!(aia::update, aia::remove))
         .routes(utoipa_axum::routes!(aia::list_events, aia::create_event))
         .routes(utoipa_axum::routes!(aia::remove_event))
         .routes(utoipa_axum::routes!(months::list))
         .routes(utoipa_axum::routes!(months::summary))
-        .routes(utoipa_axum::routes!(
-            months::settings,
-            months::update_settings
-        ))
+        .routes(utoipa_axum::routes!(settings::get, settings::update))
         .routes(utoipa_axum::routes!(
             months::show,
             months::upsert,
@@ -108,6 +108,16 @@ pub fn api_router(state: AppState) -> (Router, utoipa::openapi::OpenApi) {
             months::update_asset,
             months::remove_asset
         ))
+        .routes(utoipa_axum::routes!(fx::list))
+        .routes(utoipa_axum::routes!(fx::update))
+        .routes(utoipa_axum::routes!(
+            cash_accounts::list,
+            cash_accounts::create
+        ))
+        .routes(utoipa_axum::routes!(
+            cash_accounts::update,
+            cash_accounts::remove
+        ))
         .routes(utoipa_axum::routes!(overview::overview))
         .routes(utoipa_axum::routes!(overview::ibkr, overview::update_ibkr))
         .routes(utoipa_axum::routes!(forecast::forecast))
@@ -121,11 +131,10 @@ pub fn api_router(state: AppState) -> (Router, utoipa::openapi::OpenApi) {
     (router.with_state(state), api)
 }
 
-/// Resolve the stock a trade or dividend refers to — by `stock_id`, or by
-/// market + 股票代碼 when the caller only has the code. `service::trades`
-/// does the lookup; the NotFound carries the message this maps to a field
-/// error.
-pub async fn resolve_stock(
+/// Resolve the stock a trade or dividend refers to via `service::trades`,
+/// mapping a NotFound to a field error — `stock_id` when a stock id was
+/// supplied, else `code` when a market+code pair was.
+pub(crate) async fn resolve_stock(
     pool: &SqlitePool,
     stock_id: Option<i64>,
     market: Option<Market>,
@@ -169,14 +178,6 @@ pub fn parse_market(value: &str) -> Result<Market, ApiError> {
         .ok_or_else(|| ApiError::field("market", "market must be HK or US"))
 }
 
-pub fn now_timestamp() -> String {
-    chrono::Local::now().to_rfc3339()
-}
-
-/// Local today: what deposit status derives from.
-pub fn today() -> chrono::NaiveDate {
-    chrono::Local::now().date_naive()
-}
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -215,7 +216,6 @@ mod tests {
             ("/api/aia/policies", "post"),
             ("/api/aia/policies/{id}", "delete"),
             ("/api/aia/policies/{id}", "patch"),
-            ("/api/aia/rate", "patch"),
             ("/api/aia/summary", "get"),
             ("/api/bonds", "get"),
             ("/api/bonds", "post"),
@@ -223,6 +223,10 @@ mod tests {
             ("/api/bonds/{id}", "delete"),
             ("/api/bonds/{id}", "patch"),
             ("/api/bonds/{id}/receive", "post"),
+            ("/api/cash-accounts", "get"),
+            ("/api/cash-accounts", "post"),
+            ("/api/cash-accounts/{id}", "delete"),
+            ("/api/cash-accounts/{id}", "patch"),
             ("/api/coupons", "get"),
             ("/api/coupons", "post"),
             ("/api/coupons/{id}", "delete"),
@@ -250,6 +254,8 @@ mod tests {
             ("/api/forecast-items/{id}", "patch"),
             ("/api/forecast-items/{id}/convert", "post"),
             ("/api/forecast/{ym}/items", "post"),
+            ("/api/fx-rates", "get"),
+            ("/api/fx-rates/{currency}", "patch"),
             ("/api/ibkr", "get"),
             ("/api/ibkr", "patch"),
             ("/api/manual-assets", "get"),
@@ -259,8 +265,6 @@ mod tests {
             ("/api/month-items/{id}", "delete"),
             ("/api/month-items/{id}", "patch"),
             ("/api/months", "get"),
-            ("/api/months/settings", "get"),
-            ("/api/months/settings", "patch"),
             ("/api/months/summary", "get"),
             ("/api/months/{ym}", "delete"),
             ("/api/months/{ym}", "get"),
@@ -274,6 +278,8 @@ mod tests {
             ("/api/mpf/history/{id}", "delete"),
             ("/api/mpf/note", "patch"),
             ("/api/overview", "get"),
+            ("/api/settings", "get"),
+            ("/api/settings", "patch"),
             ("/api/stocks", "get"),
             ("/api/stocks", "post"),
             ("/api/stocks/order", "post"),

@@ -2,6 +2,54 @@ export type Market = 'HK' | 'US'
 export type TradeType = 'BUY' | 'SELL'
 export type InputMode = 'HK_TOTAL' | 'US_FEE'
 
+export type Currency = 'HKD' | 'USD'
+export type CashRole = 'bank' | 'broker'
+
+/** A stored `cash_accounts` row: the 活期 bank accounts plus the broker
+ * (IBKR) cash rows. */
+export interface CashAccount {
+  id: number
+  label: string
+  currency: Currency
+  role: CashRole
+  amount: number
+  /** The receipt account `account_id` falls back to for this currency. */
+  is_default_receipt: boolean
+  sort_order: number
+  updated_at: string
+}
+
+/** A stored exchange rate to HKD (`fx_rates`). */
+export interface FxRate {
+  currency: Currency
+  /** HKD per one unit of `currency`. */
+  rate_to_hkd: number
+  updated_at: string
+}
+
+/** The PATCH /fx-rates/{currency} response: nulls right after a clear. */
+export interface FxRateEntry {
+  currency: Currency
+  rate_to_hkd: number | null
+  updated_at: string | null
+}
+
+export interface NewCashAccount {
+  label: string
+  currency: Currency
+  role: CashRole
+  amount?: number
+  is_default_receipt?: boolean
+}
+
+export interface CashAccountPatch {
+  label?: string
+  currency?: Currency
+  role?: CashRole
+  amount?: number
+  is_default_receipt?: boolean
+}
+
 export interface FieldError {
   field: string
   message: string
@@ -302,6 +350,10 @@ export interface Deposit {
   end_date: string
   /** 收訖日; null while the deposit is still on the books (in 未到期定期). */
   received_at: string | null
+  /** The cash account the 收訖 banked into; null when nothing was banked. */
+  credited_account_id: number | null
+  /** The amount banked into `credited_account_id`. */
+  credited_amount: number | null
   note1: string | null
   note2: string | null
   sort_order: number
@@ -328,8 +380,10 @@ export interface ReceiveDepositBody {
   received_at?: string
   /** Corrects the stored interest to the amount actually received. */
   interest?: number
-  /** Cash `manual_assets` id to credit the returned money into. */
-  credit_asset_id?: number
+  /** Bank principal+interest into a cash account. Defaults to true. */
+  bank_in?: boolean
+  /** The receipt cash_accounts id; falls back to the HKD default. */
+  account_id?: number
 }
 
 export interface ActiveMonthBucket {
@@ -457,6 +511,10 @@ export interface Dividend {
   received_price: number | null
   withholding_tax: number | null
   gross_amount: number | null
+  /** The cash account the dividend banked into; null when nothing was banked. */
+  credited_account_id: number | null
+  /** The amount banked into `credited_account_id`. */
+  credited_amount: number | null
   note: string | null
   status: DividendStatus
   amount: number | null
@@ -491,9 +549,11 @@ export interface DividendPatch {
   withholding_tax?: number | null
   note?: string | null
   refresh_snapshots?: boolean
-  /** On 收訖, bank the amount (HK → HS cash row, US → IBKR USD cash).
-   * Defaults to on. */
+  /** On 收訖, bank the amount into a cash account (HK → the HKD default,
+   * US → the USD/IBKR default). Defaults to on. */
   bank_in?: boolean
+  /** The chosen receipt cash_accounts id; falls back to the currency default. */
+  account_id?: number
 }
 
 export interface DividendStockTotal {
@@ -534,6 +594,10 @@ export interface Bond {
   maturity_date: string
   /** 收訖日 for the principal return; null while matured-but-unreceived. */
   received_at: string | null
+  /** The cash account the principal banked into; null when nothing was banked. */
+  credited_account_id: number | null
+  /** The amount banked into `credited_account_id`. */
+  credited_amount: number | null
   note: string | null
   sort_order: number
   status: BondStatus
@@ -543,8 +607,10 @@ export interface Bond {
 export interface ReceiveBondBody {
   /** 收訖日; defaults to today server-side. */
   received_at?: string
-  /** Cash `manual_assets` id to credit the returned principal into. */
-  credit_asset_id?: number
+  /** Bank the returned principal into a cash account. Defaults to true. */
+  bank_in?: boolean
+  /** The receipt cash_accounts id; falls back to the HKD default. */
+  account_id?: number
   /** Amount credited; defaults to the bond's principal. */
   credit_amount?: number
 }
@@ -569,6 +635,10 @@ export interface BondCoupon {
   /** 每1萬港元債券利息; null = 待定 */
   per_10k: number | null
   received_amount: number | null
+  /** The cash account the coupon banked into; null when nothing was banked. */
+  credited_account_id: number | null
+  /** The amount banked into `credited_account_id`. */
+  credited_amount: number | null
   note: string | null
   status: CouponStatus
   /** per_10k × principal ÷ 10000 */
@@ -594,8 +664,10 @@ export interface BondCouponPatch {
   per_10k?: number | null
   received_amount?: number | null
   note?: string | null
-  /** On 收訖, bank the amount into the HS cash row. Defaults to on. */
+  /** On 收訖, bank the amount into a cash account. Defaults to on. */
   bank_in?: boolean
+  /** The chosen receipt cash_accounts id; falls back to the HKD default. */
+  account_id?: number
 }
 
 export interface BondWithCoupons extends Bond {
@@ -794,7 +866,6 @@ export type MonthItemCategory =
   | 'income'
   | 'entertainment'
   | 'interest'
-export type ManualAssetKind = 'cash' | 'asset'
 export type ManualAssetLiquidity = 'short' | 'long'
 
 export interface MonthStat {
@@ -897,7 +968,7 @@ export interface MonthSummary {
   pool_rate_year: number
 }
 
-export interface MonthSettings {
+export interface AppSettings {
   salary: number | null
   pool_rate: number | null
   pool_rate_year: number
@@ -953,7 +1024,7 @@ export interface MonthItemPatch {
   note?: string | null
 }
 
-export interface MonthSettingsPatch {
+export interface AppSettingsPatch {
   salary?: number | null
   pool_rate?: number | null
   pool_rate_year?: number
@@ -1057,7 +1128,6 @@ export interface ForecastResponse {
 export interface ManualAsset {
   id: number
   label: string
-  kind: ManualAssetKind
   liquidity: ManualAssetLiquidity
   amount: number
   sort_order: number
@@ -1066,14 +1136,12 @@ export interface ManualAsset {
 
 export interface NewManualAsset {
   label: string
-  kind: ManualAssetKind
   liquidity?: ManualAssetLiquidity
   amount: number
 }
 
 export interface ManualAssetPatch {
   label?: string
-  kind?: ManualAssetKind
   liquidity?: ManualAssetLiquidity
   amount?: number
 }
@@ -1111,7 +1179,7 @@ export interface OverviewAssetRow {
 
 export interface SemiLiquid {
   deposits: number
-  cash_rows: ManualAsset[]
+  cash_rows: CashAccount[]
   cash_sum: number
   total: number
   vs_quarter_liquid: number
@@ -1497,9 +1565,6 @@ export const api = {
   deleteAiaPolicy(id: number): Promise<void> {
     return request(`/aia/policies/${id}`, { method: 'DELETE' })
   },
-  updateAiaRate(rate: number | null): Promise<{ rate: number | null }> {
-    return request('/aia/rate', { method: 'PATCH', body: JSON.stringify({ rate }) })
-  },
   updateAiaNote(note: string | null): Promise<{ note: string | null }> {
     return request('/aia/note', { method: 'PATCH', body: JSON.stringify({ note }) })
   },
@@ -1543,11 +1608,33 @@ export const api = {
       body: JSON.stringify({ auto_key: autoKey }),
     })
   },
-  monthSettings(): Promise<MonthSettings> {
-    return request('/months/settings')
+  getSettings(): Promise<AppSettings> {
+    return request('/settings')
   },
-  updateMonthSettings(patch: MonthSettingsPatch): Promise<MonthSettings> {
-    return request('/months/settings', { method: 'PATCH', body: JSON.stringify(patch) })
+  updateSettings(patch: AppSettingsPatch): Promise<AppSettings> {
+    return request('/settings', { method: 'PATCH', body: JSON.stringify(patch) })
+  },
+  listCashAccounts(): Promise<CashAccount[]> {
+    return request('/cash-accounts')
+  },
+  createCashAccount(account: NewCashAccount): Promise<CashAccount> {
+    return request('/cash-accounts', { method: 'POST', body: JSON.stringify(account) })
+  },
+  updateCashAccount(id: number, patch: CashAccountPatch): Promise<CashAccount> {
+    return request(`/cash-accounts/${id}`, { method: 'PATCH', body: JSON.stringify(patch) })
+  },
+  deleteCashAccount(id: number): Promise<void> {
+    return request(`/cash-accounts/${id}`, { method: 'DELETE' })
+  },
+  listFxRates(): Promise<FxRate[]> {
+    return request('/fx-rates')
+  },
+  /** A number stores the rate; `null` clears it so HKD totals drop out. */
+  updateFxRate(currency: Currency, rate: number | null): Promise<FxRateEntry> {
+    return request(`/fx-rates/${currency}`, {
+      method: 'PATCH',
+      body: JSON.stringify({ rate }),
+    })
   },
   listManualAssets(): Promise<ManualAsset[]> {
     return request('/manual-assets')

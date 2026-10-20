@@ -58,7 +58,7 @@ async function saveRate() {
     return
   }
   try {
-    await api.updateAiaRate(rate)
+    await api.updateFxRate('USD', rate)
     editingRate.value = false
     message.value = '已更新匯率'
     error.value = ''

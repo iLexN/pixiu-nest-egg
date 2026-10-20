@@ -6,10 +6,10 @@ use sqlx::sqlite::SqliteRow;
 use crate::calc::ValidatedDeposit;
 use crate::calc::{DepositFacts, SuggestionDeposit, deposit_total, derive_rate};
 use crate::models::{Deposit, DepositStatus, NewDeposit};
-use crate::store::{StoreError, now_timestamp, today};
+use crate::store::{Credit, StoreError, now_timestamp, today};
 
 pub const DEPOSIT_COLUMNS: &str = "id, label, bank, principal, rate, interest, start_date, \
-     end_date, received_at, credited_asset_id, credited_amount, note1, note2, sort_order";
+     end_date, received_at, credited_account_id, credited_amount, note1, note2, sort_order";
 
 pub fn row_to_deposit(row: &SqliteRow, _today: chrono::NaiveDate) -> Result<Deposit, StoreError> {
     let end_date: String = row.try_get("end_date")?;
@@ -37,6 +37,8 @@ pub fn row_to_deposit(row: &SqliteRow, _today: chrono::NaiveDate) -> Result<Depo
         start_date,
         end_date,
         received_at: received_at.clone(),
+        credited_account_id: row.try_get("credited_account_id")?,
+        credited_amount: row.try_get("credited_amount")?,
         note1: row.try_get("note1")?,
         note2: row.try_get("note2")?,
         sort_order: row.try_get("sort_order")?,
@@ -186,18 +188,17 @@ pub async fn mark_received(
     id: i64,
     received_at: &str,
     interest: Option<f64>,
-    credit_asset_id: Option<i64>,
-    credited_amount: Option<f64>,
+    credit: Option<Credit>,
     now: &str,
 ) -> Result<(), StoreError> {
     sqlx::query(
-        "UPDATE deposits SET received_at = ?, interest = ?, credited_asset_id = ?, \
+        "UPDATE deposits SET received_at = ?, interest = ?, credited_account_id = ?, \
          credited_amount = ?, updated_at = ? WHERE id = ?",
     )
     .bind(received_at)
     .bind(interest)
-    .bind(credit_asset_id)
-    .bind(credited_amount)
+    .bind(credit.map(|c| c.account_id))
+    .bind(credit.map(|c| c.amount))
     .bind(now)
     .bind(id)
     .execute(&mut *conn)

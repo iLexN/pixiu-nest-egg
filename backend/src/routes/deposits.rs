@@ -5,6 +5,7 @@ use chrono::Datelike;
 use serde::{Deserialize, Serialize};
 
 use super::AppState;
+use super::patch::{merge_num, merge_text};
 use crate::calc::{
     ActiveMonthBucket, ActiveTotals, BankRollup, DepositFacts, DepositInput, YearRollup,
     active_month_rollup, active_totals, bank_rollup, validate_deposit, year_rollups,
@@ -12,8 +13,7 @@ use crate::calc::{
 use crate::error::{ApiError, ErrorBody};
 use crate::models::{Deposit, DepositPatch, NewDeposit};
 use crate::store::deposits as store;
-use crate::store::months as months_store;
-use crate::store::{now_timestamp, today};
+use crate::store::today;
 
 #[derive(Debug, Deserialize, utoipa::ToSchema, utoipa::IntoParams)]
 pub struct ListQuery {
@@ -106,17 +106,6 @@ pub async fn update(
 ) -> Result<Json<Deposit>, ApiError> {
     let existing = store::load_one(&state.pool, id).await?;
 
-    let merge_text = |patch: Option<Option<String>>, existing: Option<String>| match patch {
-        Some(value) => value
-            .map(|value| value.trim().to_string())
-            .filter(|value| !value.is_empty()),
-        None => existing,
-    };
-    let merge_num = |patch: Option<Option<f64>>, existing: Option<f64>| match patch {
-        Some(value) => value,
-        None => existing,
-    };
-
     let label = merge_text(patch.label, existing.label);
     let bank = merge_text(patch.bank, existing.bank);
     let note1 = merge_text(patch.note1, existing.note1);
@@ -177,8 +166,12 @@ pub struct ReceiveDeposit {
     pub received_at: Option<String>,
     /// Corrects the stored interest to the amount actually received.
     pub interest: Option<f64>,
-    /// Cash `manual_assets` row to credit the returned money into.
-    pub credit_asset_id: Option<i64>,
+    /// Bank principal + interest into a cash account. Defaults to true.
+    #[serde(default)]
+    pub bank_in: Option<bool>,
+    /// The chosen receipt account; falls back to the HKD default.
+    #[serde(default)]
+    pub account_id: Option<i64>,
 }
 
 /// 收訖: mark the deposit received, optionally credit its principal +
@@ -203,11 +196,6 @@ pub async fn receive(
     Json(body): Json<ReceiveDeposit>,
 ) -> Result<Json<Deposit>, ApiError> {
     let existing = store::load_one(&state.pool, id).await?;
-    if existing.received_at.is_some() {
-        return Err(ApiError::Conflict(format!(
-            "deposit {id} is already received"
-        )));
-    }
     let received_at = match body.received_at.as_deref() {
         Some(date) => chrono::NaiveDate::parse_from_str(date, "%Y-%m-%d")
             .map_err(|_| ApiError::field("received_at", "received_at must be YYYY-MM-DD"))?
@@ -221,48 +209,17 @@ pub async fn receive(
         Some(value) => Some(value),
         None => existing.interest,
     };
-    // The credit and the dep-end item are always principal + (corrected)
-    // interest — not user-entered.
-    let total = existing.principal.unwrap_or(0.0) + interest.unwrap_or(0.0);
-    if let Some(asset_id) = body.credit_asset_id {
-        let kind = months_store::manual_asset_kind(&state.pool, asset_id).await?;
-        match kind.as_deref() {
-            Some("cash") => {}
-            Some(_) => {
-                return Err(ApiError::field(
-                    "credit_asset_id",
-                    "credit target must be a 活期 cash row",
-                ));
-            }
-            None => {
-                return Err(ApiError::NotFound(format!(
-                    "manual asset {asset_id} not found"
-                )));
-            }
-        }
-    }
-
-    let month = format!("{}-01", &existing.end_date[..7]);
-    let auto_key = format!("dep-end:{id}");
-    let now = now_timestamp();
-    let mut tx = state.pool.begin().await?;
-    store::mark_received(
-        &mut tx,
+    crate::service::deposits::receive(
+        &state.pool,
         id,
-        &received_at,
-        interest,
-        body.credit_asset_id,
-        body.credit_asset_id.map(|_| total),
-        &now,
+        &crate::service::deposits::ReceiveInput {
+            received_at,
+            interest,
+            bank_in: body.bank_in.unwrap_or(true),
+            account_id: body.account_id,
+        },
     )
     .await?;
-    if let Some(asset_id) = body.credit_asset_id {
-        months_store::add_manual_asset_amount(&mut tx, total, &now, asset_id).await?;
-    }
-    // The dep-end inflow item the suggestion would have created.
-    let label = existing.label.as_deref().unwrap_or("定期");
-    months_store::record_receipt_item(&mut tx, &month, &auto_key, label, total).await?;
-    tx.commit().await?;
 
     Ok(Json(store::load_one(&state.pool, id).await?))
 }
@@ -390,7 +347,8 @@ mod tests {
             Json(ReceiveDeposit {
                 received_at: None,
                 interest: None,
-                credit_asset_id: None,
+                bank_in: None,
+                account_id: None,
             }),
         )
         .await
@@ -503,8 +461,8 @@ mod tests {
         let state = AppState { pool: pool.clone() };
 
         let asset_id: i64 = sqlx::query_scalar(
-            "INSERT INTO manual_assets (label, kind, liquidity, amount, sort_order, updated_at) \
-             VALUES ('渣打', 'cash', 'short', 1000, 1, '2026-01-01T00:00:00') RETURNING id",
+            "INSERT INTO cash_accounts (label, currency, role, amount, sort_order, updated_at) \
+             VALUES ('渣打', 'HKD', 'bank', 1000, 1, '2026-01-01T00:00:00') RETURNING id",
         )
         .fetch_one(&pool)
         .await
@@ -537,7 +495,8 @@ mod tests {
             Json(ReceiveDeposit {
                 received_at: None,
                 interest: Some(1000.0),
-                credit_asset_id: Some(asset_id),
+                bank_in: None,
+                account_id: Some(asset_id),
             }),
         )
         .await
@@ -545,7 +504,7 @@ mod tests {
         .0;
         assert_eq!(received.interest, Some(1000.0));
 
-        let amount: f64 = sqlx::query_scalar("SELECT amount FROM manual_assets WHERE id = ?")
+        let amount: f64 = sqlx::query_scalar("SELECT amount FROM cash_accounts WHERE id = ?")
             .bind(asset_id)
             .fetch_one(&pool)
             .await

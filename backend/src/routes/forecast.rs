@@ -74,9 +74,10 @@ pub async fn forecast(State(state): State<AppState>) -> Result<Json<ForecastResp
     let pool = &state.pool;
     let input = crate::service::months::live_totals_input(pool).await?;
     let totals = calc::live_totals(&input);
-    let salary = crate::store::meta::meta_f64(pool, crate::store::months::SALARY_KEY).await?;
-    let bill_amount = crate::store::meta::meta_f64(pool, crate::store::months::BILL_AMOUNT_KEY)
-        .await?
+    let stored = crate::store::settings::Settings::load(pool).await?;
+    let salary = stored.salary;
+    let bill_amount = stored
+        .bill_amount
         .unwrap_or(crate::store::months::DEFAULT_BILL_AMOUNT);
     let semi_liquid_target = crate::service::months::semi_liquid_target(pool).await?;
     let first = crate::service::months::live_from();

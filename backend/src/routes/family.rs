@@ -9,11 +9,11 @@ use chrono::Datelike;
 use serde::{Deserialize, Serialize};
 
 use super::AppState;
+use super::patch::{merge_num, merge_text};
 use crate::calc::{DepositFacts, DepositInput, active_totals, validate_deposit};
 use crate::error::{ApiError, ErrorBody};
 use crate::models::{FamilyDeposit, FamilyDepositPatch, MpfNotePatch, NewFamilyDeposit};
 use crate::store::family as store;
-use crate::store::meta::{keys_like, meta_get, meta_put};
 use crate::store::today;
 
 #[derive(Debug, Deserialize, utoipa::ToSchema, utoipa::IntoParams)]
@@ -129,17 +129,6 @@ pub async fn update(
     Json(patch): Json<FamilyDepositPatch>,
 ) -> Result<Json<FamilyDeposit>, ApiError> {
     let existing = store::load_one(&state.pool, id).await?;
-
-    let merge_text = |patch: Option<Option<String>>, existing: Option<String>| match patch {
-        Some(value) => value
-            .map(|value| value.trim().to_string())
-            .filter(|value| !value.is_empty()),
-        None => existing,
-    };
-    let merge_num = |patch: Option<Option<f64>>, existing: Option<f64>| match patch {
-        Some(value) => value,
-        None => existing,
-    };
 
     let holder = match patch.holder {
         Some(holder) => validate_holder(&holder)?,
@@ -265,15 +254,14 @@ pub async fn update_note(
     Json(body): Json<MpfNotePatch>,
 ) -> Result<Json<HolderNoteResponse>, ApiError> {
     let holder = validate_holder(&holder)?;
-    let key = store::note_key(&holder);
     let note = body
         .note
         .map(|note| note.trim().to_string())
         .filter(|note| !note.is_empty());
-    meta_put(&state.pool, &key, note.as_deref()).await?;
+    crate::store::settings::set_family_note(&state.pool, &holder, note.as_deref()).await?;
     Ok(Json(HolderNoteResponse {
+        note: crate::store::settings::family_note(&state.pool, &holder).await?,
         holder,
-        note: meta_get(&state.pool, &key).await?,
     }))
 }
 
@@ -313,15 +301,11 @@ pub async fn summary(
     let deposits = store::load_all(&state.pool).await?;
 
     // Holders = distinct deposit holders ∪ holders with a stored note.
-    let note_keys = keys_like(&state.pool, "family.note.%").await?;
     let mut holders: Vec<String> = deposits
         .iter()
         .map(|deposit| deposit.holder.clone())
         .collect();
-    holders.extend(note_keys.iter().filter_map(|key| {
-        key.strip_prefix(store::FAMILY_NOTE_PREFIX)
-            .map(str::to_string)
-    }));
+    holders.extend(crate::store::settings::family_note_holders(&state.pool).await?);
     holders.sort();
     holders.dedup();
 
@@ -361,7 +345,7 @@ pub async fn summary(
             })
             .collect::<Result<_, ApiError>>()?;
         summaries.push(FamilyHolderSummary {
-            note: meta_get(&state.pool, &store::note_key(&holder)).await?,
+            note: crate::store::settings::family_note(&state.pool, &holder).await?,
             holder,
             upcoming,
             active_principal: active_totals(&facts).principal,

@@ -5,14 +5,14 @@ use serde::{Deserialize, Serialize};
 use sqlx::SqlitePool;
 
 use super::AppState;
+use super::patch::{merge_num, merge_text};
 use crate::calc::{BondInput, CouponInput, validate_bond, validate_coupon};
 use crate::error::{ApiError, ErrorBody};
 use crate::models::{
     Bond, BondCoupon, BondCouponPatch, BondPatch, BondStatus, NewBond, NewBondCoupon,
 };
 use crate::store::bonds as store;
-use crate::store::months as months_store;
-use crate::store::{now_timestamp, today};
+use crate::store::today;
 
 #[derive(Debug, Deserialize, utoipa::ToSchema, utoipa::IntoParams)]
 pub struct ListQuery {
@@ -105,13 +105,6 @@ pub async fn update(
 ) -> Result<Json<Bond>, ApiError> {
     let existing = store::load_bond(&state.pool, id).await?;
 
-    let merge_text = |patch: Option<Option<String>>, existing: Option<String>| match patch {
-        Some(value) => value
-            .map(|value| value.trim().to_string())
-            .filter(|value| !value.is_empty()),
-        None => existing,
-    };
-
     let label = patch.label.unwrap_or(existing.label);
     let issue_no = merge_text(patch.issue_no, existing.issue_no);
     let note = merge_text(patch.note, existing.note);
@@ -135,8 +128,12 @@ pub async fn update(
 pub struct ReceiveBond {
     /// 收訖日 (`YYYY-MM-DD`); defaults to today.
     pub received_at: Option<String>,
-    /// Cash `manual_assets` row to credit the returned principal into.
-    pub credit_asset_id: Option<i64>,
+    /// Bank the returned principal into a cash account. Defaults to true.
+    #[serde(default)]
+    pub bank_in: Option<bool>,
+    /// The chosen receipt account; falls back to the HKD default.
+    #[serde(default)]
+    pub account_id: Option<i64>,
     /// Amount credited; defaults to the bond's principal.
     pub credit_amount: Option<f64>,
 }
@@ -164,9 +161,6 @@ pub async fn receive(
     Json(body): Json<ReceiveBond>,
 ) -> Result<Json<Bond>, ApiError> {
     let existing = store::load_bond(&state.pool, id).await?;
-    if existing.received_at.is_some() {
-        return Err(ApiError::Conflict(format!("bond {id} is already received")));
-    }
     let received_at = match body.received_at.as_deref() {
         Some(date) => chrono::NaiveDate::parse_from_str(date, "%Y-%m-%d")
             .map_err(|_| ApiError::field("received_at", "received_at must be YYYY-MM-DD"))?
@@ -180,49 +174,17 @@ pub async fn receive(
             "credit_amount must be a number",
         ));
     }
-    if let Some(asset_id) = body.credit_asset_id {
-        let kind = months_store::manual_asset_kind(&state.pool, asset_id).await?;
-        match kind.as_deref() {
-            Some("cash") => {}
-            Some(_) => {
-                return Err(ApiError::field(
-                    "credit_asset_id",
-                    "credit target must be a 活期 cash row",
-                ));
-            }
-            None => {
-                return Err(ApiError::NotFound(format!(
-                    "manual asset {asset_id} not found"
-                )));
-            }
-        }
-    }
-
-    let month = format!("{}-01", &existing.maturity_date[..7]);
-    let auto_key = format!("bond-end:{id}");
-    let now = now_timestamp();
-    let mut tx = state.pool.begin().await?;
-    store::mark_received(
-        &mut tx,
+    crate::service::bonds::receive(
+        &state.pool,
         id,
-        &received_at,
-        body.credit_asset_id,
-        body.credit_asset_id.map(|_| credit_amount),
-        &now,
+        &crate::service::bonds::ReceiveInput {
+            received_at,
+            bank_in: body.bank_in.unwrap_or(true),
+            account_id: body.account_id,
+            credit_amount: body.credit_amount,
+        },
     )
     .await?;
-    if let Some(asset_id) = body.credit_asset_id {
-        months_store::add_manual_asset_amount(&mut tx, credit_amount, &now, asset_id).await?;
-    }
-    months_store::record_receipt_item(
-        &mut tx,
-        &month,
-        &auto_key,
-        &existing.label,
-        existing.principal,
-    )
-    .await?;
-    tx.commit().await?;
 
     Ok(Json(store::load_bond(&state.pool, id).await?))
 }
@@ -433,24 +395,13 @@ pub async fn update_coupon(
 ) -> Result<Json<BondCoupon>, ApiError> {
     let existing = store::load_coupon(&state.pool, id).await?;
 
-    let merge = |patch: Option<Option<f64>>, existing: Option<f64>| match patch {
-        Some(value) => value,
-        None => existing,
-    };
-    let merge_text = |patch: Option<Option<String>>, existing: Option<String>| match patch {
-        Some(value) => value
-            .map(|value| value.trim().to_string())
-            .filter(|value| !value.is_empty()),
-        None => existing,
-    };
-
     let bond_id = patch.bond_id.unwrap_or(existing.bond_id);
     store::load_bond(&state.pool, bond_id).await?;
     let pay_date = patch.pay_date.unwrap_or(existing.pay_date);
     let fixing_date = merge_text(patch.fixing_date, existing.fixing_date);
-    let annual_rate = merge(patch.annual_rate, existing.annual_rate);
-    let per_10k = merge(patch.per_10k, existing.per_10k);
-    let received_amount = merge(patch.received_amount, existing.received_amount);
+    let annual_rate = merge_num(patch.annual_rate, existing.annual_rate);
+    let per_10k = merge_num(patch.per_10k, existing.per_10k);
+    let received_amount = merge_num(patch.received_amount, existing.received_amount);
     let note = merge_text(patch.note, existing.note);
 
     let validated = validate_coupon(CouponInput {
@@ -462,41 +413,19 @@ pub async fn update_coupon(
     })
     .map_err(ApiError::Validation)?;
 
-    let now = now_timestamp();
-    let mut tx = state.pool.begin().await?;
-    store::update_coupon(&mut tx, id, bond_id, &validated, &note, &now).await?;
-
-    // 收訖: received_amount NULL → set banks the amount into HS and records
-    // the coupon:<id> month item; clearing it reverses both.
-    let credited_before = store::coupon_credited_amount(&mut tx, id).await?;
-    let auto_key = format!("coupon:{id}");
-    let month = format!("{}-01", &validated.pay_date[..7]);
-    match (existing.received_amount, validated.received_amount) {
-        (None, Some(amount)) => {
-            let mut credited = None;
-            if patch.bank_in.unwrap_or(true)
-                && let Some(asset_id) = months_store::hs_cash_asset_id(&mut tx).await?
-            {
-                months_store::add_manual_asset_amount(&mut tx, amount, &now, asset_id).await?;
-                credited = Some(amount);
-            }
-            store::set_coupon_credited(&mut tx, id, credited).await?;
-            let bond_label = store::bond_label(&mut tx, bond_id).await?;
-            months_store::record_receipt_item(&mut tx, &month, &auto_key, &bond_label, amount)
-                .await?;
-        }
-        (Some(_), None) => {
-            if let Some(amount) = credited_before
-                && let Some(asset_id) = months_store::hs_cash_asset_id(&mut tx).await?
-            {
-                months_store::add_manual_asset_amount(&mut tx, -amount, &now, asset_id).await?;
-            }
-            store::set_coupon_credited(&mut tx, id, None).await?;
-            months_store::delete_auto_item(&mut tx, &month, &auto_key).await?;
-        }
-        _ => {}
-    }
-    tx.commit().await?;
+    crate::service::bonds::update_coupon(
+        &state.pool,
+        id,
+        &crate::service::bonds::CouponUpdate {
+            bond_id,
+            validated: &validated,
+            note: &note,
+            existing_received: existing.received_amount,
+            bank_in: patch.bank_in.unwrap_or(true),
+            account_id: patch.account_id,
+        },
+    )
+    .await?;
 
     Ok(Json(store::load_coupon(&state.pool, id).await?))
 }

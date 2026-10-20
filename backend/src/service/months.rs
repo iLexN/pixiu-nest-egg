@@ -130,7 +130,7 @@ pub async fn live_totals_input(pool: &SqlitePool) -> Result<LiveTotalsInput, Sto
     let us = super::summary::market_value_only(pool, crate::models::Market::Us)
         .await?
         .unwrap_or(0.0);
-    let rate = crate::store::meta::meta_f64(pool, crate::store::aia::RATE_KEY).await?;
+    let rate = crate::store::fx::usd_rate(pool).await?;
 
     let facts = crate::store::deposits::active_facts(pool).await?;
     // 定期!B1 counts principal only; the interest lands in 活期 at maturity.
@@ -151,7 +151,8 @@ pub async fn live_totals_input(pool: &SqlitePool) -> Result<LiveTotalsInput, Sto
         .collect();
     let mpf_balance = mpf_totals(&mpf_facts, today, None, None).now;
 
-    let (manual_assets_sum, cash_sum) = crate::store::months::manual_asset_sums(pool).await?;
+    let manual_assets_sum = crate::store::months::manual_asset_sum(pool).await?;
+    let cash_sum = crate::store::cash_accounts::bank_sum(pool).await?;
 
     let months = crate::store::months::load_all_months(pool).await?;
     let items = crate::store::months::load_all_items(pool).await?;
@@ -176,18 +177,14 @@ pub async fn live_totals_input(pool: &SqlitePool) -> Result<LiveTotalsInput, Sto
         mpf_balance,
         manual_assets_sum,
         cash_sum,
-        ibkr_hkd_cash: crate::store::meta::meta_f64(
-            pool,
-            crate::store::overview::IBKR_HKD_CASH_KEY,
-        )
-        .await?
-        .unwrap_or(0.0),
-        ibkr_usd_cash: crate::store::meta::meta_f64(
-            pool,
-            crate::store::overview::IBKR_USD_CASH_KEY,
-        )
-        .await?
-        .unwrap_or(0.0),
+        ibkr_hkd_cash: crate::store::cash_accounts::broker(pool, crate::models::Currency::Hkd)
+            .await?
+            .map(|account| account.amount)
+            .unwrap_or(0.0),
+        ibkr_usd_cash: crate::store::cash_accounts::broker(pool, crate::models::Currency::Usd)
+            .await?
+            .map(|account| account.amount)
+            .unwrap_or(0.0),
         pool_balance,
     })
 }
@@ -299,7 +296,7 @@ pub async fn load_events(
         coupons: load_coupon_events(pool, range).await?,
         aia_payments,
         pool_input,
-        usd_hkd_rate: crate::store::meta::meta_f64(pool, crate::store::aia::RATE_KEY).await?,
+        usd_hkd_rate: crate::store::fx::usd_rate(pool).await?,
     })
 }
 
@@ -348,24 +345,20 @@ pub const DEFAULT_SEMI_LIQUID_TARGET: f64 = 0.25;
 /// The effective 3rd-target/Final-Target constants — the sheet literals
 /// (`1.07`, `30`, `0.7`) while unset.
 pub async fn goal_constants(pool: &SqlitePool) -> Result<(f64, f64, f64), StoreError> {
+    let stored = crate::store::settings::Settings::load(pool).await?;
     Ok((
-        crate::store::meta::meta_f64(pool, crate::store::months::GOAL3_INFLATION_KEY)
-            .await?
-            .unwrap_or(DEFAULT_GOAL3_INFLATION),
-        crate::store::meta::meta_f64(pool, crate::store::months::GOAL3_YEARS_KEY)
-            .await?
-            .unwrap_or(DEFAULT_GOAL3_YEARS),
-        crate::store::meta::meta_f64(pool, crate::store::months::FINAL_REPLACEMENT_KEY)
-            .await?
+        stored.goal3_inflation.unwrap_or(DEFAULT_GOAL3_INFLATION),
+        stored.goal3_years.unwrap_or(DEFAULT_GOAL3_YEARS),
+        stored
+            .final_replacement
             .unwrap_or(DEFAULT_FINAL_REPLACEMENT),
     ))
 }
 
 /// The configured 半流動資金 target share of 流動資產 — `0.25` while unset.
 pub async fn semi_liquid_target(pool: &SqlitePool) -> Result<f64, StoreError> {
-    Ok(
-        crate::store::meta::meta_f64(pool, crate::store::months::SEMI_LIQUID_TARGET_KEY)
-            .await?
-            .unwrap_or(DEFAULT_SEMI_LIQUID_TARGET),
-    )
+    Ok(crate::store::settings::Settings::load(pool)
+        .await?
+        .semi_liquid_target
+        .unwrap_or(DEFAULT_SEMI_LIQUID_TARGET))
 }

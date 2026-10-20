@@ -1,6 +1,6 @@
 # 定期 flows — deposits and family deposits
 
-Part of the [data-flow guide](DATA_FLOW.md). Table definitions: [`deposits`, `family_deposits`, `manual_assets`, `month_items`](database.md).
+Part of the [data-flow guide](DATA_FLOW.md). Table definitions: [`deposits`, `family_deposits`, `cash_accounts`, `manual_assets`, `month_items`](database.md).
 
 ## Add a deposit in 定期 → 記錄
 
@@ -42,9 +42,10 @@ DepositsView (定期 → 總覽)
       → year tables for every end year present, plus the current year
   → 收訖 on an upcoming row → POST /api/deposits/:id/receive
       → UPDATE deposits SET received_at (+ interest correction and
-        credited_asset_id/credited_amount when 存入活期 is picked)
-      → UPDATE manual_assets amount += principal + (corrected) interest —
-        fixed, not user-entered (cash rows only)
+        credited_account_id/credited_amount when 存入活期 is picked)
+      → UPDATE cash_accounts amount += principal + (corrected) interest —
+        the chosen account_id or the HKD default receipt account (不存入
+        sends bank_in: false); the amount is fixed, not user-entered
       → INSERT the dep-end:<id> adjustment month_item for the end month
         for the same amount (skipped when already stored or the month has
         no row)
@@ -56,7 +57,7 @@ DepositHistoryView (定期 → 記錄)
       → history rows for the selected year
 ```
 
-The list and every total/rollup are receipt-based: a deposit counts while it is not 收訖, whatever its `end_date`, and leaves on 收訖 (a stored `received_at`) — including a deposit 收訖'd early. An overdue-but-unreceived deposit shows 已到期未收 in the list and still counts in active principal, 已定期, and live 流動資產 until the user runs 收訖 → 存入活期, which moves the money into a cash row.
+The list and every total/rollup are receipt-based: a deposit counts while it is not 收訖, whatever its `end_date`, and leaves on 收訖 (a stored `received_at`) — including a deposit 收訖'd early. An overdue-but-unreceived deposit shows 已到期未收 in the list and still counts in active principal, 已定期, and live 流動資產 until the user runs 收訖 → 存入活期, which moves the money into a cash_accounts row.
 
 The 手動步驟提醒 checklists (定期 start step / 定期 end step) are static hints for the `Month Stat`, `回報率`, `Overview`, and money-master bookkeeping that used to live in the workbook.
 

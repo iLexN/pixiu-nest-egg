@@ -7,11 +7,12 @@ use crate::calc::{
     coupon_status, coupon_variance,
 };
 use crate::models::{Bond, BondCoupon, BondStatus, NewBond, NewBondCoupon};
-use crate::store::{StoreError, now_timestamp, today};
+use crate::store::{Credit, StoreError, now_timestamp, today};
 
 /// `next_pay_date` comes from a scalar subquery on non-received coupons.
 pub const BOND_SELECT: &str = "SELECT b.id, b.label, b.issue_no, b.principal, b.maturity_date, \
-     b.received_at, b.note, b.sort_order, (SELECT MIN(c.pay_date) FROM bond_coupons c \
+     b.received_at, b.credited_account_id, b.credited_amount, b.note, b.sort_order, \
+     (SELECT MIN(c.pay_date) FROM bond_coupons c \
      WHERE c.bond_id = b.id AND c.received_amount IS NULL) AS next_pay_date FROM bonds b";
 
 pub fn row_to_bond(row: &SqliteRow, today: chrono::NaiveDate) -> Result<Bond, StoreError> {
@@ -26,6 +27,8 @@ pub fn row_to_bond(row: &SqliteRow, today: chrono::NaiveDate) -> Result<Bond, St
         principal: row.try_get("principal")?,
         maturity_date,
         received_at: row.try_get("received_at")?,
+        credited_account_id: row.try_get("credited_account_id")?,
+        credited_amount: row.try_get("credited_amount")?,
         note: row.try_get("note")?,
         sort_order: row.try_get("sort_order")?,
         status: if bond_active(parsed, today) {
@@ -39,7 +42,8 @@ pub fn row_to_bond(row: &SqliteRow, today: chrono::NaiveDate) -> Result<Bond, St
 
 /// `principal` is joined from the parent bond so `expected` can be derived.
 pub const COUPON_SELECT: &str = "SELECT c.id, c.bond_id, c.pay_date, c.fixing_date, \
-     c.annual_rate, c.per_10k, c.received_amount, c.note, b.principal \
+     c.annual_rate, c.per_10k, c.received_amount, c.credited_account_id, c.credited_amount, \
+     c.note, b.principal \
      FROM bond_coupons c JOIN bonds b ON b.id = c.bond_id";
 
 pub fn row_to_coupon(row: &SqliteRow) -> Result<BondCoupon, StoreError> {
@@ -56,6 +60,8 @@ pub fn row_to_coupon(row: &SqliteRow) -> Result<BondCoupon, StoreError> {
         annual_rate,
         per_10k,
         received_amount,
+        credited_account_id: row.try_get("credited_account_id")?,
+        credited_amount: row.try_get("credited_amount")?,
         note: row.try_get("note")?,
         status: coupon_status(received_amount, annual_rate, per_10k),
         expected,
@@ -190,17 +196,16 @@ pub async fn mark_received(
     conn: &mut sqlx::SqliteConnection,
     id: i64,
     received_at: &str,
-    credit_asset_id: Option<i64>,
-    credited_amount: Option<f64>,
+    credit: Option<Credit>,
     now: &str,
 ) -> Result<(), StoreError> {
     sqlx::query(
-        "UPDATE bonds SET received_at = ?, credited_asset_id = ?, credited_amount = ?, \
+        "UPDATE bonds SET received_at = ?, credited_account_id = ?, credited_amount = ?, \
          updated_at = ? WHERE id = ?",
     )
     .bind(received_at)
-    .bind(credit_asset_id)
-    .bind(credited_amount)
+    .bind(credit.map(|c| c.account_id))
+    .bind(credit.map(|c| c.amount))
     .bind(now)
     .bind(id)
     .execute(&mut *conn)
@@ -252,39 +257,40 @@ pub async fn update_coupon(
     Ok(())
 }
 
-/// The stored credited_amount of a coupon, inside the caller's transaction.
-pub async fn coupon_credited_amount(
+/// The stored receipt credit of a coupon, inside the caller's transaction.
+pub async fn coupon_credit(
     conn: &mut sqlx::SqliteConnection,
     id: i64,
-) -> Result<Option<f64>, StoreError> {
-    Ok(
-        sqlx::query_scalar("SELECT credited_amount FROM bond_coupons WHERE id = ?")
+) -> Result<Option<Credit>, StoreError> {
+    let row =
+        sqlx::query("SELECT credited_account_id, credited_amount FROM bond_coupons WHERE id = ?")
             .bind(id)
-            .fetch_one(&mut *conn)
-            .await?,
-    )
+            .fetch_optional(&mut *conn)
+            .await?
+            .ok_or_else(|| StoreError::NotFound(format!("coupon {id} not found")))?;
+    let account_id: Option<i64> = row.try_get("credited_account_id")?;
+    let amount: Option<f64> = row.try_get("credited_amount")?;
+    Ok(match (account_id, amount) {
+        (Some(account_id), Some(amount)) => Some(Credit { account_id, amount }),
+        _ => None,
+    })
 }
 
-pub async fn set_coupon_credited(
+/// Write (or clear) a coupon's recorded credit, inside the caller's
+/// transaction.
+pub async fn set_coupon_credit(
     conn: &mut sqlx::SqliteConnection,
     id: i64,
-    amount: Option<f64>,
+    credit: Option<Credit>,
 ) -> Result<(), StoreError> {
-    match amount {
-        Some(_) => {
-            sqlx::query("UPDATE bond_coupons SET credited_amount = ? WHERE id = ?")
-                .bind(amount)
-                .bind(id)
-                .execute(&mut *conn)
-                .await?;
-        }
-        None => {
-            sqlx::query("UPDATE bond_coupons SET credited_amount = NULL WHERE id = ?")
-                .bind(id)
-                .execute(&mut *conn)
-                .await?;
-        }
-    }
+    sqlx::query(
+        "UPDATE bond_coupons SET credited_account_id = ?, credited_amount = ? WHERE id = ?",
+    )
+    .bind(credit.map(|c| c.account_id))
+    .bind(credit.map(|c| c.amount))
+    .bind(id)
+    .execute(&mut *conn)
+    .await?;
     Ok(())
 }
 

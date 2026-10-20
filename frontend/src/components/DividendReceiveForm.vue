@@ -1,6 +1,6 @@
 <script setup lang="ts">
-import { computed, reactive, ref, watch } from 'vue'
-import { api, ApiError, type Dividend } from '../api'
+import { computed, onMounted, reactive, ref, watch } from 'vue'
+import { api, ApiError, type CashAccount, type Dividend } from '../api'
 import { fmtMoney } from '../format'
 
 const props = defineProps<{
@@ -15,7 +15,7 @@ interface FormState {
   withholding_tax: string
   received_price: string
   also_update_price: boolean
-  bank_in: boolean
+  account_id: number | null
 }
 
 const form = reactive<FormState>({
@@ -24,10 +24,17 @@ const form = reactive<FormState>({
   withholding_tax: '',
   received_price: '',
   also_update_price: false,
-  bank_in: true,
+  account_id: null,
 })
 const error = ref<ApiError | null>(null)
 const saving = ref(false)
+const accounts = ref<CashAccount[]>([])
+
+/** Accounts of the dividend's currency: HKD for HK, USD for US. */
+const receiptAccounts = computed(() => {
+  const currency = props.dividend.market === 'US' ? 'USD' : 'HKD'
+  return accounts.value.filter((account) => account.currency === currency)
+})
 
 watch(
   () => props.dividend,
@@ -39,7 +46,8 @@ watch(
     form.withholding_tax = ''
     form.received_price = ''
     form.also_update_price = false
-    form.bank_in = true
+    form.account_id =
+      receiptAccounts.value.find((account) => account.is_default_receipt)?.id ?? null
   },
   { immediate: true },
 )
@@ -71,12 +79,16 @@ async function submit() {
             gross_amount: num(form.gross_amount),
             withholding_tax: num(form.withholding_tax),
             received_price: receivedPrice,
-            bank_in: form.bank_in,
+            ...(form.account_id === null
+              ? { bank_in: false }
+              : { account_id: form.account_id }),
           }
         : {
             received_amount: num(form.received_amount),
             received_price: receivedPrice,
-            bank_in: form.bank_in,
+            ...(form.account_id === null
+              ? { bank_in: false }
+              : { account_id: form.account_id }),
           },
     )
     // Opt-in: the receipt price is a snapshot on this record; updating the
@@ -92,6 +104,17 @@ async function submit() {
     saving.value = false
   }
 }
+
+onMounted(async () => {
+  try {
+    accounts.value = await api.listCashAccounts()
+    form.account_id =
+      receiptAccounts.value.find((account) => account.is_default_receipt)?.id ?? null
+  } catch (err) {
+    error.value =
+      err instanceof ApiError ? err : new ApiError(0, (err as Error).message ?? 'request failed', [])
+  }
+})
 </script>
 
 <template>
@@ -134,9 +157,14 @@ async function submit() {
       </label>
     </div>
 
-    <label class="checkbox">
-      <input v-model="form.bank_in" type="checkbox" />
-      {{ props.dividend.market === 'US' ? '存入 IBKR USD cash' : '存入活期 HS' }}
+    <label class="checkbox" style="flex-direction: column; align-items: stretch">
+      存入活期
+      <select v-model="form.account_id">
+        <option :value="null">不存入</option>
+        <option v-for="account in receiptAccounts" :key="account.id" :value="account.id">
+          {{ account.label }}（{{ fmtMoney(account.amount) }}）
+        </option>
+      </select>
     </label>
 
     <label class="checkbox">

@@ -1,19 +1,22 @@
 <script setup lang="ts">
-import { computed, onMounted, ref } from 'vue'
+import { computed, onMounted, ref, watch } from 'vue'
 import {
   api,
   ApiError,
+  type AppSettings,
+  type CashAccount,
+  type CashRole,
+  type Currency,
   type ManualAsset,
-  type ManualAssetKind,
   type ManualAssetLiquidity,
   type MonthDetail,
   type MonthItem,
   type MonthItemCategory,
-  type MonthSettings,
   type MonthStat,
   type MonthStatPatch,
   type MonthSuggestion,
   type MonthSummary,
+  type NewCashAccount,
   type NewManualAsset,
 } from '../api'
 import { fmtMoney, fmtPercent, fmtPercentShort, signClass, todayIso } from '../format'
@@ -21,8 +24,9 @@ import { fmtMoney, fmtPercent, fmtPercentShort, signClass, todayIso } from '../f
 const summary = ref<MonthSummary | null>(null)
 const months = ref<MonthStat[]>([])
 const detail = ref<MonthDetail | null>(null)
-const settings = ref<MonthSettings | null>(null)
+const settings = ref<AppSettings | null>(null)
 const assets = ref<ManualAsset[]>([])
+const accounts = ref<CashAccount[]>([])
 const message = ref('')
 const error = ref('')
 
@@ -104,18 +108,21 @@ function fmtMonth(month: string): string {
 async function load() {
   error.value = ''
   try {
-    const [summaryData, monthsData, allMonths, settingsData, assetsData] = await Promise.all([
-      api.monthSummary(),
-      api.listMonths(year.value),
-      api.listMonths(),
-      api.monthSettings(),
-      api.listManualAssets(),
-    ])
+    const [summaryData, monthsData, allMonths, settingsData, assetsData, accountsData] =
+      await Promise.all([
+        api.monthSummary(),
+        api.listMonths(year.value),
+        api.listMonths(),
+        api.getSettings(),
+        api.listManualAssets(),
+        api.listCashAccounts(),
+      ])
     summary.value = summaryData
     months.value = monthsData
     latestStoredMonth.value = allMonths.at(-1)?.month ?? null
     settings.value = settingsData
     assets.value = assetsData
+    accounts.value = accountsData
     if (!newMonth.value) newMonth.value = defaultNewMonth()
     if (selectedMonth.value) {
       detail.value = await api.monthDetail(selectedMonth.value)
@@ -496,7 +503,7 @@ async function saveSettings() {
     }
   }
   try {
-    await api.updateMonthSettings({
+    await api.updateSettings({
       salary,
       pool_rate: ratePct === null ? null : ratePct / 100,
       pool_rate_year: year.value,
@@ -532,12 +539,10 @@ async function saveSettings() {
 const editingAsset = ref<ManualAsset | 'new' | null>(null)
 const assetDraft = ref<{
   label: string
-  kind: ManualAssetKind
   liquidity: ManualAssetLiquidity
   amount: string | number
 }>({
   label: '',
-  kind: 'cash',
   liquidity: 'long',
   amount: '',
 })
@@ -546,10 +551,9 @@ function startAssetEdit(asset: ManualAsset | 'new') {
   editingAsset.value = asset
   assetDraft.value =
     asset === 'new'
-      ? { label: '', kind: 'cash', liquidity: 'long', amount: '' }
+      ? { label: '', liquidity: 'long', amount: '' }
       : {
           label: asset.label,
-          kind: asset.kind,
           liquidity: asset.liquidity,
           amount: asset.amount,
         }
@@ -564,7 +568,6 @@ async function saveAsset() {
   try {
     const body: NewManualAsset = {
       label: assetDraft.value.label.trim(),
-      kind: assetDraft.value.kind,
       liquidity: assetDraft.value.liquidity,
       amount,
     }
@@ -591,6 +594,87 @@ async function removeAsset(asset: ManualAsset) {
     error.value = ''
     await load()
   } catch (err) {
+    error.value = err instanceof ApiError ? err.message : String(err)
+  }
+}
+
+// ----- 活期帳戶 -----
+
+const editingAccount = ref<CashAccount | 'new' | null>(null)
+const accountDraft = ref<{
+  label: string
+  currency: Currency
+  role: CashRole
+  amount: string | number
+  is_default_receipt: boolean
+}>({
+  label: '',
+  currency: 'HKD',
+  role: 'bank',
+  amount: '',
+  is_default_receipt: false,
+})
+
+// Bank accounts are HKD-only; snap the currency back when the role flips.
+watch(
+  () => accountDraft.value.role,
+  (role) => {
+    if (role === 'bank') accountDraft.value.currency = 'HKD'
+  },
+)
+
+function startAccountEdit(account: CashAccount | 'new') {
+  editingAccount.value = account
+  accountDraft.value =
+    account === 'new'
+      ? { label: '', currency: 'HKD', role: 'bank', amount: '', is_default_receipt: false }
+      : {
+          label: account.label,
+          currency: account.currency,
+          role: account.role,
+          amount: account.amount,
+          is_default_receipt: account.is_default_receipt,
+        }
+}
+
+async function saveAccount() {
+  const amount = numOrNull(accountDraft.value.amount)
+  if (accountDraft.value.label.trim() === '' || amount === null) {
+    error.value = '名稱及金額必填'
+    return
+  }
+  try {
+    const body: NewCashAccount = {
+      label: accountDraft.value.label.trim(),
+      currency: accountDraft.value.currency,
+      role: accountDraft.value.role,
+      amount,
+      is_default_receipt: accountDraft.value.is_default_receipt,
+    }
+    if (editingAccount.value === 'new') {
+      await api.createCashAccount(body)
+      message.value = '已新增帳戶'
+    } else if (editingAccount.value) {
+      await api.updateCashAccount(editingAccount.value.id, body)
+      message.value = '已儲存帳戶'
+    }
+    editingAccount.value = null
+    error.value = ''
+    await load()
+  } catch (err) {
+    error.value = err instanceof ApiError ? err.message : String(err)
+  }
+}
+
+async function removeAccount(account: CashAccount) {
+  if (!window.confirm(`刪除帳戶 ${account.label}？`)) return
+  try {
+    await api.deleteCashAccount(account.id)
+    message.value = `已刪除 ${account.label}`
+    error.value = ''
+    await load()
+  } catch (err) {
+    // 409 (broker rows, or other server-side refusals) surfaces the server message.
     error.value = err instanceof ApiError ? err.message : String(err)
   }
 }
@@ -949,11 +1033,89 @@ onMounted(load)
         </button>
       </h3>
       <template v-if="settingsOpen">
+        <h4>活期帳戶</h4>
         <table>
           <thead>
             <tr>
               <th>名稱</th>
-              <th>類別</th>
+              <th>幣別</th>
+              <th>類型</th>
+              <th class="num">金額</th>
+              <th>預設收款</th>
+              <th></th>
+            </tr>
+          </thead>
+          <tbody>
+            <tr v-for="account in accounts" :key="account.id">
+              <td>{{ account.label }}</td>
+              <td>{{ account.currency }}</td>
+              <td>{{ account.role === 'bank' ? '銀行' : '券商' }}</td>
+              <td class="num">{{ fmtMoney(account.amount) }}</td>
+              <td>{{ account.is_default_receipt ? '✓' : '' }}</td>
+              <td class="row-actions">
+                <button type="button" class="link" @click="startAccountEdit(account)">編輯</button>
+                <button
+                  v-if="account.role !== 'broker'"
+                  type="button"
+                  class="link danger"
+                  @click="removeAccount(account)"
+                >
+                  刪除
+                </button>
+              </td>
+            </tr>
+            <tr v-if="accounts.length === 0">
+              <td colspan="6" class="muted">沒有活期帳戶</td>
+            </tr>
+          </tbody>
+        </table>
+        <button type="button" class="link" @click="startAccountEdit('new')">新增帳戶</button>
+
+        <form v-if="editingAccount" class="inline-form" @submit.prevent="saveAccount">
+          <h4>{{ editingAccount === 'new' ? '新增帳戶' : `編輯 ${editingAccount.label}` }}</h4>
+          <label>
+            名稱
+            <input v-model="accountDraft.label" required />
+          </label>
+          <label>
+            幣別
+            <select v-model="accountDraft.currency">
+              <option value="HKD">HKD</option>
+              <option value="USD" :disabled="accountDraft.role === 'bank'">USD</option>
+            </select>
+          </label>
+          <label>
+            類型
+            <select v-model="accountDraft.role">
+              <option value="bank">銀行</option>
+              <option value="broker">券商</option>
+            </select>
+          </label>
+          <label>
+            金額
+            <input
+              v-model="accountDraft.amount"
+              type="number"
+              step="any"
+              inputmode="decimal"
+              required
+            />
+          </label>
+          <label class="checkbox">
+            <input v-model="accountDraft.is_default_receipt" type="checkbox" />
+            預設收款
+          </label>
+          <div class="form-actions">
+            <button type="submit">儲存</button>
+            <button type="button" class="link" @click="editingAccount = null">取消</button>
+          </div>
+        </form>
+
+        <h4>資產</h4>
+        <table>
+          <thead>
+            <tr>
+              <th>名稱</th>
               <th>流動性</th>
               <th class="num">金額</th>
               <th></th>
@@ -962,10 +1124,7 @@ onMounted(load)
           <tbody>
             <tr v-for="asset in assets" :key="asset.id">
               <td>{{ asset.label }}</td>
-              <td>{{ asset.kind === 'cash' ? '活期' : '資產' }}</td>
-              <td>
-                {{ asset.kind === 'asset' ? (asset.liquidity === 'short' ? '短期' : '長期') : '' }}
-              </td>
+              <td>{{ asset.liquidity === 'short' ? '短期' : '長期' }}</td>
               <td class="num">{{ fmtMoney(asset.amount) }}</td>
               <td class="row-actions">
                 <button type="button" class="link" @click="startAssetEdit(asset)">編輯</button>
@@ -973,7 +1132,7 @@ onMounted(load)
               </td>
             </tr>
             <tr v-if="assets.length === 0">
-              <td colspan="5" class="muted">沒有手動結餘</td>
+              <td colspan="4" class="muted">沒有手動結餘</td>
             </tr>
           </tbody>
         </table>
@@ -986,13 +1145,6 @@ onMounted(load)
             <input v-model="assetDraft.label" required />
           </label>
           <label>
-            類別
-            <select v-model="assetDraft.kind">
-              <option value="cash">活期</option>
-              <option value="asset">資產</option>
-            </select>
-          </label>
-          <label v-if="assetDraft.kind === 'asset'">
             流動性
             <select v-model="assetDraft.liquidity">
               <option value="short">短期</option>
