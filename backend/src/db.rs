@@ -390,4 +390,103 @@ mod tests {
             "the parsed rate must round-trip exactly"
         );
     }
+
+    /// `query` selects the single rewritten timestamp; `original` is the
+    /// legacy value inserted before migration 0032. The rewrite must land on
+    /// the app's `±HH:MM` shape and keep the instant, checked through
+    /// julianday so the test is zone-independent.
+    async fn assert_ts_normalized(pool: &SqlitePool, query: &'static str, original: &str) {
+        let converted: String = sqlx::query_scalar(query).fetch_one(pool).await.unwrap();
+        let converted_jd: f64 = sqlx::query_scalar("SELECT julianday(?)")
+            .bind(&converted)
+            .fetch_one(pool)
+            .await
+            .unwrap();
+        let original_jd: f64 = sqlx::query_scalar("SELECT julianday(?)")
+            .bind(original)
+            .fetch_one(pool)
+            .await
+            .unwrap();
+        assert!(
+            converted.len() == 32
+                && matches!(converted.as_bytes()[26], b'+' | b'-')
+                && converted.as_bytes()[29] == b':'
+                && (converted_jd - original_jd).abs() < 0.00001,
+            "{query} -> {converted}"
+        );
+    }
+
+    #[tokio::test]
+    async fn migration_0032_normalizes_legacy_timestamps() {
+        let pool = unmigrated_memory().await;
+        apply_versions(&pool, 31, 0).await;
+        sqlx::raw_sql(
+            "INSERT INTO month_stats (month, created_at, updated_at) VALUES \
+             ('2024-01-01', '2026-01-01T00:00:00.000000+08:00', '2026-01-01T00:00:00.000000+08:00');
+             INSERT INTO month_items (month, category, label, amount, created_at) VALUES \
+             ('2024-01-01', 'income', 'legacy', 1, '2026-09-21T07:11:22.897Z'), \
+             ('2024-01-01', 'income', 'conforming', 1, '2026-10-20T15:10:11.946813+08:00');
+             INSERT INTO fx_rates (currency, rate_to_hkd, updated_at) VALUES \
+             ('USD', 7.843045, '2026-10-20T07:01:06.624Z');
+             INSERT INTO ibkr_transfers (transfer_date, amount_hkd, created_at) VALUES \
+             ('2026-06-02', 131000, '2026-09-23 09:10:36');",
+        )
+        .execute(&pool)
+        .await
+        .expect("legacy timestamp fixtures");
+        apply_versions(&pool, 32, 31).await;
+
+        assert_ts_normalized(
+            &pool,
+            "SELECT created_at FROM month_items WHERE label = 'legacy'",
+            "2026-09-21T07:11:22.897Z",
+        )
+        .await;
+        assert_ts_normalized(
+            &pool,
+            "SELECT updated_at FROM fx_rates WHERE currency = 'USD'",
+            "2026-10-20T07:01:06.624Z",
+        )
+        .await;
+        assert_ts_normalized(
+            &pool,
+            "SELECT created_at FROM ibkr_transfers",
+            "2026-09-23 09:10:36",
+        )
+        .await;
+
+        // 0029 stamps the seeded broker rows UTC `Z`; 0032 rewrites them on
+        // the same pass, whatever instant 'now' was.
+        let odd: i64 = sqlx::query_scalar(
+            "SELECT COUNT(*) FROM cash_accounts \
+             WHERE updated_at NOT GLOB '????-??-??T??:??:??.??????[+-][0-9][0-9]:[0-9][0-9]'",
+        )
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+        assert_eq!(odd, 0);
+
+        // Rows already in the app format are untouched.
+        let kept: String =
+            sqlx::query_scalar("SELECT created_at FROM month_items WHERE label = 'conforming'")
+                .fetch_one(&pool)
+                .await
+                .unwrap();
+        assert_eq!(kept, "2026-10-20T15:10:11.946813+08:00");
+    }
+
+    #[tokio::test]
+    async fn migration_0032_leaves_fresh_db_timestamps_uniform() {
+        let pool = unmigrated_memory().await;
+        apply_versions(&pool, i64::MAX, 0).await;
+        // 0029 stamps the seeded broker rows UTC `Z`; 0032 must rewrite them.
+        let odd: i64 = sqlx::query_scalar(
+            "SELECT COUNT(*) FROM cash_accounts \
+             WHERE updated_at NOT GLOB '????-??-??T??:??:??.??????[+-][0-9][0-9]:[0-9][0-9]'",
+        )
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+        assert_eq!(odd, 0);
+    }
 }

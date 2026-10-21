@@ -2,6 +2,8 @@
 
 Part of the [data-flow guide](DATA_FLOW.md). One section per SQLite table in `data/wealth.db`, plus the figures the backend derives on read and never stores.
 
+Audit timestamps (`created_at`, `updated_at`, `price_updated_at`, `value_updated_at`) are local RFC 3339 with a numeric offset, written by `store::now_timestamp()` — e.g. `2026-10-20T15:10:11.946813+08:00`. Migrations that produce timestamps must emit the same format (`strftime(...,'localtime')` plus the offset), never `datetime('now')` or a `Z` suffix; migration 0032 rewrote the legacy rows. Columns ending in `_date`, plus `received_at`, `recorded_on`, and `month`, hold `YYYY-MM-DD` dates, not timestamps.
+
 ### `stocks`
 
 One row per stock per market.
