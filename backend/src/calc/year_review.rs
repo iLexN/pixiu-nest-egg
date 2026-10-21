@@ -92,6 +92,9 @@ pub struct YearReviewInvestment {
     pub invested: Option<f64>,
     /// invested %: invested ÷ (income + interest); absent without income.
     pub invested_pct: Option<f64>,
+    /// 美股P/L: the year's stored US sold_pl (USD, display-only); absent
+    /// while none is stored. Never feeds net_investment.
+    pub us_sold_pl: Option<f64>,
     /// Irene + 開心 Pool: Σ pool_input.
     pub irene_pool: f64,
     /// 月薪增幅: the stored `raise` override, else the salary-derived figure;
@@ -121,17 +124,34 @@ pub struct YearReviewAssets {
     pub stock_now_value: Option<f64>,
     /// dividends ÷ now_value.
     pub stock_value_rate: Option<f64>,
+    /// 美股 (USD figures, not HKD-converted): the same five figures derived
+    /// from the US yearly table. Only the blended 回報率 convert them.
+    pub us_stock_cost: Option<f64>,
+    pub us_stock_dividends: Option<f64>,
+    /// us_stock_dividends ÷ us_stock_cost.
+    pub us_stock_rate: Option<f64>,
+    pub us_stock_now_value: Option<f64>,
+    /// us_stock_dividends ÷ us_stock_now_value.
+    pub us_stock_value_rate: Option<f64>,
+    /// us_stock_cost × the stored USD→HKD rate — the cell's HKD sub-line;
+    /// absent while the USD figure or the rate is missing.
+    pub us_stock_cost_hkd: Option<f64>,
+    /// us_stock_now_value × the stored USD→HKD rate.
+    pub us_stock_now_value_hkd: Option<f64>,
     /// 定期: principal and interest of deposits whose end_date is in the
     /// year and not after today (the sheet's `End` filter) — the stored
     /// overrides win where set.
     pub deposit_principal: Option<f64>,
     pub deposit_interest: Option<f64>,
-    /// 回報率 blends (the 2026 layout):
-    /// income ÷ (bond principal + stock cost).
+    /// 回報率 blends (the 2026 layout), with the US figures converted at
+    /// the stored USD→HKD rate:
+    /// income ÷ (bond principal + stock cost + us stock cost × rate).
+    /// Absent when the year has US figures but no rate is stored.
     pub income_cost_rate: Option<f64>,
-    /// all returns ÷ (bond principal + stock now value).
+    /// all returns ÷ (bond principal + stock now value + us now value × rate).
     pub total_value_rate: Option<f64>,
-    /// (bond + stock returns) ÷ (bond principal + stock now value).
+    /// (bond + stock returns) ÷ (bond principal + stock now value +
+    /// us now value × rate).
     pub income_value_rate: Option<f64>,
     /// 收入: the stored manual figure.
     pub income: Option<f64>,
@@ -222,14 +242,18 @@ fn deposit_year_figures(
     (any.then_some(principal), any.then_some(interest))
 }
 
-/// The inputs `year_review_rows` derives against: `summaries` and `hk_years`
-/// are the already-built Month Stat yearly block and HK yearly table;
-/// `bonds`/`deposits` derive the asset rows that stored overrides can
-/// replace; `transfers` and `last_salaries` feed `invested` and 月薪增幅.
+/// The inputs `year_review_rows` derives against: `summaries`, `hk_years`
+/// and `us_years` are the already-built Month Stat yearly block and the two
+/// per-market yearly tables; `bonds`/`deposits` derive the asset rows that
+/// stored overrides can replace; `transfers` and `last_salaries` feed
+/// `invested` and 月薪增幅; `usd_hkd_rate` converts the US figures inside
+/// the blended 回報率.
 #[derive(Debug)]
 pub struct YearReviewInputs<'a> {
     pub summaries: &'a [MonthYearSummary],
     pub hk_years: &'a [YearRow],
+    pub us_years: &'a [YearRow],
+    pub usd_hkd_rate: Option<f64>,
     pub records: &'a BTreeMap<i32, YearReviewRecord>,
     pub bonds: &'a [BondYearFacts],
     pub deposits: &'a [DepositFacts<'a>],
@@ -246,6 +270,8 @@ pub fn year_review_rows(
     let YearReviewInputs {
         summaries,
         hk_years,
+        us_years,
+        usd_hkd_rate,
         records,
         bonds,
         deposits,
@@ -277,6 +303,7 @@ pub fn year_review_rows(
         let record = records.get(&year).copied().unwrap_or_default();
         let stored_record = records.get(&year).copied();
         let hk = hk_years.iter().find(|row| row.year == year);
+        let us = us_years.iter().find(|row| row.year == year);
 
         let income = record.income;
         let interest = summary.map(|s| s.interest_sum).unwrap_or(0.0);
@@ -335,22 +362,52 @@ pub fn year_review_rows(
             (Some(dividends), Some(value)) if value > 0.0 => Some(dividends / value),
             _ => None,
         };
+        let us_stock_cost = us.map(|row| row.cost);
+        let us_stock_dividends = us.map(|row| row.dividends);
+        let us_stock_now_value = us.and_then(|row| row.market_value);
+        let us_stock_rate = match (us_stock_dividends, us_stock_cost) {
+            (Some(dividends), Some(cost)) if cost > 0.0 => Some(dividends / cost),
+            _ => None,
+        };
+        let us_stock_value_rate = match (us_stock_dividends, us_stock_now_value) {
+            (Some(dividends), Some(value)) if value > 0.0 => Some(dividends / value),
+            _ => None,
+        };
 
         // SUM ranges treat blank cells as zero, so each blend counts whichever
         // components exist and reports a rate once its denominator is known.
-        let income_returns = bond_interest.unwrap_or(0.0) + stock_dividends.unwrap_or(0.0);
+        // US figures join converted at the stored USD→HKD rate; a year that
+        // has US figures but no rate reports the blends absent rather than a
+        // plausible-looking HK-only figure.
+        let rate = usd_hkd_rate.unwrap_or(0.0);
+        let us_stock_cost_hkd = usd_hkd_rate.and_then(|rate| us_stock_cost.map(|v| v * rate));
+        let us_stock_now_value_hkd =
+            usd_hkd_rate.and_then(|rate| us_stock_now_value.map(|v| v * rate));
+        let us_cost_term = us_stock_cost.unwrap_or(0.0) * rate;
+        let us_dividends_term = us_stock_dividends.unwrap_or(0.0) * rate;
+        let us_value_term = us_stock_now_value.unwrap_or(0.0) * rate;
+        let income_returns =
+            bond_interest.unwrap_or(0.0) + stock_dividends.unwrap_or(0.0) + us_dividends_term;
         let all_returns = income_returns + deposit_interest.unwrap_or(0.0);
-        let cost_basis = (bond_principal.unwrap_or(0.0) > 0.0 || stock_cost.is_some())
-            .then(|| bond_principal.unwrap_or(0.0) + stock_cost.unwrap_or(0.0));
-        let value_basis = match (bond_principal, stock_now_value) {
-            (bond, stock) if bond.unwrap_or(0.0) + stock.unwrap_or(0.0) > 0.0 => {
-                Some(bond.unwrap_or(0.0) + stock.unwrap_or(0.0))
-            }
-            _ => None,
+        let cost_basis = (bond_principal.unwrap_or(0.0) > 0.0
+            || stock_cost.is_some()
+            || us_stock_cost.is_some())
+        .then(|| bond_principal.unwrap_or(0.0) + stock_cost.unwrap_or(0.0) + us_cost_term);
+        let value_basis = {
+            let basis =
+                bond_principal.unwrap_or(0.0) + stock_now_value.unwrap_or(0.0) + us_value_term;
+            (basis > 0.0).then_some(basis)
         };
-        let income_cost_rate = cost_basis.map(|basis| income_returns / basis);
-        let total_value_rate = value_basis.map(|basis| all_returns / basis);
-        let income_value_rate = value_basis.map(|basis| income_returns / basis);
+        let blends_absent = us.is_some() && usd_hkd_rate.is_none();
+        let (income_cost_rate, total_value_rate, income_value_rate) = if blends_absent {
+            (None, None, None)
+        } else {
+            (
+                cost_basis.map(|basis| income_returns / basis),
+                value_basis.map(|basis| all_returns / basis),
+                value_basis.map(|basis| income_returns / basis),
+            )
+        };
 
         let row = YearReviewRow {
             year,
@@ -390,6 +447,7 @@ pub fn year_review_rows(
                     }
                     _ => None,
                 },
+                us_sold_pl: us.and_then(|row| row.sold_pl),
                 irene_pool: summary.map(|s| s.pool_input_sum).unwrap_or(0.0),
                 raise,
                 interest_avg_yoy: yoy(
@@ -407,6 +465,13 @@ pub fn year_review_rows(
                 stock_rate,
                 stock_now_value,
                 stock_value_rate,
+                us_stock_cost,
+                us_stock_dividends,
+                us_stock_rate,
+                us_stock_now_value,
+                us_stock_value_rate,
+                us_stock_cost_hkd,
+                us_stock_now_value_hkd,
                 deposit_principal,
                 deposit_interest,
                 income_cost_rate,
@@ -683,10 +748,13 @@ mod tests {
         // The April step-ups in the stored month salaries: 47850 → 50810 →
         // 52700, so the derived raises are the sheet's 2960 and 1890.
         let last_salaries = BTreeMap::from([(2024, 47850.0), (2025, 50810.0), (2026, 52700.0)]);
+        let us_years: Vec<YearRow> = Vec::new();
         let rows_out = year_review_rows(
             &YearReviewInputs {
                 summaries: &summaries,
                 hk_years: &hk_years,
+                us_years: &us_years,
+                usd_hkd_rate: Some(7.8),
                 records: &records,
                 bonds: &bonds,
                 deposits: &deposits,
@@ -771,11 +839,14 @@ mod tests {
             },
         )]);
         let salaries = BTreeMap::from([(2025, 50810.0), (2026, 50000.0)]);
+        let us_years: Vec<YearRow> = Vec::new();
         let build = |records: &BTreeMap<i32, YearReviewRecord>, salaries: &BTreeMap<i32, f64>| {
             year_review_rows(
                 &YearReviewInputs {
                     summaries: &[],
                     hk_years: &[],
+                    us_years: &us_years,
+                    usd_hkd_rate: Some(7.8),
                     records,
                     bonds: &[],
                     deposits: &[],
@@ -801,6 +872,96 @@ mod tests {
             &BTreeMap::from([(2026, 52700.0)]),
         );
         assert_eq!(rows_out[0].investment.raise, None);
+    }
+
+    #[test]
+    fn us_figures_stay_usd_and_blend_at_the_stored_rate() {
+        // HK: cost 1323946, dividends 49330.19, live value 1323946, stored
+        // sold_pl 0. US: cost 1000 USD, dividends 200 USD, live value 5000
+        // USD, stored sold_pl 500 USD.
+        let hk_years = yearly_rows(
+            &[dated_buy("2026-03-01", 1.0, 1323946.0)],
+            &[dividend_fact("中國銀行", "2026-08-01", Some(49330.19))],
+            &HashMap::from([(
+                2026,
+                YearSnapshot {
+                    sold_pl: Some(0.0),
+                    ..snapshot_year(None, None, None)
+                },
+            )]),
+            Some(1323946.0),
+            2026,
+        );
+        let us_years = yearly_rows(
+            &[dated_buy("2026-03-01", 10.0, 1000.0)],
+            &[dividend_fact("AAPL", "2026-08-01", Some(200.0))],
+            &HashMap::from([(
+                2026,
+                YearSnapshot {
+                    sold_pl: Some(500.0),
+                    ..snapshot_year(None, None, None)
+                },
+            )]),
+            Some(5000.0),
+            2026,
+        );
+        let records = BTreeMap::from([(2026, YearReviewRecord::default())]);
+        let build = |usd_hkd_rate| {
+            year_review_rows(
+                &YearReviewInputs {
+                    summaries: &[],
+                    hk_years: &hk_years,
+                    us_years: &us_years,
+                    usd_hkd_rate,
+                    records: &records,
+                    bonds: &[],
+                    deposits: &[],
+                    transfers: &BTreeMap::new(),
+                    last_salaries: &BTreeMap::new(),
+                },
+                ym("2026-09-24"),
+            )
+        };
+
+        let row = &build(Some(7.8))[0];
+        // The 美股 row reports raw USD figures, not HKD-converted.
+        assert_eq!(row.assets.us_stock_cost, Some(1000.0));
+        assert_eq!(row.assets.us_stock_dividends, Some(200.0));
+        assert_eq!(row.assets.us_stock_now_value, Some(5000.0));
+        assert!(approx_eq(row.assets.us_stock_rate.unwrap(), 0.2));
+        assert!(approx_eq(row.assets.us_stock_value_rate.unwrap(), 0.04));
+        // 美股P/L is reported but stays out of 投資純利 (interest + HK sold_pl).
+        assert_eq!(row.investment.us_sold_pl, Some(500.0));
+        assert!(approx_eq(row.investment.net_investment.unwrap(), 0.0));
+        // The HKD companions convert at the stored rate.
+        assert_eq!(row.assets.us_stock_cost_hkd, Some(7800.0));
+        assert_eq!(row.assets.us_stock_now_value_hkd, Some(39000.0));
+        // income ÷ (hk cost + us cost × rate): (49330.19 + 200×7.8) ÷ (1323946 + 7800).
+        assert!(approx_eq(
+            row.assets.income_cost_rate.unwrap(),
+            (49330.19 + 200.0 * 7.8) / (1323946.0 + 1000.0 * 7.8)
+        ));
+        // (49330.19 + 200×7.8) ÷ (1323946 + 5000×7.8) ≈ 0.03734.
+        assert!(approx_eq(
+            row.assets.income_value_rate.unwrap(),
+            (49330.19 + 200.0 * 7.8) / (1323946.0 + 5000.0 * 7.8)
+        ));
+        // No deposit interest: total_value_rate shares the same figures.
+        assert!(approx_eq(
+            row.assets.total_value_rate.unwrap(),
+            row.assets.income_value_rate.unwrap()
+        ));
+
+        // US figures with no stored rate: the USD rows still report, but the
+        // HKD companions and the blends are absent rather than silently
+        // HK-only.
+        let row = &build(None)[0];
+        assert_eq!(row.assets.us_stock_cost, Some(1000.0));
+        assert_eq!(row.assets.us_stock_cost_hkd, None);
+        assert_eq!(row.assets.us_stock_now_value_hkd, None);
+        assert_eq!(row.assets.income_cost_rate, None);
+        assert_eq!(row.assets.total_value_rate, None);
+        assert_eq!(row.assets.income_value_rate, None);
     }
 
     #[test]

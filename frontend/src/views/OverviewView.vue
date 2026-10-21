@@ -203,6 +203,32 @@ async function removeItem(item: ForecastItem) {
   }
 }
 
+/** 複製: duplicate the row's current inputs into the same month next year.
+ * The target sits outside the 7-month window — stored but invisible until
+ * the months slide forward, so the message names where it landed. */
+async function copyItem(item: ForecastItem) {
+  const draft = drafts.value[item.id]
+  if (!draft) return
+  const amount = numOrNull(draft.amount)
+  if (amount === null) {
+    error.value = '金額必須是數字'
+    return
+  }
+  const target = `${Number(item.month.slice(0, 4)) + 1}-${item.month.slice(5, 7)}`
+  try {
+    await api.createForecastItem(target, {
+      kind: item.kind,
+      amount,
+      note: draft.note.trim() || undefined,
+    })
+    message.value = `已複製到 ${target}`
+    error.value = ''
+    await load()
+  } catch (err) {
+    error.value = err instanceof ApiError ? err.message : String(err)
+  }
+}
+
 function startConvert(item: ForecastItem) {
   converting.value = item
 }
@@ -738,6 +764,15 @@ onMounted(load)
             轉為定期
           </button>
           <button type="button" class="link" @click="removeItem(item)">刪除</button>
+          <button
+            v-if="selected.kind === 'tax'"
+            type="button"
+            class="link"
+            title="複製到明年同月"
+            @click="copyItem(item)"
+          >
+            複製
+          </button>
           </template>
         </div>
         <div class="plan-row">

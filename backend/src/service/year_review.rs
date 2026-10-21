@@ -22,6 +22,8 @@ pub async fn build(pool: &SqlitePool) -> Result<YearReviewResponse, StoreError> 
     let sold_pl = crate::store::yearly::hk_sold_pl(pool).await?;
     let summaries = month_year_summaries(&stat_rows, &items, &rates, &sold_pl, live_tail);
     let hk_years = super::yearly::build(pool, Market::Hk).await?.years;
+    let us_years = super::yearly::build(pool, Market::Us).await?.years;
+    let usd_hkd_rate = crate::store::fx::usd_rate(pool).await?;
     let records = crate::store::year_review::load_records(pool).await?;
     let bonds = crate::store::bonds::year_facts(pool).await?;
     let deposits = crate::store::deposits::year_facts(pool).await?;
@@ -34,6 +36,8 @@ pub async fn build(pool: &SqlitePool) -> Result<YearReviewResponse, StoreError> 
             &YearReviewInputs {
                 summaries: &summaries,
                 hk_years: &hk_years,
+                us_years: &us_years,
+                usd_hkd_rate,
                 records: &records,
                 bonds: &bonds,
                 deposits: &deposits,

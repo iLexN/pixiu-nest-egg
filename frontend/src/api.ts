@@ -224,6 +224,8 @@ export interface YearReviewInvestment {
   transferred: number | null
   invested: number | null
   invested_pct: number | null
+  /** 美股P/L: the year's stored US sold_pl, USD — never feeds net_investment. */
+  us_sold_pl: number | null
   irene_pool: number
   raise: number | null
   interest_avg_yoy: number | null
@@ -240,6 +242,15 @@ export interface YearReviewAssets {
   stock_rate: number | null
   stock_now_value: number | null
   stock_value_rate: number | null
+  /** 美股 figures in USD; only the blended 回報率 convert them to HKD. */
+  us_stock_cost: number | null
+  us_stock_dividends: number | null
+  us_stock_rate: number | null
+  us_stock_now_value: number | null
+  us_stock_value_rate: number | null
+  /** USD figure × stored USD→HKD rate; null while either input is missing. */
+  us_stock_cost_hkd: number | null
+  us_stock_now_value_hkd: number | null
   deposit_principal: number | null
   deposit_interest: number | null
   income_cost_rate: number | null

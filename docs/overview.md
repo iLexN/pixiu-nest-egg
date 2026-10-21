@@ -63,6 +63,9 @@ Click a plan cell → the editor lists that (month, kind)'s items
   → 儲存 PATCHes /api/forecast-items/:id; 刪除 DELETEs it; the add row POSTs
     /api/forecast/:ym/items — each placement is its own row (the sheet's
     =7000+6000 cell is two items); deposit kinds accept a return-month override
+複製 on a tax item → POSTs {kind, amount, note} to /api/forecast/{ym}/items
+  for the same month next year — the copy lands outside the 7-month window,
+  stored but invisible until the months slide forward
 轉為定期 on an hs_deposit/sc_deposit item → DepositForm prefilled (principal
   = −amount, bank HS/SC from the kind, end_date = return month's last day)
   → POST /api/forecast-items/:id/convert creates the deposit and deletes the
@@ -117,8 +120,9 @@ MonthStatView loads GET /api/months/summary + /api/months?year=YYYY
 ```text
 YearReviewView loads GET /api/year-review
   → store/ loads month_stats + items + pool rates, year_snapshots, the
-    year_review records, HK trades + dividends, deposits, bonds + coupons,
-    and manual_assets; service/year_review.rs assembles them into rows
+    year_review records, HK + US trades + dividends, the fx_rates USD rate,
+    deposits, bonds + coupons, and manual_assets; service/year_review.rs
+    assembles them into rows
   → calc/year_review.rs::year_review_rows builds one row per year from the union of
     years present in those inputs
   → the frontend renders one block per year mirroring the sheet's
@@ -128,8 +132,8 @@ YearReviewView loads GET /api/year-review
 Each row reproduces the workbook block:
 
 - Ledger group — 總數+/平均總數+ (Σ `total_change` and ÷12), 支出/平均支出 (Σ `month_spend`), 生活平均支出 (the sheet's `AVERAGE` over recorded living spends), 開心 Pool 收入/支出/結餘 (chained `pool_balances`), plus the D-column YoY ratios.
-- Investment group — 利息回報 and 平均回報 (`interest ÷ 12` flat, even mid-year), 投資P/L (HK `sold_pl`), 投資純利 (`interest + sold_pl`), IBKR 轉入 (Σ the year's `ibkr_transfers`), invested (`HK net invested + 當年轉入 + invested_adjustment`), invested % (`invested ÷ (收入 + 利息回報)`), Irene + 開心 Pool (`pool_input_sum + pool_balance`), plus the G-column YoY ratios.
-- Asset group — 債券 (principal held in the year + coupons received), 港股 (yearly HK row: cost/dividends/rates/year-end value; 派息 counts received only), 定期 (deposits ending in the year, `End ≤ today`), the three blended 回報率 rates (income-returns ÷ bond+cost, all-returns ÷ bond+市值, income-returns ÷ bond+市值), 收入, 平均收入 (÷12), and 存/平均存/存% (`income − spend`, ÷income), plus the 收入 YoY.
+- Investment group — 利息回報 and 平均回報 (`interest ÷ 12` flat, even mid-year), 投資P/L (HK `sold_pl`), 美股P/L (US `sold_pl`, USD display-only — never feeds 投資純利), 投資純利 (`interest + sold_pl`), IBKR 轉入 (Σ the year's `ibkr_transfers`), invested (`HK net invested + 當年轉入 + invested_adjustment`), invested % (`invested ÷ (收入 + 利息回報)`), Irene + 開心 Pool (`pool_input_sum + pool_balance`), plus the G-column YoY ratios.
+- Asset group — 債券 (principal held in the year + coupons received), 港股 (yearly HK row: cost/dividends/rates/year-end value; 派息 counts received only), 美股 (the yearly US row, same five figures in USD; 成本/市值 also carry `us_stock_*_hkd` = the USD figure × the stored USD→HKD rate, shown as a muted HK$ sub-line), 定期 (deposits ending in the year, `End ≤ today`), the three blended 回報率 rates (income-returns ÷ bond+cost, all-returns ÷ bond+市值, income-returns ÷ bond+市值 — US figures join converted at the stored `fx_rates` USD rate; a year carrying US figures but no rate reports the blends `—`), 收入, 平均收入 (÷12), and 存/平均存/存% (`income − spend`, ÷income), plus the 收入 YoY.
 
 `pool_income`/`pool_spend`/`pool_balance`, `interest`, `interest_avg` and `irene_pool` always read 0 without month data — the sheet's own formulas do the same.
 

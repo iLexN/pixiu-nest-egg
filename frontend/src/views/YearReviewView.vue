@@ -34,6 +34,8 @@ interface MetricRow {
   fmt?: 'pct'
   /** YoY ratio shown inline next to the value. */
   yoy?: (row: YearReviewRow) => number | null
+  /** Secondary money figure shown muted beneath the value (e.g. HKD under USD). */
+  sub?: (row: YearReviewRow) => number | null
   /** Editable manual field, if this row takes input. */
   field?: EditField
 }
@@ -70,6 +72,7 @@ const sections: { label: string; rows: MetricRow[] }[] = [
         yoy: (r) => r.investment.interest_avg_yoy,
       },
       { label: '投資P/L', get: (r) => r.investment.sold_pl, field: 'sold_pl' },
+      { label: '美股P/L (USD)', get: (r) => r.investment.us_sold_pl },
       { label: '投資純利', get: (r) => r.investment.net_investment },
       { label: 'IBKR 轉入', get: (r) => r.investment.transferred },
       {
@@ -98,6 +101,19 @@ const sections: { label: string; rows: MetricRow[] }[] = [
       { label: '港股 率', get: (r) => r.assets.stock_rate, fmt: 'pct' },
       { label: '港股 市值', get: (r) => r.assets.stock_now_value },
       { label: '港股 市值率', get: (r) => r.assets.stock_value_rate, fmt: 'pct' },
+      {
+        label: '美股 成本 (USD)',
+        get: (r) => r.assets.us_stock_cost,
+        sub: (r) => r.assets.us_stock_cost_hkd,
+      },
+      { label: '美股 派息 (USD)', get: (r) => r.assets.us_stock_dividends },
+      { label: '美股 率', get: (r) => r.assets.us_stock_rate, fmt: 'pct' },
+      {
+        label: '美股 市值 (USD)',
+        get: (r) => r.assets.us_stock_now_value,
+        sub: (r) => r.assets.us_stock_now_value_hkd,
+      },
+      { label: '美股 市值率', get: (r) => r.assets.us_stock_value_rate, fmt: 'pct' },
       { label: '定期 本金', get: (r) => r.assets.deposit_principal, field: 'deposit_principal' },
       { label: '定期 利息', get: (r) => r.assets.deposit_interest, field: 'deposit_interest' },
     ],
@@ -180,6 +196,7 @@ async function saveEdit(row: YearReviewRow, field: EditField) {
     <p v-if="error" class="error">{{ error }}</p>
     <p class="muted">
       收入、invested 調整、投資P/L 與歷史債券/定期為手動或匯入凍結值（*），點擊可修改；月薪增幅由月結薪金自動計算，（*）時為手動覆寫。
+      美股數字為 USD；混合回報率按已存的 USD→HKD 匯率折算美股部分，未設匯率時顯示 —。
     </p>
 
     <table class="review">
@@ -233,6 +250,9 @@ async function saveEdit(row: YearReviewRow, field: EditField) {
               :class="signClass(metric.yoy(year))"
               >{{ fmtPercent(metric.yoy(year)) }}</span
             >
+            <span v-if="metric.sub && metric.sub(year) !== null" class="sub">
+              HK$ {{ fmtMoney(metric.sub(year)) }}</span
+            >
           </td>
         </tr>
       </tbody>
@@ -284,6 +304,11 @@ async function saveEdit(row: YearReviewRow, field: EditField) {
   display: block;
   font-size: 0.78em;
   opacity: 0.85;
+}
+.sub {
+  display: block;
+  font-size: 0.78em;
+  opacity: 0.7;
 }
 .edit-cell input {
   width: 6.5rem;
