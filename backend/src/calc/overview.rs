@@ -349,6 +349,7 @@ pub fn overview_goals(input: &OverviewGoalsInput) -> crate::models::OverviewGoal
         final_replacement: input.final_replacement,
         saved_avg: input.saved_avg,
         interest_avg: input.interest_avg,
+        total_change_avg: input.total_change_avg,
     }
 }
 
@@ -597,9 +598,11 @@ mod tests {
         };
         assert_eq!(goals.n4_year, Some(2025));
         assert!(approx_eq(goals.n4_rate.unwrap(), 0.03851965006));
-        // The running averages echo so the card can expand 存/年.
+        // The running averages echo so the card can expand 存/年 and label
+        // each goal's pace.
         assert_eq!(goals.saved_avg, input.saved_avg);
         assert_eq!(goals.interest_avg, input.interest_avg);
+        assert_eq!(goals.total_change_avg, input.total_change_avg);
         assert!(approx_eq(goals.saving_year.unwrap(), 347656.233));
         assert!(approx_eq(goals.saving_month.unwrap(), 28971.35275));
         assert!(approx_eq(goals.passive_return_year.unwrap(), 57608.58002));

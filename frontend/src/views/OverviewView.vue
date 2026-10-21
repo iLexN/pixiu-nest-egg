@@ -335,6 +335,28 @@ const savingYearTerms = computed(() => {
   }
 })
 
+/** The 3rd/Final rows with their 基數/步伐 cells resolved: the figure each
+ *  row's remain subtracts and the pace its years divide by, with live values. */
+const formulaGoalRows = computed(() => {
+  const d = data.value
+  if (!d) return []
+  const tc = d.goals.total_change_avg
+  return [
+    {
+      name: '3rd',
+      goal: d.goals.third,
+      base: { label: '流動資產', value: d.liquid_assets },
+      pace: { label: '(歷年存+息)×12', value: savingYearTerms.value?.combined12 ?? null },
+    },
+    {
+      name: 'Final',
+      goal: d.goals.final_goal,
+      base: { label: '總數', value: d.total_assets },
+      pace: { label: '歷年總變化×12', value: tc === null ? null : tc * 12 },
+    },
+  ]
+})
+
 onMounted(load)
 </script>
 
@@ -873,61 +895,72 @@ onMounted(load)
           <tr>
             <th></th>
             <th class="num">目標金額</th>
+            <th class="num">基數</th>
             <th class="num">剩餘</th>
+            <th class="num">步伐</th>
             <th class="num">年</th>
             <th class="num">日期</th>
           </tr>
         </thead>
         <tbody>
-          <!-- 1st/2nd: the shared 現值 (K13/K19) and pace (the sheet's
-               L12/M12/L13/M13, mirrored on L18/M18/L19/M19) show once in the
-               footer. -->
+          <!-- 1st/2nd share the 現值 (K13/K19) base and the 存/年 (L12) pace. -->
           <tr v-for="(m, i) in data.goals.milestones" :key="i">
             <td>{{ i === 0 ? '1st' : '2nd' }}</td>
             <td class="num">{{ fmtMoney(m.target) || '—' }}</td>
+            <td class="num term-cell">
+              現值<span class="muted">{{ fmtMoney(data.goals.current_invest) || '—' }}</span>
+            </td>
             <td class="num" :class="signClass(m.remain)">
               {{ fmtMoney(m.remain) || '—' }}
+            </td>
+            <td class="num term-cell">
+              存/年<span class="muted">{{ fmtMoney(data.goals.saving_year) || '—' }}</span>
             </td>
             <td class="num">
               {{ reached(m.remain) ? '已達成' : fmtYears(m.years) || '—' }}
             </td>
             <td class="num">{{ reached(m.remain) ? '已達成' : m.eta || '—' }}</td>
           </tr>
-          <!-- 3rd/Final: target, remain vs 流動資產/總數, and years only. -->
-          <tr
-            v-for="(g, i) in [data.goals.third, data.goals.final_goal]"
-            :key="`f${i}`"
-          >
-            <td>{{ i === 0 ? '3rd' : 'Final' }}</td>
-            <td class="num">{{ fmtMoney(g.target) || '—' }}</td>
-            <td class="num" :class="signClass(g.remain)">
-              {{ fmtMoney(g.remain) || '—' }}
+          <!-- 3rd/Final: remain vs 流動資產/總數, each with its own pace. -->
+          <tr v-for="row in formulaGoalRows" :key="row.name">
+            <td>{{ row.name }}</td>
+            <td class="num">{{ fmtMoney(row.goal.target) || '—' }}</td>
+            <td class="num term-cell">
+              {{ row.base.label
+              }}<span class="muted">{{ fmtMoney(row.base.value) || '—' }}</span>
+            </td>
+            <td class="num" :class="signClass(row.goal.remain)">
+              {{ fmtMoney(row.goal.remain) || '—' }}
+            </td>
+            <td class="num term-cell">
+              {{ row.pace.label
+              }}<span class="muted">{{ fmtMoney(row.pace.value) || '—' }}</span>
             </td>
             <td class="num">
-              {{ reached(g.remain) ? '已達成' : fmtYears(g.years) || '—' }}
+              {{ reached(row.goal.remain) ? '已達成' : fmtYears(row.goal.years) || '—' }}
             </td>
-            <td class="num">{{ reached(g.remain) ? '已達成' : g.eta || '—' }}</td>
+            <td class="num">{{ reached(row.goal.remain) ? '已達成' : row.goal.eta || '—' }}</td>
           </tr>
         </tbody>
         <tfoot>
           <tr>
             <td>現值</td>
             <td class="num">{{ fmtMoney(data.goals.current_invest) || '—' }}</td>
-            <td colspan="3"></td>
+            <td colspan="5"></td>
           </tr>
           <tr>
             <td>存/年</td>
             <td class="num">{{ fmtMoney(data.goals.saving_year) || '—' }}</td>
             <td>存/月</td>
             <td class="num">{{ fmtMoney(data.goals.saving_month) || '—' }}</td>
-            <td></td>
+            <td colspan="3"></td>
           </tr>
           <tr>
             <td>回報/年</td>
             <td class="num">{{ fmtMoney(data.goals.passive_return_year) || '—' }}</td>
             <td>回報/月</td>
             <td class="num">{{ fmtMoney(data.goals.passive_return_month) || '—' }}</td>
-            <td></td>
+            <td colspan="3"></td>
           </tr>
         </tfoot>
       </table>
@@ -1178,6 +1211,12 @@ onMounted(load)
 }
 .avg {
   color: var(--text);
+}
+/* 基數/步伐 cells: the term name on one line, its live value muted beneath. */
+.term-cell .muted {
+  display: block;
+  font-size: 0.8rem;
+  white-space: nowrap;
 }
 .note-formula {
   display: flex;

@@ -1304,9 +1304,11 @@ export interface OverviewGoals {
   goal3_inflation: number
   goal3_years: number
   final_replacement: number
-  /** 'Month Stat' running averages (L8/N8, monthly) — the last two L12 terms. */
+  /** 'Month Stat' running averages (L8/N8/C8, monthly) — the last two L12
+   * terms plus the Final goal's pace base. */
   saved_avg: number | null
   interest_avg: number | null
+  total_change_avg: number | null
 }
 
 export interface OverviewResponse {

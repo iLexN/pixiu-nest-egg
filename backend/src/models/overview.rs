@@ -244,10 +244,12 @@ pub struct OverviewGoals {
     pub goal3_inflation: f64,
     pub goal3_years: f64,
     pub final_replacement: f64,
-    /// 'Month Stat' running averages (L8/N8, monthly) — the last two L12
-    /// terms, echoed so the card can expand 存/年.
+    /// 'Month Stat' running averages (L8/N8/C8, monthly) — the last two L12
+    /// terms plus the Final goal's pace base, echoed so the card can expand
+    /// 存/年 and label each goal's pace.
     pub saved_avg: Option<f64>,
     pub interest_avg: Option<f64>,
+    pub total_change_avg: Option<f64>,
 }
 
 /// `GET /api/overview`: the sheet's A3:C18 block plus the B1/H1/J1 headline.
