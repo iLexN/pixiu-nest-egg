@@ -93,12 +93,17 @@ Entering the announced rate SHALL be a `PATCH` that sets `annual_rate`/`per_10k`
 Setting `received_amount` where it was previously NULL SHALL do two things, atomically with the update:
 
 - credit the amount under the cash-accounts receipt crediting rule, with receipt currency `HKD`. The request MAY carry `bank_in` (default true) and an `account_id` override.
-- record the `coupon:<id>` `adjustment` item for the pay_date month. The item is skipped when already stored or when the month has no row.
+- record the `coupon:<id>` `adjustment` item for the pay_date month. An already-stored keyed item is updated to the receipt amount; the write is skipped only when the month has no row.
 
 #### Scenario: Receipt credits and records
 
 - **WHEN** the user marks a pending coupon received with `received_amount` `1002.75` and no `account_id`
 - **THEN** the HKD default receipt cash account gains `1002.75` and the pay_date month gains a `coupon:<id>` `adjustment` item
+
+#### Scenario: Receipt refreshes a stored item
+
+- **WHEN** the pay month already stores the `coupon:<id>` item at the expected `1002.75` and the coupon is 收訖 at `received_amount` `1000`
+- **THEN** the cash account gains `1000` and the stored item's amount becomes `1000`
 
 ### Requirement: Coupon receipt reversal and editability
 
@@ -148,7 +153,7 @@ Each bond SHALL carry a `received_at` date (NULL while the principal return is u
 
 ### Requirement: Bond principal 收訖
 
-`POST /api/bonds/:id/receive` SHALL mark the bond's principal received at a date (default today) and record the maturity month's `bond-end:<id>` `adjustment` item.
+`POST /api/bonds/:id/receive` SHALL mark the bond's principal received at a date (default today) and record the maturity month's `bond-end:<id>` `adjustment` item. An already-stored keyed item is updated to the credited amount; the write is skipped only when the month has no row.
 
 The receipt SHALL credit an amount, defaulting to `principal`, under the cash-accounts receipt crediting rule, with receipt currency `HKD`. The request carries `bank_in` (default true), an optional `account_id` override, and an optional `credit_amount`.
 
@@ -165,7 +170,7 @@ The receipt SHALL credit an amount, defaulting to `principal`, under the cash-ac
 #### Scenario: bond-end item skipped when already stored or monthless
 
 - **WHEN** the maturity month already stores the `bond-end:<id>` item or has no month row
-- **THEN** the credit and flag apply but no item is recorded
+- **THEN** the credit and flag apply; the stored item is updated to the credited amount, or none is recorded when the month has no row
 
 ### Requirement: Bond receipt finality and matured display
 

@@ -11,6 +11,10 @@ DepositForm
   → POST /api/deposits
   → backend validates end_date and non-negative amounts
   → INSERT one row into deposits, sort_order appended
+  → INSERT the dep-start:<id> adjustment month_item of −principal for the
+    start month (skipped when the deposit has no start_date or the start
+    month has no row — the dep-start suggestion still surfaces then; an
+    already-stored keyed item is refreshed to the new amount)
   → GET /api/deposits?year=... reloads the history list
 ```
 
@@ -47,8 +51,8 @@ DepositsView (定期 → 總覽)
         the chosen account_id or the HKD default receipt account (不存入
         sends bank_in: false); the amount is fixed, not user-entered
       → INSERT the dep-end:<id> adjustment month_item for the end month
-        for the same amount (skipped when already stored or the month has
-        no row)
+        for the same amount (an already-stored keyed item is refreshed to
+        the receipt amount; skipped when the month has no row)
 
 DepositHistoryView (定期 → 記錄)
   → GET /api/deposits/summary

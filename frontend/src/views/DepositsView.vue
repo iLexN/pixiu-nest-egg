@@ -247,7 +247,7 @@ onMounted(load)
         <div>
           <h4>定期 start step</h4>
           <ol>
-            <li>月結 - 調整</li>
+            <li>新增定期（自動：月結調整 −本金）</li>
             <li>add row 回報率</li>
             <li>add row 定期 ref</li>
             <li>update overview - 預測</li>

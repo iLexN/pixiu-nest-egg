@@ -50,7 +50,8 @@ BondsView (債券 → 總覽)
       → UPDATE cash_accounts amount += credited — the chosen account_id or
         the HKD default receipt account (不存入 sends bank_in: false)
       → INSERT the bond-end:<id> adjustment month_item for the maturity
-        month (skipped when already stored or the month has no row)
+        month (an already-stored keyed item is refreshed to the credited
+        amount; skipped when the month has no row)
 ```
 
 Coupon receipt is per-coupon (each 付息日's `received_amount`); bond 收訖 covers only the principal return. The Active/已到期 split stays maturity-date based — an unreceived matured bond sits in 已到期 flagged 本金未收 until confirmed.

@@ -43,7 +43,8 @@ pub struct SuggestionReceipt {
     /// Stock code or bond label.
     pub label: String,
     /// Whether the payment was 收訖 — pending receipts preview in the 利息
-    /// breakdown but never count and never become suggestions.
+    /// breakdown and suggest at their expected figure, but count in the
+    /// derived 利息 only once received.
     pub received: bool,
 }
 
@@ -131,25 +132,33 @@ pub fn build_suggestions(
         }
     }
 
+    // Coupons and HK dividends suggest before 收訖 — like dep-end — at the
+    // received amount, else the expected/estimated figure. A receipt with no
+    // known amount (待定 coupon, estimate-less dividend) has nothing to
+    // suggest.
     for dividend in &events.dividends {
-        if in_month(dividend.pay_date, month) && dividend.received {
+        if in_month(dividend.pay_date, month)
+            && let Some(amount) = dividend.amount
+        {
             suggestions.push(MonthSuggestion {
                 auto_key: format!("div:{}", dividend.id),
                 category: MonthItemCategory::Adjustment,
                 label: Some(dividend.label.clone()),
-                amount: dividend.amount.unwrap_or(0.0),
+                amount,
                 source: "dividend".to_string(),
             });
         }
     }
 
     for coupon in &events.coupons {
-        if in_month(coupon.pay_date, month) && coupon.received {
+        if in_month(coupon.pay_date, month)
+            && let Some(amount) = coupon.amount
+        {
             suggestions.push(MonthSuggestion {
                 auto_key: format!("coupon:{}", coupon.id),
                 category: MonthItemCategory::Adjustment,
                 label: Some(coupon.label.clone()),
-                amount: coupon.amount.unwrap_or(0.0),
+                amount,
                 source: "coupon".to_string(),
             });
         }
@@ -364,8 +373,9 @@ mod tests {
         assert!(approx_eq(by_key["trade:4"].amount, 20000.0));
         assert!(approx_eq(by_key["div:5"].amount, 1500.0));
         assert!(approx_eq(by_key["coupon:6"].amount, 2000.0));
-        // Pending receipts preview in the breakdown but never suggest items.
-        assert!(!by_key.contains_key("div:9"));
+        // Pending receipts suggest at their expected/estimated figure; a
+        // 待定 coupon with no amount suggests nothing.
+        assert!(approx_eq(by_key["div:9"].amount, 720.0));
         assert!(!by_key.contains_key("coupon:10"));
         assert_eq!(by_key["aia-pay:7"].category, MonthItemCategory::ExtraSpend);
         assert!(approx_eq(by_key["aia-pay:7"].amount, 8320.0 * 7.8));

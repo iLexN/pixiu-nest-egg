@@ -79,8 +79,7 @@ pub async fn create(
     })
     .map_err(ApiError::Validation)?;
 
-    let sort_order = store::next_sort_order(&state.pool).await?;
-    let id = store::insert_deposit(&state.pool, &validated, sort_order, &body).await?;
+    let id = crate::service::deposits::create(&state.pool, &validated, &body).await?;
     Ok((
         StatusCode::CREATED,
         Json(store::load_one(&state.pool, id).await?),

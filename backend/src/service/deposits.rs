@@ -3,9 +3,40 @@
 
 use sqlx::SqlitePool;
 
-use crate::models::Currency;
+use crate::calc::ValidatedDeposit;
+use crate::models::{Currency, NewDeposit};
 use crate::service::{ServiceError, receipts};
 use crate::store::{StoreError, deposits, months, now_timestamp};
+
+/// Create a deposit: one transaction — the row insert plus the start month's
+/// `dep-start` item (−principal), as the dep-start suggestion would have. A
+/// deposit without `start_date`, or whose start month has no row, records no
+/// item; the suggestion still surfaces for it later.
+pub async fn create(
+    pool: &SqlitePool,
+    deposit: &ValidatedDeposit,
+    body: &NewDeposit,
+) -> Result<i64, ServiceError> {
+    let sort_order = deposits::next_sort_order(pool).await?;
+    let mut tx = pool.begin().await.map_err(StoreError::from)?;
+    let id = deposits::insert_deposit(&mut *tx, deposit, sort_order, body).await?;
+    if let (Some(start_date), Some(principal)) = (&deposit.start_date, deposit.principal)
+        && principal != 0.0
+    {
+        let month = format!("{}-01", &start_date[..7]);
+        let label = deposit.label.as_deref().unwrap_or("定期");
+        months::record_receipt_item(
+            &mut tx,
+            &month,
+            &format!("dep-start:{id}"),
+            label,
+            -principal,
+        )
+        .await?;
+    }
+    tx.commit().await?;
+    Ok(id)
+}
 
 /// What a `POST /api/deposits/{id}/receive` body resolves to once the route
 /// maps it.
@@ -61,6 +92,111 @@ pub async fn receive(pool: &SqlitePool, id: i64, input: &ReceiveInput) -> Result
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::calc::{DepositInput, validate_deposit};
+
+    fn validated(input: DepositInput<'_>) -> ValidatedDeposit {
+        validate_deposit(input).expect("valid deposit")
+    }
+
+    fn body() -> NewDeposit {
+        NewDeposit {
+            label: Some("SC-1".to_string()),
+            bank: Some("SC".to_string()),
+            principal: Some(140000.0),
+            rate: None,
+            interest: Some(1279.0),
+            start_date: Some("2099-10-13".to_string()),
+            end_date: "2100-02-02".to_string(),
+            note1: None,
+            note2: None,
+        }
+    }
+
+    async fn dep_start_amount(pool: &SqlitePool, id: i64) -> Option<f64> {
+        sqlx::query_scalar(
+            "SELECT amount FROM month_items WHERE month = '2099-10-01' AND auto_key = ?",
+        )
+        .bind(format!("dep-start:{id}"))
+        .fetch_optional(pool)
+        .await
+        .unwrap()
+    }
+
+    /// Create records the start month's dep-start item of −principal; a
+    /// monthless start month or a missing start_date records none.
+    #[tokio::test]
+    async fn create_records_the_dep_start_item() {
+        let pool = crate::db::connect_memory().await.expect("memory db");
+        sqlx::query(
+            "INSERT INTO month_stats (month, created_at, updated_at) \
+             VALUES ('2099-10-01', '2026-01-01T00:00:00', '2026-01-01T00:00:00')",
+        )
+        .execute(&pool)
+        .await
+        .unwrap();
+
+        let id = create(
+            &pool,
+            &validated(DepositInput {
+                label: Some("SC-1"),
+                bank: Some("SC"),
+                principal: Some(140000.0),
+                rate: None,
+                interest: Some(1279.0),
+                start_date: Some("2099-10-13"),
+                end_date: "2100-02-02",
+            }),
+            &body(),
+        )
+        .await
+        .unwrap();
+        assert_eq!(dep_start_amount(&pool, id).await, Some(-140000.0));
+
+        // Monthless start month: the item is skipped, the suggestion remains.
+        let mut monthless = body();
+        monthless.start_date = Some("2099-11-13".to_string());
+        let id = create(
+            &pool,
+            &validated(DepositInput {
+                label: Some("SC-1"),
+                bank: Some("SC"),
+                principal: Some(140000.0),
+                rate: None,
+                interest: Some(1279.0),
+                start_date: Some("2099-11-13"),
+                end_date: "2100-02-02",
+            }),
+            &monthless,
+        )
+        .await
+        .unwrap();
+        let count: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM month_items WHERE auto_key = ?")
+            .bind(format!("dep-start:{id}"))
+            .fetch_one(&pool)
+            .await
+            .unwrap();
+        assert_eq!(count, 0);
+
+        // No start_date: no item at all.
+        let mut no_start = body();
+        no_start.start_date = None;
+        let id = create(
+            &pool,
+            &validated(DepositInput {
+                label: Some("SC-1"),
+                bank: Some("SC"),
+                principal: Some(140000.0),
+                rate: None,
+                interest: Some(1279.0),
+                start_date: None,
+                end_date: "2100-02-02",
+            }),
+            &no_start,
+        )
+        .await
+        .unwrap();
+        assert_eq!(dep_start_amount(&pool, id).await, None);
+    }
 
     /// A deposit receive with `bank_in` and no explicit account credits the
     /// currency's default-receipt account.

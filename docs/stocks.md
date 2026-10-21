@@ -303,7 +303,9 @@ The snapshots are stored, not recomputed: buying more of the same stock later do
     as the receipt snapshot (NULL when the stock has no 現價)
   → banks the amount via service::receipts into the chosen or default
     cash_accounts row of the dividend's currency — HK → the HKD default
-    (also records the div:<id> adjustment month_item for the pay month);
+    (also records the div:<id> adjustment month_item for the pay month —
+    an already-stored keyed item is refreshed to the received amount,
+    skipped when the month has no row);
     US → the USD default (the IBKR USD broker row; no month item — the
     money never touches 活期). The row and amount land on the dividend's
     credited_account_id/credited_amount so clearing reverses the exact

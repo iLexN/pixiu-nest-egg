@@ -515,7 +515,9 @@ pub(crate) async fn delete_asset(pool: &SqlitePool, id: i64) -> Result<u64, Stor
 }
 
 /// Record an auto `month_items` row for a received amount — bond ends,
-/// coupons, deposits all use it. Inside the caller's transaction.
+/// coupons, deposits all use it. An already-stored keyed item (e.g. an
+/// accepted pending suggestion) is refreshed to the actual amount; a
+/// monthless month records nothing. Inside the caller's transaction.
 pub async fn record_receipt_item(
     conn: &mut sqlx::SqliteConnection,
     month: &str,
@@ -535,7 +537,17 @@ pub async fn record_receipt_item(
             .bind(month)
             .fetch_one(&mut *conn)
             .await?;
-    if !item_exists && month_exists {
+    if item_exists {
+        sqlx::query(
+            "UPDATE month_items SET label = ?, amount = ? WHERE month = ? AND auto_key = ?",
+        )
+        .bind(label)
+        .bind(amount)
+        .bind(month)
+        .bind(auto_key)
+        .execute(&mut *conn)
+        .await?;
+    } else if month_exists {
         sqlx::query(
             "INSERT INTO month_items (month, category, label, amount, auto_key, created_at) \
              VALUES (?, 'adjustment', ?, ?, ?, ?)",
@@ -569,4 +581,60 @@ pub async fn delete_auto_item(
         .execute(&mut *conn)
         .await?;
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::db::connect_memory;
+
+    /// An already-stored keyed item (an accepted pending suggestion) is
+    /// refreshed to the receipt amount; a monthless month writes nothing.
+    #[tokio::test]
+    async fn receipt_item_refresh_updates_the_stored_row() {
+        let pool = connect_memory().await.expect("memory db");
+        sqlx::query(
+            "INSERT INTO month_stats (month, created_at, updated_at) \
+             VALUES ('2026-10-01', '2026-01-01T00:00:00', '2026-01-01T00:00:00')",
+        )
+        .execute(&pool)
+        .await
+        .unwrap();
+
+        let mut tx = pool.begin().await.unwrap();
+        record_receipt_item(&mut tx, "2026-10-01", "coupon:4", "silver bond", 1002.75)
+            .await
+            .unwrap();
+        // The 收訖 write with the 實收 amount refreshes the stored row.
+        record_receipt_item(&mut tx, "2026-10-01", "coupon:4", "silver bond", 1000.0)
+            .await
+            .unwrap();
+        tx.commit().await.unwrap();
+
+        let (label, amount): (String, f64) = sqlx::query_as(
+            "SELECT label, amount FROM month_items \
+             WHERE month = '2026-10-01' AND auto_key = 'coupon:4'",
+        )
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+        assert_eq!((label.as_str(), amount), ("silver bond", 1000.0));
+    }
+
+    #[tokio::test]
+    async fn receipt_item_monthless_writes_nothing() {
+        let pool = connect_memory().await.expect("memory db");
+        let mut tx = pool.begin().await.unwrap();
+        record_receipt_item(&mut tx, "2027-01-01", "coupon:9", "bond", 5.0)
+            .await
+            .unwrap();
+        tx.commit().await.unwrap();
+
+        let count: i64 =
+            sqlx::query_scalar("SELECT COUNT(*) FROM month_items WHERE auto_key = 'coupon:9'")
+                .fetch_one(&pool)
+                .await
+                .unwrap();
+        assert_eq!(count, 0);
+    }
 }

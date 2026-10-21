@@ -208,7 +208,7 @@ It credits exactly `principal + interest` (not user-supplied) under the cash-acc
 #### Scenario: dep-end item skipped when already stored or monthless
 
 - **WHEN** the deposit's end month already stores its `dep-end:<id>` item or has no month row
-- **THEN** the credit and flag apply but no item is recorded
+- **THEN** the credit and flag apply; the stored item is updated to principal + interest, or none is recorded when the month has no row
 
 ### Requirement: Deposit receipt month item and finality
 
@@ -218,6 +218,25 @@ The receive endpoint also records the month's `dep-end:<id>` `adjustment` item f
 
 - **WHEN** a deposit has been received
 - **THEN** a second receive call returns 409 and no unreceive action exists
+
+### Requirement: Deposit creation month item
+
+`POST /api/deposits` SHALL record the `dep-start:<id>` `adjustment` item of −`principal` in the `start_date` month, in the same write as the deposit itself — as the dep-start suggestion would have. The item is skipped when the deposit carries no `start_date` or when the start month has no month row; a skipped item still surfaces as the month's `dep-start` suggestion once the month exists.
+
+#### Scenario: Create records the start month item
+
+- **WHEN** the user creates a deposit with principal `140000` and `start_date` `2026-10-13`, and the `2026-10` month row exists
+- **THEN** the deposit is stored and the `2026-10` month holds a `dep-start:<id>` adjustment item of `-140000`
+
+#### Scenario: No start_date, no item
+
+- **WHEN** the user creates a deposit with no `start_date`
+- **THEN** no `dep-start` item is recorded for it
+
+#### Scenario: dep-start item skipped when already stored or monthless
+
+- **WHEN** the start month has no month row
+- **THEN** the deposit is stored but no item is recorded, and the `dep-start:<id>` suggestion still appears for that month
 
 ### Requirement: Unreceived deposit list
 The system SHALL present the **unreceived** deposits ordered by end date — a matured-but-unreceived deposit is included and flagged 已到期未收 — each showing label, principal, rate, interest, total, end_date, and end_month, with a 收訖 action per row. A deposit leaves the list once 收訖, including one 收訖'd before its `end_date`.
