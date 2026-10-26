@@ -183,7 +183,7 @@ pub fn build_suggestions(
             auto_key: "pool-input".to_string(),
             category: MonthItemCategory::Adjustment,
             label: Some("Irene + 開心 Pool".to_string()),
-            amount: -events.pool_input,
+            amount: events.pool_input,
             source: "pool".to_string(),
         });
     }
@@ -379,7 +379,7 @@ mod tests {
         assert!(!by_key.contains_key("coupon:10"));
         assert_eq!(by_key["aia-pay:7"].category, MonthItemCategory::ExtraSpend);
         assert!(approx_eq(by_key["aia-pay:7"].amount, 8320.0 * 7.8));
-        assert!(approx_eq(by_key["pool-input"].amount, -4142.66));
+        assert!(approx_eq(by_key["pool-input"].amount, 4142.66));
     }
 
     #[test]
