@@ -9,9 +9,10 @@ use serde::{Deserialize, Serialize};
 use super::patch::{merge, merge_opt, merge_text};
 use super::{AppState, parse_ym};
 use crate::calc::{
-    FieldError, MonthRunningAverages, MonthYearSummary, build_suggestions, interest_components,
-    live_totals, month_derived_with_tail, month_item_sums, month_running_averages,
-    month_year_summaries, pool_balances, pool_rate_for_year, suggestions_enabled,
+    FieldError, MonthRunningAverages, MonthYearSummary, PoolTotals, build_suggestions,
+    interest_components, live_totals, month_derived_with_tail, month_item_sums,
+    month_running_averages, month_year_summaries, pool_balances, pool_rate_for_year, pool_totals,
+    suggestions_enabled,
 };
 use crate::error::{ApiError, ErrorBody};
 use crate::models::{
@@ -89,6 +90,9 @@ pub struct MonthSummaryResponse {
     pub running: MonthRunningAverages,
     /// The running 開心Pool balance through the latest stored month's year.
     pub pool_balance: f64,
+    /// The all-years 開心Pool contribution totals (iLex input, Irene input,
+    /// Irene payable) and per-active-year averages.
+    pub pool_totals: PoolTotals,
     /// The current year's effective pool rate (incl. earlier-year fallback).
     pub pool_rate: Option<f64>,
     pub pool_rate_year: i32,
@@ -131,10 +135,12 @@ pub async fn summary(
         })
         .unwrap_or(0.0);
     let pool_rate_year = today().year();
+    let pool_totals = pool_totals(&years);
     Ok(Json(MonthSummaryResponse {
         years,
         running,
         pool_balance,
+        pool_totals,
         pool_rate: pool_rate_for_year(&rates, pool_rate_year),
         pool_rate_year,
     }))

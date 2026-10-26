@@ -13,6 +13,7 @@ import AiaView from './views/AiaView.vue'
 import MonthStatView from './views/MonthStatView.vue'
 import OverviewView from './views/OverviewView.vue'
 import YearReviewView from './views/YearReviewView.vue'
+import HappyPoolView from './views/HappyPoolView.vue'
 import FamilyDepositsView from './views/FamilyDepositsView.vue'
 
 type Tab =
@@ -28,6 +29,7 @@ type Tab =
   | 'aia'
   | 'months'
   | 'yearReview'
+  | 'happyPool'
   | 'family-deposits'
 type Group =
   | 'overview'
@@ -51,6 +53,7 @@ const NAV: {
       { id: 'overview', label: '總覽' },
       { id: 'months', label: '月結' },
       { id: 'yearReview', label: '年結' },
+      { id: 'happyPool', label: 'HappyPool' },
     ],
   },
   {
@@ -159,6 +162,7 @@ function selectGroup(g: (typeof NAV)[number]) {
     <AiaView v-else-if="tab === 'aia'" />
     <MonthStatView v-else-if="tab === 'months'" />
     <YearReviewView v-else-if="tab === 'yearReview'" />
+    <HappyPoolView v-else-if="tab === 'happyPool'" />
     <FamilyDepositsView v-else-if="tab === 'family-deposits'" />
     <DepositHistoryView v-else />
   </main>

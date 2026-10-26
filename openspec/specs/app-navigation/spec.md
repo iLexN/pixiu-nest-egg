@@ -13,12 +13,12 @@ The app SHALL present a two-level top navigation. The first level SHALL show one
 #### Scenario: App loads
 
 - **WHEN** the app loads
-- **THEN** the nav shows the 總覽, 股票, 定期, MPF, 債券, AIA, and 家人 group buttons, the 總覽 group is active, and its sub-tabs 總覽, 月結, 年結 are shown
+- **THEN** the nav shows the 總覽, 股票, 定期, MPF, 債券, AIA, and 家人 group buttons, the 總覽 group is active, and its sub-tabs 總覽, 月結, 年結, HappyPool are shown
 
 #### Scenario: Switch to the 總覽 group
 
 - **WHEN** the user clicks the 總覽 group button
-- **THEN** the 總覽 group becomes active, its sub-tabs 總覽, 月結, 年結 are shown with 總覽 active, and the 總覽 page (headline totals, asset table, 半流動資金, and the IBKR block) is shown
+- **THEN** the 總覽 group becomes active, its sub-tabs 總覽, 月結, 年結, HappyPool are shown with 總覽 active, and the 總覽 page (headline totals, asset table, 半流動資金, and the IBKR block) is shown
 
 #### Scenario: Open 總覽 → 月結
 
@@ -29,6 +29,11 @@ The app SHALL present a two-level top navigation. The first level SHALL show one
 
 - **WHEN** the 總覽 group is active and the user clicks the 年結 sub-tab
 - **THEN** the 年結 sub-tab becomes active and the year review page (the per-year review blocks) is shown
+
+#### Scenario: Open 總覽 → HappyPool
+
+- **WHEN** the 總覽 group is active and the user clicks the HappyPool sub-tab
+- **THEN** the HappyPool sub-tab becomes active and the HappyPool page (the 開心Pool contribution cards and the per-year pool table) is shown
 
 #### Scenario: Switch to the 定期 group
 
@@ -67,7 +72,7 @@ The app SHALL present a two-level top navigation. The first level SHALL show one
 
 ### Requirement: Sub-tab membership per group
 
-The second level SHALL show the sub-tabs of the currently active group only — 總覽 SHALL contain 總覽, 月結, 年結 (in that order); 股票 SHALL contain 總覽, 交易記錄, 派息, 管理 (in that order); 定期 SHALL contain 總覽, 記錄 (in that order); MPF SHALL contain 總覽; 債券 SHALL contain 總覽; AIA SHALL contain 總覽; 家人 SHALL contain 定期.
+The second level SHALL show the sub-tabs of the currently active group only — 總覽 SHALL contain 總覽, 月結, 年結, HappyPool (in that order); 股票 SHALL contain 總覽, 交易記錄, 派息, 管理 (in that order); 定期 SHALL contain 總覽, 記錄 (in that order); MPF SHALL contain 總覽; 債券 SHALL contain 總覽; AIA SHALL contain 總覽; 家人 SHALL contain 定期.
 
 #### Scenario: Switching groups
 

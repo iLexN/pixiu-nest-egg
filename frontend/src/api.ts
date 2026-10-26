@@ -971,10 +971,19 @@ export interface MonthRunningAverages {
   interest_avg: number | null
 }
 
+export interface PoolTotals {
+  ilex_input: number
+  irene_input: number
+  irene_payable: number
+  avg_spend: number
+  avg_input: number
+}
+
 export interface MonthSummary {
   years: MonthYearSummary[]
   running: MonthRunningAverages
   pool_balance: number
+  pool_totals: PoolTotals
   pool_rate: number | null
   pool_rate_year: number
 }

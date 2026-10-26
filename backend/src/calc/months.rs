@@ -364,6 +364,51 @@ pub fn month_year_summaries(
         .collect()
 }
 
+/// The all-years 開心Pool contribution totals behind the HappyPool page.
+#[derive(Debug, Clone, PartialEq, Serialize, ToSchema)]
+pub struct PoolTotals {
+    /// iLex: Σ pool income (interest × the year's rate).
+    pub ilex_input: f64,
+    /// Irene: Σ pool_input.
+    pub irene_input: f64,
+    /// ilex_input ÷ 2 − irene_input (may be negative).
+    pub irene_payable: f64,
+    /// Σ 娛樂支出 ÷ active years (a year with any pool income, pool_input or
+    /// 娛樂支出 counts, including the in-progress one).
+    pub avg_spend: f64,
+    /// (ilex_input + irene_input) ÷ active years.
+    pub avg_input: f64,
+}
+
+/// Totals over the year summaries `month_year_summaries` produces, so the
+/// figures always agree with the per-year table rows.
+pub fn pool_totals(years: &[MonthYearSummary]) -> PoolTotals {
+    let ilex_input: f64 = years.iter().map(|year| year.pool_income).sum();
+    let irene_input: f64 = years.iter().map(|year| year.pool_input_sum).sum();
+    let spend: f64 = years.iter().map(|year| year.entertainment_sum).sum();
+    let active = years
+        .iter()
+        .filter(|year| {
+            year.pool_income != 0.0 || year.pool_input_sum != 0.0 || year.entertainment_sum != 0.0
+        })
+        .count();
+    PoolTotals {
+        ilex_input,
+        irene_input,
+        irene_payable: ilex_input / 2.0 - irene_input,
+        avg_spend: if active == 0 {
+            0.0
+        } else {
+            spend / active as f64
+        },
+        avg_input: if active == 0 {
+            0.0
+        } else {
+            (ilex_input + irene_input) / active as f64
+        },
+    }
+}
+
 /// The sheet's row-8 running averages over every stored month.
 #[derive(Debug, Clone, Copy, PartialEq, Serialize, ToSchema)]
 pub struct MonthRunningAverages {
@@ -749,6 +794,81 @@ mod tests {
             ),
             "balance = {}",
             balances[&2026]
+        );
+    }
+
+    fn summary_with_pool(
+        year: i32,
+        pool_income: f64,
+        pool_input_sum: f64,
+        entertainment_sum: f64,
+    ) -> MonthYearSummary {
+        MonthYearSummary {
+            year,
+            total_change_sum: None,
+            total_change_avg: None,
+            spend_sum: None,
+            spend_avg: None,
+            living_avg: None,
+            entertainment_sum,
+            interest_sum: 0.0,
+            interest_avg: 0.0,
+            net_investment: None,
+            pool_income,
+            pool_balance: 0.0,
+            pool_input_sum,
+            months: 0,
+        }
+    }
+
+    #[test]
+    fn pool_totals_sums_the_stored_years() {
+        // Spec scenario: the stored 2024–2026 figures; 2023 is stored but
+        // all-zero, so it is skipped by the averages' year count.
+        let totals = pool_totals(&[
+            summary_with_pool(2023, 0.0, 0.0, 0.0),
+            summary_with_pool(2024, 19386.2658, 0.0, 17719.0),
+            summary_with_pool(2025, 22057.77625, 20722.025468, 38729.5),
+            summary_with_pool(2026, 23532.23146, 4597.611557, 11170.9),
+        ]);
+        assert!(
+            (totals.ilex_input - 64976.27).abs() <= 0.01,
+            "ilex_input = {}",
+            totals.ilex_input
+        );
+        assert!(
+            (totals.irene_input - 25319.64).abs() <= 0.01,
+            "irene_input = {}",
+            totals.irene_input
+        );
+        assert!(
+            (totals.irene_payable - 7168.50).abs() <= 0.01,
+            "irene_payable = {}",
+            totals.irene_payable
+        );
+        assert!(
+            (totals.avg_spend - 22539.80).abs() <= 0.01,
+            "avg_spend = {}",
+            totals.avg_spend
+        );
+        assert!(
+            (totals.avg_input - 30098.64).abs() <= 0.01,
+            "avg_input = {}",
+            totals.avg_input
+        );
+    }
+
+    #[test]
+    fn pool_totals_is_zero_without_years() {
+        assert_eq!(
+            pool_totals(&[]),
+            PoolTotals {
+                ilex_input: 0.0,
+                irene_input: 0.0,
+                irene_payable: 0.0,
+                avg_spend: 0.0,
+                avg_input: 0.0,
+            }
         );
     }
 }

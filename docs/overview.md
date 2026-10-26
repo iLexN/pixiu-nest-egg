@@ -137,6 +137,18 @@ Each row reproduces the workbook block:
 
 `pool_income`/`pool_spend`/`pool_balance`, `interest`, `interest_avg` and `irene_pool` always read 0 without month data — the sheet's own formulas do the same.
 
+## Load the 總覽 → HappyPool view
+
+```text
+HappyPoolView loads GET /api/months/summary
+  → routes/months.rs derives the same per-year summaries as 月結, then
+    calc/months.rs::pool_totals sums them into the response's pool_totals
+```
+
+`pool_totals` covers every stored year: `ilex_input` = Σ `pool_income` (Σ `interest` × that year's pool rate), `irene_input` = Σ `pool_input` (the 月結 `Irene + 開心 Pool` column), and `irene_payable` = `ilex_input ÷ 2 − irene_input` — what Irene still owes to match iLex's half, negative while she has overpaid. It also carries two averages over *active* years — a stored year whose pool income, `pool_input` or 娛樂支出 is nonzero (the in-progress year counts as a whole one): `avg_spend` = Σ `entertainment_sum` ÷ active years and `avg_input` = (`ilex_input` + `irene_input`) ÷ active years, both `0` with no active year. Nothing is stored or rounded.
+
+The page shows six headline cards in two rows — 開心 Pool (the live chained balance, the same figure as the 總覽 tile) and Irene payable highlighted on the first row, with iLex, Irene, 平均支出 (`avg_spend`), and 平均 input (`avg_input`) on the second — then a per-year table in ascending order with 結餘 (the chained `pool_balance`), iLex input (`pool_income`), Irene input (`pool_input_sum`), and 支出 (`entertainment_sum`). Years whose pool income, pool input and 娛樂支出 are all zero are hidden. Each row's `copy` button writes `year, 結餘, iLex input, Irene input, 支出` as tab-separated 2-decimal numbers (no commas or `$`), so a Google Sheets paste fills adjacent cells. There is no editing here — inputs stay in 月結.
+
 ## Edit Year in Review manual figures
 
 ```text
