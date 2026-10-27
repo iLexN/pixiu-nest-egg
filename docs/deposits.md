@@ -29,7 +29,14 @@ DepositForm edit mode (via 編輯 in a DepositTable row's ⋯ menu)
   → PATCH /api/deposits/:id
   → backend merges the patch, validates, UPDATEs one row
 
-刪除 in the row's ⋯ menu → DELETE /api/deposits/:id
+刪除 in the row's ⋯ menu (hidden once the deposit is 收訖)
+  → DELETE /api/deposits/:id
+  → 404 for an unknown id; 409 for a received deposit, which changes
+    nothing — its cash credit and dep-end:<id> item stay consistent
+  → one transaction: DELETE the dep-start:<id> month_item and every
+    dep-start:<id> dismissal tombstone, in whichever month they sit (an
+    edited start_date does not move the stored item), then DELETE the
+    deposits row
 ```
 
 Derived fields (`total`, `status`, end month/year) change automatically on the next read.

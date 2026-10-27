@@ -108,6 +108,10 @@ cargo run -p wealth-backend --bin import_prices -- current-price.json
 
 No external market-data API is called; the JSON file is user-supplied input equivalent to manual entry.
 
+## View or edit a stock's 備註 in 股票 → 總覽
+
+The 備註 toggle on a stock row expands a row beneath it showing the note with line breaks preserved; editing it there sends `PATCH /api/stocks/:id { note }` (blank clears the note) and reloads the summary.
+
 ## Add a trade in 交易記錄
 
 The 新增交易 button reveals TradeForm, which collapses after a successful save.

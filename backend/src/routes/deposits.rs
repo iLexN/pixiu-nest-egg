@@ -147,15 +147,14 @@ pub async fn update(
     responses(
         (status = 204, description = "Deposit deleted"),
         (status = 404, description = "Deposit not found", body = ErrorBody),
+        (status = 409, description = "Deposit already received", body = ErrorBody),
     )
 )]
 pub async fn remove(
     State(state): State<AppState>,
     Path(id): Path<i64>,
 ) -> Result<StatusCode, ApiError> {
-    if store::delete_deposit(&state.pool, id).await? == 0 {
-        return Err(ApiError::NotFound(format!("deposit {id} not found")));
-    }
+    crate::service::deposits::delete(&state.pool, id).await?;
     Ok(StatusCode::NO_CONTENT)
 }
 

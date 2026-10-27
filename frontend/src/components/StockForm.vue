@@ -165,7 +165,7 @@ async function submit() {
       </label>
       <label class="wide">
         備註
-        <input v-model="form.note" type="text" />
+        <textarea v-model="form.note" rows="3"></textarea>
       </label>
     </div>
     <p v-if="error && error.fields.length === 0" class="error">{{ error.message }}</p>

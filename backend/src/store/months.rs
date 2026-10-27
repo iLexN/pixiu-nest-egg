@@ -583,6 +583,24 @@ pub async fn delete_auto_item(
     Ok(())
 }
 
+/// Like `delete_auto_item` but matches the key in any month — an auto item
+/// stays in the month it was recorded even when the source row's date later
+/// moves. Dismissal tombstones for the key go too, in any month.
+pub async fn delete_auto_items_by_key(
+    conn: &mut sqlx::SqliteConnection,
+    auto_key: &str,
+) -> Result<(), StoreError> {
+    sqlx::query("DELETE FROM month_items WHERE auto_key = ?")
+        .bind(auto_key)
+        .execute(&mut *conn)
+        .await?;
+    sqlx::query("DELETE FROM month_item_dismissals WHERE auto_key = ?")
+        .bind(auto_key)
+        .execute(&mut *conn)
+        .await?;
+    Ok(())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

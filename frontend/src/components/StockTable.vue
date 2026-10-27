@@ -64,6 +64,7 @@ const emit = defineEmits<{
 .note {
   max-width: 16rem;
   font-size: 0.8rem;
+  white-space: pre-wrap;
 }
 .row-actions {
   white-space: nowrap;

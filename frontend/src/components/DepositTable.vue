@@ -70,7 +70,11 @@ function overdue(deposit: Deposit): boolean {
           >
             收訖
           </button>
-          <RowActions @edit="emit('edit', deposit)" @remove="emit('remove', deposit)" />
+          <RowActions
+            :removable="!deposit.received_at"
+            @edit="emit('edit', deposit)"
+            @remove="emit('remove', deposit)"
+          />
         </td>
       </tr>
       <tr v-if="props.deposits.length === 0">

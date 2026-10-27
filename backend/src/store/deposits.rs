@@ -166,11 +166,12 @@ pub async fn update_deposit(
     Ok(())
 }
 
-/// Rows deleted, so the handler can tell "not found" apart from success.
-pub async fn delete_deposit(pool: &SqlitePool, id: i64) -> Result<u64, StoreError> {
+/// Rows deleted, inside the caller's transaction — the service checks
+/// existence itself before deleting.
+pub async fn delete_deposit(conn: &mut sqlx::SqliteConnection, id: i64) -> Result<u64, StoreError> {
     Ok(sqlx::query("DELETE FROM deposits WHERE id = ?")
         .bind(id)
-        .execute(pool)
+        .execute(&mut *conn)
         .await?
         .rows_affected())
 }

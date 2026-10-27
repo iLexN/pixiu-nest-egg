@@ -32,8 +32,8 @@ The system SHALL maintain a list of deposit records, each carrying an optional `
 
 #### Scenario: Deleting a deposit
 
-- **WHEN** the user deletes a deposit
-- **THEN** it no longer appears in the list or in any aggregate
+- **WHEN** the user deletes an unreceived deposit
+- **THEN** it no longer appears in the list, in any aggregate, in 預測, or in any month's 調整 items
 
 ### Requirement: Deposit date and note fields
 
@@ -237,6 +237,30 @@ The receive endpoint also records the month's `dep-end:<id>` `adjustment` item f
 
 - **WHEN** the start month has no month row
 - **THEN** the deposit is stored but no item is recorded, and the `dep-start:<id>` suggestion still appears for that month
+
+### Requirement: Deposit deletion
+
+`DELETE /api/deposits/{id}` SHALL delete an unreceived deposit together with every `dep-start:<id>` month item and every `dep-start:<id>` dismissal, in any month, in one write. A received (收訖) deposit SHALL NOT be deletable: the request returns 409 and changes nothing. The UI SHALL NOT offer 刪除 for a received deposit.
+
+#### Scenario: Delete removes the dep-start item
+
+- **WHEN** a deposit created with principal `140000` and `start_date` `2026-10-13` holds a `dep-start:<id>` item of `-140000` in `2026-10`, and the user deletes the deposit
+- **THEN** the deposit and its `dep-start:<id>` item are both gone, and the `2026-10` month's other items are unchanged
+
+#### Scenario: Item removed even after the start date moved
+
+- **WHEN** the deposit's `start_date` was edited to another month after its `dep-start:<id>` item was recorded, and the user deletes the deposit
+- **THEN** the originally recorded `dep-start:<id>` item is removed too
+
+#### Scenario: Received deposit cannot be deleted
+
+- **WHEN** the user deletes a deposit that has been 收訖
+- **THEN** the request returns 409, and the deposit, its `dep-end:<id>` item, and its cash credit are unchanged
+
+#### Scenario: Unknown deposit
+
+- **WHEN** the user deletes a deposit id that does not exist
+- **THEN** the request returns 404
 
 ### Requirement: Unreceived deposit list
 The system SHALL present the **unreceived** deposits ordered by end date — a matured-but-unreceived deposit is included and flagged 已到期未收 — each showing label, principal, rate, interest, total, end_date, and end_month, with a 收訖 action per row. A deposit leaves the list once 收訖, including one 收訖'd before its `end_date`.

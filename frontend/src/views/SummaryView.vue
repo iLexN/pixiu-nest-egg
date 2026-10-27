@@ -30,6 +30,10 @@ const ibkr = ref<IbkrBlock | null>(null)
 const error = ref('')
 const editingPrice = ref<number | null>(null)
 const priceDraft = ref('')
+const expandedNotes = ref(new Set<number>())
+const editingNote = ref<number | null>(null)
+const noteDraft = ref('')
+let notesInitialized = false
 const draggingId = ref<number | null>(null)
 const dragOverId = ref<number | null>(null)
 const savingOrder = ref(false)
@@ -48,6 +52,14 @@ async function load() {
     summary.value = nextSummary
     yearly.value = nextYearly
     ibkr.value = nextIbkr
+    // Open stocks with a note by default, once per market; later reloads
+    // (e.g. after saving) keep whatever the user has toggled since.
+    if (!notesInitialized) {
+      expandedNotes.value = new Set(
+        nextSummary.stocks.filter((stock) => stock.note).map((stock) => stock.id),
+      )
+      notesInitialized = true
+    }
   } catch (err) {
     // Drop the previous market's data so it can't show under the wrong tab.
     summary.value = null
@@ -82,6 +94,44 @@ async function savePrice(id: number) {
   try {
     await api.updateStock(id, { manual_price: parsed })
     editingPrice.value = null
+    await load()
+  } catch (err) {
+    error.value = err instanceof ApiError ? err.message : String(err)
+  }
+}
+
+const allNotesExpanded = computed(
+  () =>
+    visibleStocks.value.length > 0 &&
+    visibleStocks.value.every((stock) => expandedNotes.value.has(stock.id)),
+)
+
+function toggleNote(id: number) {
+  const next = new Set(expandedNotes.value)
+  if (next.has(id)) {
+    next.delete(id)
+    if (editingNote.value === id) editingNote.value = null
+  } else {
+    next.add(id)
+  }
+  expandedNotes.value = next
+}
+
+function toggleAllNotes() {
+  expandedNotes.value = allNotesExpanded.value
+    ? new Set()
+    : new Set(visibleStocks.value.map((stock) => stock.id))
+}
+
+function startNoteEdit(stock: SummaryStock) {
+  editingNote.value = stock.id
+  noteDraft.value = stock.note ?? ''
+}
+
+async function saveNote(id: number) {
+  try {
+    await api.updateStock(id, { note: noteDraft.value.trim() || null })
+    editingNote.value = null
     await load()
   } catch (err) {
     error.value = err instanceof ApiError ? err.message : String(err)
@@ -221,8 +271,16 @@ async function freezeYear(row: YearRow) {
   }
 }
 
+function resetAndLoad() {
+  expandedNotes.value = new Set<number>()
+  editingNote.value = null
+  noteDraft.value = ''
+  notesInitialized = false
+  load()
+}
+
 onMounted(load)
-watch(() => props.market, load)
+watch(() => props.market, resetAndLoad)
 </script>
 
 <template>
@@ -310,6 +368,12 @@ watch(() => props.market, load)
       </div>
     </div>
 
+    <div class="table-actions">
+      <button type="button" @click="toggleAllNotes">
+        {{ allNotesExpanded ? '全部收起備註' : '全部展開備註' }}
+      </button>
+    </div>
+
     <table>
       <thead>
         <tr>
@@ -332,66 +396,94 @@ watch(() => props.market, load)
         </tr>
       </thead>
       <tbody>
-        <tr
-          v-for="stock in visibleStocks"
-          :key="stock.id"
-          :class="{ 'drag-over': dragOverId === stock.id, dragging: draggingId === stock.id }"
-          @dragover="onDragOver(stock.id, $event)"
-          @drop="onDrop(stock.id, $event)"
-        >
-          <td
-            class="drag-handle"
-            draggable="true"
-            title="拖曳以調整次序"
-            @dragstart="onDragStart(stock.id, $event)"
-            @dragend="onDragEnd"
+        <template v-for="stock in visibleStocks" :key="stock.id">
+          <tr
+            :class="{ 'drag-over': dragOverId === stock.id, dragging: draggingId === stock.id }"
+            @dragover="onDragOver(stock.id, $event)"
+            @drop="onDrop(stock.id, $event)"
           >
-            ↕
-          </td>
-          <td>{{ stock.sector ?? '' }}</td>
-          <td>{{ stock.code }}</td>
-          <td>{{ stock.ticker ?? '' }}</td>
-          <td class="num">{{ fmtShares(stock.shares_held) }}</td>
-          <td class="num">{{ fmtPrice(stock.weighted_avg_buy_price) }}</td>
-          <td class="num">{{ fmtMoney(stock.total_buy_cost) }}</td>
-          <td class="num price-cell">
-            <template v-if="editingPrice === stock.id">
-              <input
-                v-model="priceDraft"
-                type="number"
-                step="any"
-                @keyup.enter="savePrice(stock.id)"
-              />
-              <button type="button" class="link" @click="savePrice(stock.id)">儲存</button>
-              <button type="button" class="link" @click="editingPrice = null">取消</button>
-            </template>
-            <button
-              v-else
-              type="button"
-              class="link"
-              :class="priceClass(stock)"
-              @click="startEdit(stock.id, stock.current_price)"
+            <td
+              class="drag-handle"
+              draggable="true"
+              title="拖曳以調整次序"
+              @dragstart="onDragStart(stock.id, $event)"
+              @dragend="onDragEnd"
             >
-              {{ stock.current_price === null ? '設定現價' : fmtPrice(stock.current_price) }}
-            </button>
-          </td>
-          <td class="num">{{ fmtMoney(stock.market_value) }}</td>
-          <td class="num" :class="signClass(stock.unrealized_amount)">
-            {{ fmtMoney(stock.unrealized_amount) }}
-          </td>
-          <td class="num" :class="signClass(stock.unrealized_return)">
-            {{ fmtPercent(stock.unrealized_return) }}
-          </td>
-          <td class="num">{{ fmtMoney(stock.dividends_received) }}</td>
-          <td class="num" :class="signClass(stock.dividend_return)">
-            {{ fmtPercent(stock.dividend_return) }}
-          </td>
-          <td class="num">{{ fmtMoney(stock.net_invested) }}</td>
-          <td class="num">{{ fmtPrice(stock.net_diluted_price) }}</td>
-          <td class="num" :class="signClass(stock.real_total_return)">
-            {{ fmtPercent(stock.real_total_return) }}
-          </td>
-        </tr>
+              ↕
+            </td>
+            <td>{{ stock.sector ?? '' }}</td>
+            <td>{{ stock.code }}</td>
+            <td>
+              {{ stock.ticker ?? '' }}
+              <button
+                type="button"
+                class="link note-toggle"
+                :class="{ muted: !stock.note }"
+                @click="toggleNote(stock.id)"
+              >
+                備註 {{ expandedNotes.has(stock.id) ? '▾' : '▸' }}
+              </button>
+            </td>
+            <td class="num">{{ fmtShares(stock.shares_held) }}</td>
+            <td class="num">{{ fmtPrice(stock.weighted_avg_buy_price) }}</td>
+            <td class="num">{{ fmtMoney(stock.total_buy_cost) }}</td>
+            <td class="num price-cell">
+              <template v-if="editingPrice === stock.id">
+                <input
+                  v-model="priceDraft"
+                  type="number"
+                  step="any"
+                  @keyup.enter="savePrice(stock.id)"
+                />
+                <button type="button" class="link" @click="savePrice(stock.id)">儲存</button>
+                <button type="button" class="link" @click="editingPrice = null">取消</button>
+              </template>
+              <button
+                v-else
+                type="button"
+                class="link"
+                :class="priceClass(stock)"
+                @click="startEdit(stock.id, stock.current_price)"
+              >
+                {{ stock.current_price === null ? '設定現價' : fmtPrice(stock.current_price) }}
+              </button>
+            </td>
+            <td class="num">{{ fmtMoney(stock.market_value) }}</td>
+            <td class="num" :class="signClass(stock.unrealized_amount)">
+              {{ fmtMoney(stock.unrealized_amount) }}
+            </td>
+            <td class="num" :class="signClass(stock.unrealized_return)">
+              {{ fmtPercent(stock.unrealized_return) }}
+            </td>
+            <td class="num">{{ fmtMoney(stock.dividends_received) }}</td>
+            <td class="num" :class="signClass(stock.dividend_return)">
+              {{ fmtPercent(stock.dividend_return) }}
+            </td>
+            <td class="num">{{ fmtMoney(stock.net_invested) }}</td>
+            <td class="num">{{ fmtPrice(stock.net_diluted_price) }}</td>
+            <td class="num" :class="signClass(stock.real_total_return)">
+              {{ fmtPercent(stock.real_total_return) }}
+            </td>
+          </tr>
+          <tr v-if="expandedNotes.has(stock.id)" class="note-row">
+            <td></td>
+            <td colspan="15">
+              <template v-if="editingNote === stock.id">
+                <textarea v-model="noteDraft" rows="4"></textarea>
+                <div class="note-actions">
+                  <button type="button" @click="saveNote(stock.id)">儲存</button>
+                  <button type="button" class="link" @click="editingNote = null">取消</button>
+                </div>
+              </template>
+              <template v-else>
+                <p v-if="stock.note" class="note-text">{{ stock.note }}</p>
+                <button type="button" class="link" @click="startNoteEdit(stock)">
+                  {{ stock.note ? '編輯備註' : '新增備註' }}
+                </button>
+              </template>
+            </td>
+          </tr>
+        </template>
       </tbody>
     </table>
 
@@ -605,6 +697,32 @@ watch(() => props.market, load)
 }
 .drag-over td {
   border-top: 2px solid var(--highlight);
+}
+.table-actions {
+  margin: 0 0 0.5rem;
+}
+.note-toggle {
+  font-size: 0.75rem;
+  margin-left: 0.4rem;
+}
+.note-row td {
+  background: var(--surface);
+  font-size: 0.85rem;
+  white-space: normal;
+}
+.note-actions {
+  display: flex;
+  gap: 0.5rem;
+  margin-top: 0.35rem;
+}
+.note-text {
+  margin: 0 0 0.25rem;
+  white-space: pre-wrap;
+}
+.note-row textarea {
+  box-sizing: border-box;
+  display: block;
+  width: 100%;
 }
 .year-cell input {
   width: 7rem;

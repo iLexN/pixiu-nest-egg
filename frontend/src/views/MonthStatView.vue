@@ -967,7 +967,6 @@ onMounted(load)
               <tr
                 v-for="(component, index) in interestAuto"
                 :key="`auto-${index}`"
-                class="suggestion-row"
                 :class="{ 'pending-interest': !component.received }"
               >
                 <td>
@@ -1333,7 +1332,8 @@ onMounted(load)
   font-family: monospace;
   white-space: normal;
 }
-.suggestion-row td {
+.suggestion-row td,
+.pending-interest td {
   border-style: dashed;
   color: var(--muted);
 }

@@ -1,13 +1,15 @@
 <script setup lang="ts">
 import { onBeforeUnmount, ref } from 'vue'
 
-const props = defineProps<{
+const props = withDefaults(defineProps<{
   /** Show a 收訖 action first in the menu. */
   receive?: boolean
   /** Show a 隱藏/顯示 action; `hidden` flips the label. */
   hideable?: boolean
   hidden?: boolean
-}>()
+  /** Show the 刪除 action (default true). */
+  removable?: boolean
+}>(), { removable: true })
 
 const emit = defineEmits<{
   receive: []
@@ -60,7 +62,14 @@ onBeforeUnmount(() => document.removeEventListener('keydown', onKeydown))
           {{ props.hidden ? '顯示' : '隱藏' }}
         </button>
         <button type="button" class="link" @click="pick('edit')">編輯</button>
-        <button type="button" class="link danger" @click="pick('remove')">刪除</button>
+        <button
+          v-if="props.removable"
+          type="button"
+          class="link danger"
+          @click="pick('remove')"
+        >
+          刪除
+        </button>
       </div>
     </template>
   </div>
