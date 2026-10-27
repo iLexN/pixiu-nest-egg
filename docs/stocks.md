@@ -165,6 +165,16 @@ TradeForm edit mode (via 編輯 in a TradeTable row's ⋯ menu)
 
 Editing a trade changes only that trade row. Summary values are not stored; they update automatically the next time 持倉總覽 is loaded.
 
+## Copy a trade
+
+```text
+複製 in a TradeTable row's ⋯ menu
+  → frontend builds a four-line labeled summary (code, 股數, $單價, 日期; 賣出 labels on SELL rows)
+  → navigator.clipboard.writeText
+```
+
+Copying is frontend only — no API call — and the summary uses the raw stored values, so pasting re-types a trade exactly as entered.
+
 ## Delete a trade
 
 ```text

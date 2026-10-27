@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed } from 'vue'
+import { computed, ref } from 'vue'
 import type { Stock, Trade } from '../api'
 import { fmtMoney, fmtPercent, fmtPrice, fmtShares, signClass } from '../format'
 import RowActions from './RowActions.vue'
@@ -48,6 +48,31 @@ function returnPercent(trade: Trade): number | null {
 function returnClassFor(trade: Trade): string {
   return trade.trade_type === 'BUY' ? signClass(returnPercent(trade)) : ''
 }
+
+const copiedId = ref<number | null>(null)
+const copyErrorId = ref<number | null>(null)
+
+/** Raw stored values, one label：\tvalue per line — paste-ready for other forms. */
+async function copyTrade(trade: Trade) {
+  const buy = trade.trade_type === 'BUY'
+  const text = [
+    `資產名稱/代號：\t${trade.code}`,
+    `${buy ? '購買股數' : '賣出股數'}：\t${String(trade.shares)}`,
+    `${buy ? '買入價格' : '賣出價格'}：\t$${String(trade.unit_price)}`,
+    `${buy ? '買入日期' : '賣出日期'}：\t${trade.trade_date}`,
+  ].join('\n')
+  try {
+    await navigator.clipboard.writeText(text)
+    copiedId.value = trade.id
+    copyErrorId.value = null
+    setTimeout(() => {
+      if (copiedId.value === trade.id) copiedId.value = null
+    }, 1500)
+  } catch {
+    copiedId.value = null
+    copyErrorId.value = trade.id
+  }
+}
 </script>
 
 <template>
@@ -84,7 +109,14 @@ function returnClassFor(trade: Trade): string {
         <td class="num" :class="returnClassFor(trade)">{{ fmtPercent(returnPercent(trade)) }}</td>
         <td class="note">{{ trade.note ?? '' }}</td>
         <td class="row-actions">
-          <RowActions @edit="emit('edit', trade)" @remove="emit('remove', trade)" />
+          <span v-if="copiedId === trade.id" class="muted">已複製</span>
+          <span v-else-if="copyErrorId === trade.id" class="error">複製失敗</span>
+          <RowActions
+            copyable
+            @copy="copyTrade(trade)"
+            @edit="emit('edit', trade)"
+            @remove="emit('remove', trade)"
+          />
         </td>
       </tr>
       <tr v-if="props.trades.length === 0">
