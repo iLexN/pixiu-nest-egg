@@ -1,4 +1,5 @@
 use super::InterestComponent;
+use super::TradeType;
 use super::nullable;
 use serde::{Deserialize, Serialize};
 use utoipa::ToSchema;
@@ -125,6 +126,22 @@ pub struct ForecastPlacement {
     pub start_date: String,
 }
 
+/// A real HK trade dated in the month — a read-only `已交易` line in the
+/// 股票 row alongside the editable `plan_items`. US trades never reach the
+/// forecast (they settle inside IBKR).
+#[derive(Debug, Clone, Serialize, ToSchema)]
+pub struct ForecastTrade {
+    /// The `trades` row id.
+    pub trade_id: i64,
+    /// The traded stock's code.
+    pub code: String,
+    pub trade_type: TradeType,
+    /// `YYYY-MM-DD` — the day the trade moved 活期.
+    pub trade_date: String,
+    /// Signed cash flow: −`total` for BUY, +`total` for SELL.
+    pub amount: f64,
+}
+
 /// One month column of the Overview 預測 grid (sheet columns B:H).
 #[derive(Debug, Clone, Serialize, ToSchema)]
 pub struct ForecastMonth {
@@ -154,9 +171,12 @@ pub struct ForecastMonth {
     /// The month's real deposit placements (`start_date` inside it), read-only
     /// lines in the deposit rows.
     pub deposit_placements: Vec<ForecastPlacement>,
+    /// The month's real HK trades (`trade_date` inside it), read-only lines
+    /// in the 股票 row.
+    pub trade_lines: Vec<ForecastTrade>,
     /// Row 35 TBC - 定期 end: Σ principal returning from earlier plans.
     pub deposit_return: f64,
-    /// Row 23 活期 = Σ(start..deposit_return) − deposit placements; absent
+    /// Row 23 活期 = Σ(start..deposit_return) − deposit placements + trade lines; absent
     /// while `start` is.
     pub cash: Option<f64>,
     /// Row 24 定期+SC: prior `locked` − finish − plans + placements − returns,

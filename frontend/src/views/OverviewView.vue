@@ -8,6 +8,7 @@ import {
   type ForecastMonth,
   type ForecastPlacement,
   type ForecastResponse,
+  type ForecastTrade,
   type InterestComponent,
   type OverviewResponse,
 } from '../api'
@@ -75,15 +76,23 @@ function cellPlacements(month: ForecastMonth, kind: ForecastItemKind): ForecastP
   return []
 }
 
-/** Σ item amounts − placement principals; null while the cell is empty
- * (sheet: blank). */
+/** Real HK trades dated in the month land in the 股票 row only — a plan is
+ * an estimate the user trims by hand, so trades never suppress plan items. */
+function cellTradeLines(month: ForecastMonth, kind: ForecastItemKind): ForecastTrade[] {
+  return kind === 'stock' ? month.trade_lines : []
+}
+
+/** Σ item amounts − placement principals + trade amounts; null while the
+ * cell is empty (sheet: blank). */
 function cellSum(month: ForecastMonth, kind: ForecastItemKind): number | null {
   const items = cellItems(month, kind)
   const placements = cellPlacements(month, kind)
-  if (!items.length && !placements.length) return null
+  const tradeLines = cellTradeLines(month, kind)
+  if (!items.length && !placements.length && !tradeLines.length) return null
   return (
     items.reduce((sum, item) => sum + item.amount, 0) +
-    placements.reduce((sum, p) => sum - p.principal, 0)
+    placements.reduce((sum, p) => sum - p.principal, 0) +
+    tradeLines.reduce((sum, t) => sum + t.amount, 0)
   )
 }
 
@@ -110,6 +119,11 @@ const selectedItems = computed(() =>
 const selectedPlacements = computed(() =>
   selectedMonth.value && selected.value
     ? cellPlacements(selectedMonth.value, selected.value.kind)
+    : [],
+)
+const selectedTrades = computed(() =>
+  selectedMonth.value && selected.value
+    ? cellTradeLines(selectedMonth.value, selected.value.kind)
     : [],
 )
 
@@ -754,6 +768,18 @@ onMounted(load)
           <span class="num">{{ fmtMoney(-p.principal) }}</span>
           <span>{{ p.start_date }}</span>
           <span>已定期</span>
+        </div>
+        <!-- Real HK trades dated in the month — read-only, above the editable
+             plan items. -->
+        <div
+          v-for="t in selectedTrades"
+          :key="`trade-${t.trade_id}`"
+          class="plan-row muted"
+        >
+          <span>{{ t.code }} {{ t.trade_type }}</span>
+          <span class="num">{{ fmtMoney(t.amount) }}</span>
+          <span>{{ t.trade_date }}</span>
+          <span>已交易</span>
         </div>
         <div v-for="item in selectedItems" :key="item.id" class="plan-row">
           <template v-if="drafts[item.id]">

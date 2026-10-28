@@ -155,6 +155,13 @@ Each bond SHALL carry a `received_at` date (NULL while the principal return is u
 
 `POST /api/bonds/:id/receive` SHALL mark the bond's principal received at a date (default today) and record the maturity month's `bond-end:<id>` `adjustment` item. An already-stored keyed item is updated to the credited amount; the write is skipped only when the month has no row.
 
+#### Scenario: bond-end item skipped when already stored or monthless
+
+- **WHEN** the maturity month already stores the `bond-end:<id>` item or has no month row
+- **THEN** the credit and flag apply; the stored item is updated to the credited amount, or none is recorded when the month has no row
+
+### Requirement: Bond principal receipt crediting
+
 The receipt SHALL credit an amount, defaulting to `principal`, under the cash-accounts receipt crediting rule, with receipt currency `HKD`. The request carries `bank_in` (default true), an optional `account_id` override, and an optional `credit_amount`.
 
 #### Scenario: One-click principal return
@@ -166,11 +173,6 @@ The receipt SHALL credit an amount, defaulting to `principal`, under the cash-ac
 
 - **WHEN** the user 收訖's a matured bond with `不存入` selected (`bank_in` false)
 - **THEN** only `received_at` and the `bond-end` item are recorded — no cash account changes
-
-#### Scenario: bond-end item skipped when already stored or monthless
-
-- **WHEN** the maturity month already stores the `bond-end:<id>` item or has no month row
-- **THEN** the credit and flag apply; the stored item is updated to the credited amount, or none is recorded when the month has no row
 
 ### Requirement: Bond receipt finality and matured display
 

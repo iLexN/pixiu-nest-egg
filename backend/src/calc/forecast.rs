@@ -2,7 +2,7 @@ use super::*;
 
 use chrono::Datelike;
 
-use crate::models::ForecastItemKind;
+use crate::models::{ForecastItemKind, TradeType};
 
 /// The forecast window: the current month plus six ahead (sheet columns B:H).
 pub const FORECAST_MONTHS: u32 = 7;
@@ -55,6 +55,9 @@ pub struct ForecastInput<'a> {
     /// sheet when the window slid past, and its return must not double-count
     /// a deposit that already exists).
     pub items: &'a [ForecastItemFacts],
+    /// The window's HK trades (US trades settle inside IBKR and are never
+    /// passed in) — their signed totals move 活期 in their month.
+    pub trades: &'a [SuggestionTrade],
 }
 
 /// One derived month column of the 預測 grid.
@@ -77,8 +80,11 @@ pub struct ForecastMonthDerived {
     pub deposit_start: f64,
     /// Σ principal returning from in-window plans this month.
     pub deposit_return: f64,
+    /// Σ signed `trade_amount` of HK trades dated in the month.
+    pub trade_flows: f64,
     /// start + salary + spend + finish + interest + bill + plans + deposit
-    /// plans − deposit placements + deposit return; absent while `start` is.
+    /// plans − deposit placements + deposit return + trade flows; absent
+    /// while `start` is.
     pub cash: Option<f64>,
     /// Prior `locked` − finish − deposit plans + placements − returns,
     /// anchored on `locked_base`.
@@ -115,6 +121,15 @@ pub fn forecast_locked_anchor(
         .map(|deposit| deposit.principal)
         .sum::<f64>()
         + 0.0
+}
+
+/// A trade's signed 活期 flow: a BUY pays `total` out, a SELL brings it back.
+/// Exported so the API's `trade_lines` and the calc sum can't disagree.
+pub fn trade_amount(trade: &SuggestionTrade) -> f64 {
+    match trade.kind {
+        TradeType::Buy => -trade.total,
+        TradeType::Sell => trade.total,
+    }
 }
 
 /// The seven-month rolling 預測 grid. Every figure derives from the inputs;
@@ -216,6 +231,16 @@ pub fn forecast_months(input: &ForecastInput) -> Vec<ForecastMonthDerived> {
             .sum::<f64>()
             + 0.0;
 
+        // A real HK trade moves 活期 in its month — the 股票 row's real side;
+        // stock plan items are never suppressed against it.
+        let trade_flows: f64 = input
+            .trades
+            .iter()
+            .filter(|trade| in_month(trade.date, *month))
+            .map(trade_amount)
+            .sum::<f64>()
+            + 0.0;
+
         // This column's start is the chained cash before its own flows.
         let start = cash;
         cash = start.map(|start| {
@@ -229,6 +254,7 @@ pub fn forecast_months(input: &ForecastInput) -> Vec<ForecastMonthDerived> {
                 + deposit_plans
                 - deposit_start
                 + deposit_return
+                + trade_flows
         });
         locked = locked
             .map(|locked| locked - deposit_finish - deposit_plans + deposit_start - deposit_return);
@@ -243,6 +269,7 @@ pub fn forecast_months(input: &ForecastInput) -> Vec<ForecastMonthDerived> {
             deposit_plans,
             deposit_start,
             deposit_return,
+            trade_flows,
             cash,
             locked,
             semi_liquid,
@@ -275,6 +302,7 @@ mod tests {
             deposits,
             events,
             items,
+            trades: &[],
         }
     }
 
@@ -289,6 +317,16 @@ mod tests {
             kind,
             amount,
             return_month: return_month.map(ym),
+        }
+    }
+
+    fn hk_trade(date: &str, kind: TradeType, total: f64) -> SuggestionTrade {
+        SuggestionTrade {
+            id: 1,
+            date: day(date),
+            kind,
+            total,
+            code: "匯豐".to_string(),
         }
     }
 
@@ -464,13 +502,86 @@ mod tests {
         let months = forecast_months(&forecast_input(&[], &events, &[]));
         for m in &months {
             assert!(
-                m.deposit_finish.is_sign_positive() && m.deposit_return.is_sign_positive(),
-                "{} finish={} return={}",
+                m.deposit_finish.is_sign_positive()
+                    && m.deposit_return.is_sign_positive()
+                    && m.trade_flows.is_sign_positive(),
+                "{} finish={} return={} trades={}",
                 m.month,
                 m.deposit_finish,
-                m.deposit_return
+                m.deposit_return,
+                m.trade_flows
             );
         }
+    }
+
+    #[test]
+    fn forecast_buy_lowers_cash_in_its_month() {
+        let events = SuggestionEvents::default();
+        let trades = vec![hk_trade("2026-10-27", TradeType::Buy, 54_063.17)];
+        let base = forecast_months(&forecast_input(&[], &events, &[]));
+        let mut input = forecast_input(&[], &events, &[]);
+        input.trades = &trades;
+        let months = forecast_months(&input);
+        assert!(approx_eq(months[1].trade_flows, -54_063.17));
+        assert!(approx_eq(
+            months[1].cash.unwrap(),
+            base[1].cash.unwrap() - 54_063.17
+        ));
+        // Earlier months are unaffected; later months chain the lower figure.
+        assert!(approx_eq(months[0].cash.unwrap(), base[0].cash.unwrap()));
+        assert!(approx_eq(
+            months[2].cash.unwrap(),
+            base[2].cash.unwrap() - 54_063.17
+        ));
+    }
+
+    #[test]
+    fn forecast_sell_raises_cash_in_its_month() {
+        let events = SuggestionEvents::default();
+        let trades = vec![hk_trade("2026-11-05", TradeType::Sell, 12_000.0)];
+        let base = forecast_months(&forecast_input(&[], &events, &[]));
+        let mut input = forecast_input(&[], &events, &[]);
+        input.trades = &trades;
+        let months = forecast_months(&input);
+        assert!(approx_eq(months[2].trade_flows, 12_000.0));
+        assert!(approx_eq(
+            months[2].cash.unwrap(),
+            base[2].cash.unwrap() + 12_000.0
+        ));
+    }
+
+    #[test]
+    fn forecast_pre_window_trade_fires_nothing() {
+        let events = SuggestionEvents::default();
+        // A trade dated before the Sep window has no month's trade_flows.
+        let trades = vec![hk_trade("2026-08-15", TradeType::Buy, 10_000.0)];
+        let base = forecast_months(&forecast_input(&[], &events, &[]));
+        let mut input = forecast_input(&[], &events, &[]);
+        input.trades = &trades;
+        let months = forecast_months(&input);
+        assert!(months.iter().all(|m| m.trade_flows == 0.0));
+        for (month, before) in months.iter().zip(&base) {
+            assert_eq!(month.cash, before.cash);
+        }
+    }
+
+    #[test]
+    fn forecast_stock_plan_and_trade_both_count() {
+        let events = SuggestionEvents::default();
+        // A −50000 stock plan and the real BUY it anticipated both count —
+        // plans are never suppressed; the user trims the plan by hand.
+        let items = vec![plan("2026-10-01", ForecastItemKind::Stock, -50_000.0, None)];
+        let trades = vec![hk_trade("2026-10-27", TradeType::Buy, 54_063.17)];
+        let base = forecast_months(&forecast_input(&[], &events, &[]));
+        let mut input = forecast_input(&[], &events, &items);
+        input.trades = &trades;
+        let months = forecast_months(&input);
+        assert!(approx_eq(months[1].plans, -50_000.0));
+        assert!(approx_eq(months[1].trade_flows, -54_063.17));
+        assert!(approx_eq(
+            months[1].cash.unwrap() - base[1].cash.unwrap(),
+            -104_063.17
+        ));
     }
 
     #[test]

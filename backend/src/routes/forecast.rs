@@ -9,7 +9,7 @@ use crate::calc::{self, FieldError, ForecastItemFacts};
 use crate::error::{ApiError, ErrorBody};
 use crate::models::{
     Deposit, ForecastItem, ForecastItemKind, ForecastItemPatch, ForecastMonth, ForecastPlacement,
-    ForecastResponse, NewDeposit, NewForecastItem,
+    ForecastResponse, ForecastTrade, NewDeposit, NewForecastItem,
 };
 use crate::store::forecast as store;
 
@@ -93,6 +93,17 @@ pub async fn forecast(State(state): State<AppState>) -> Result<Json<ForecastResp
     let trailing = calc::trailing_averages(&stat_rows, &month_items, first);
     let spend = trailing.living_budget.map(|budget| -budget);
     let events = crate::service::months::load_interest_events(pool).await?;
+    // HK trades inside the window move 活期 in their month; US trades settle
+    // inside IBKR and stay out (the 月結 `trade:` suggestion rule).
+    let trades = crate::store::trades::hk_suggestion_trades(
+        pool,
+        &first.to_string(),
+        &first
+            .checked_add_months(chrono::Months::new(calc::FORECAST_MONTHS))
+            .expect("forecast window overflow")
+            .to_string(),
+    )
+    .await?;
 
     let items = load_all_items(pool).await?;
     let mut facts = Vec::with_capacity(items.len());
@@ -121,6 +132,7 @@ pub async fn forecast(State(state): State<AppState>) -> Result<Json<ForecastResp
         deposits: &events.deposits,
         events: &events,
         items: &facts,
+        trades: &trades,
     });
     let months_out = derived
         .iter()
@@ -150,6 +162,28 @@ pub async fn forecast(State(state): State<AppState>) -> Result<Json<ForecastResp
                         start_date: deposit.start_date.expect("filtered to Some").to_string(),
                     })
                     .collect(),
+                trade_lines: {
+                    let mut lines: Vec<ForecastTrade> = trades
+                        .iter()
+                        .filter(|trade| {
+                            trade.date.year() == column.month.year()
+                                && trade.date.month() == column.month.month()
+                        })
+                        .map(|trade| ForecastTrade {
+                            trade_id: trade.id,
+                            code: trade.code.clone(),
+                            trade_type: trade.kind,
+                            trade_date: trade.date.to_string(),
+                            amount: calc::trade_amount(trade),
+                        })
+                        .collect();
+                    lines.sort_by(|a, b| {
+                        a.trade_date
+                            .cmp(&b.trade_date)
+                            .then(a.trade_id.cmp(&b.trade_id))
+                    });
+                    lines
+                },
                 month,
                 start: column.start,
                 salary,

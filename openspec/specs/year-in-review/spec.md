@@ -172,13 +172,17 @@ The row SHALL carry:
 
 The row SHALL carry:
 
-- `us_stocks` (labeled 美股 — USD figures, not HKD-converted): `cost`, `dividends`, `rate`, `now_value`, `value_rate` derived exactly as `stocks` but from US trades, dividends, and snapshots. It SHALL also carry `cost_hkd` and `now_value_hkd` — `cost`/`now_value` × the stored USD→HKD rate — as display companions, each absent while its USD figure or the rate is missing.
+- `us_stocks` (labeled 美股 — USD figures, not HKD-converted): `cost`, `dividends`, `rate`, `now_value`, `value_rate` derived exactly as `stocks` but from US trades, dividends, and snapshots.
 - `deposits`: `principal`/`interest` = Σ over 定期 rows whose `end_date` falls in the year and is not after today (the sheet's `End` filter); a seeded override replaces either value when present.
 
 #### Scenario: US figures stay in USD
 
 - **WHEN** the year carries US trades and dividends
 - **THEN** `us_stocks` reports USD figures, not HKD-converted
+
+### Requirement: US stocks HKD companions
+
+`us_stocks` SHALL also carry `cost_hkd` and `now_value_hkd` — `cost`/`now_value` × the stored USD→HKD rate — as display companions, each absent while its USD figure or the rate is missing.
 
 #### Scenario: HKD companions convert at the stored rate
 

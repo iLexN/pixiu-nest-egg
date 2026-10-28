@@ -34,6 +34,22 @@ export function fmtPrice(value: number | null | undefined): string {
   return value === null || value === undefined ? '' : price.format(value)
 }
 
+const fixedPrice = new Map<number, Intl.NumberFormat>()
+
+/** Price with exactly `digits` decimals, e.g. 持倉總覽 平均單價 (HK 3, US 2). */
+export function fmtPriceDigits(value: number | null | undefined, digits: number): string {
+  if (value === null || value === undefined) return ''
+  let formatter = fixedPrice.get(digits)
+  if (!formatter) {
+    formatter = new Intl.NumberFormat('en-US', {
+      minimumFractionDigits: digits,
+      maximumFractionDigits: digits,
+    })
+    fixedPrice.set(digits, formatter)
+  }
+  return formatter.format(value)
+}
+
 export function fmtShares(value: number | null | undefined): string {
   return value === null || value === undefined ? '' : shares.format(value)
 }

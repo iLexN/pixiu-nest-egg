@@ -18,6 +18,7 @@ import {
   fmtMoney,
   fmtPercent,
   fmtPrice,
+  fmtPriceDigits,
   fmtShares,
   signClass,
 } from '../format'
@@ -425,7 +426,9 @@ watch(() => props.market, resetAndLoad)
               </button>
             </td>
             <td class="num">{{ fmtShares(stock.shares_held) }}</td>
-            <td class="num">{{ fmtPrice(stock.weighted_avg_buy_price) }}</td>
+            <td class="num">
+              {{ fmtPriceDigits(stock.weighted_avg_buy_price, props.market === 'HK' ? 3 : 2) }}
+            </td>
             <td class="num">{{ fmtMoney(stock.total_buy_cost) }}</td>
             <td class="num price-cell">
               <template v-if="editingPrice === stock.id">

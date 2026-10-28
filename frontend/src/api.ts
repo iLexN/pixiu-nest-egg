@@ -1119,6 +1119,18 @@ export interface ForecastPlacement {
   start_date: string
 }
 
+/** A real HK trade dated in the month — a read-only `已交易` line in the
+ * 股票 row. US trades never reach the forecast (they settle inside IBKR). */
+export interface ForecastTrade {
+  trade_id: number
+  code: string
+  trade_type: TradeType
+  /** `YYYY-MM-DD` — the day the trade moved 活期. */
+  trade_date: string
+  /** Signed cash flow: −`total` for BUY, +`total` for SELL. */
+  amount: number
+}
+
 /** One month column of the 預測 grid (sheet columns B:H). */
 export interface ForecastMonth {
   month: string
@@ -1133,6 +1145,7 @@ export interface ForecastMonth {
   bill: number | null
   plan_items: ForecastItem[]
   deposit_placements: ForecastPlacement[]
+  trade_lines: ForecastTrade[]
   deposit_return: number
   cash: number | null
   locked: number | null
