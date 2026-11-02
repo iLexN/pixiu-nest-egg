@@ -541,21 +541,24 @@ const assetDraft = ref<{
   label: string
   liquidity: ManualAssetLiquidity
   amount: string | number
+  note: string
 }>({
   label: '',
   liquidity: 'long',
   amount: '',
+  note: '',
 })
 
 function startAssetEdit(asset: ManualAsset | 'new') {
   editingAsset.value = asset
   assetDraft.value =
     asset === 'new'
-      ? { label: '', liquidity: 'long', amount: '' }
+      ? { label: '', liquidity: 'long', amount: '', note: '' }
       : {
           label: asset.label,
           liquidity: asset.liquidity,
           amount: asset.amount,
+          note: asset.note ?? '',
         }
 }
 
@@ -570,6 +573,7 @@ async function saveAsset() {
       label: assetDraft.value.label.trim(),
       liquidity: assetDraft.value.liquidity,
       amount,
+      note: assetDraft.value.note.trim() || null,
     }
     if (editingAsset.value === 'new') {
       await api.createManualAsset(body)
@@ -1122,7 +1126,10 @@ onMounted(load)
           </thead>
           <tbody>
             <tr v-for="asset in assets" :key="asset.id">
-              <td>{{ asset.label }}</td>
+              <td>
+                {{ asset.label }}
+                <small v-if="asset.note" class="muted note">{{ asset.note }}</small>
+              </td>
               <td>{{ asset.liquidity === 'short' ? '短期' : '長期' }}</td>
               <td class="num">{{ fmtMoney(asset.amount) }}</td>
               <td class="row-actions">
@@ -1153,6 +1160,10 @@ onMounted(load)
           <label>
             金額
             <input v-model="assetDraft.amount" type="number" step="any" inputmode="decimal" required />
+          </label>
+          <label>
+            備註
+            <input v-model="assetDraft.note" />
           </label>
           <div class="form-actions">
             <button type="submit">儲存</button>

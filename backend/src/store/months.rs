@@ -428,12 +428,13 @@ fn row_to_asset(row: &SqliteRow) -> Result<ManualAsset, StoreError> {
             StoreError::Corrupt(format!("stored liquidity {liquidity} is not valid"))
         })?,
         amount: row.try_get("amount")?,
+        note: row.try_get("note")?,
         sort_order: row.try_get("sort_order")?,
         updated_at: row.try_get("updated_at")?,
     })
 }
 
-const ASSET_COLUMNS: &str = "id, label, liquidity, amount, sort_order, updated_at";
+const ASSET_COLUMNS: &str = "id, label, liquidity, amount, note, sort_order, updated_at";
 
 pub(crate) async fn load_asset(pool: &SqlitePool, id: i64) -> Result<ManualAsset, StoreError> {
     let row = sqlx::query(sqlx::AssertSqlSafe(format!(
@@ -468,15 +469,17 @@ pub(crate) async fn insert_asset(
     label: &str,
     liquidity: &str,
     amount: f64,
+    note: Option<&str>,
     sort_order: i64,
 ) -> Result<i64, StoreError> {
     let id: i64 = sqlx::query_scalar(
-        "INSERT INTO manual_assets (label, liquidity, amount, sort_order, updated_at) \
-         VALUES (?, ?, ?, ?, ?) RETURNING id",
+        "INSERT INTO manual_assets (label, liquidity, amount, note, sort_order, updated_at) \
+         VALUES (?, ?, ?, ?, ?, ?) RETURNING id",
     )
     .bind(label)
     .bind(liquidity)
     .bind(amount)
+    .bind(note)
     .bind(sort_order)
     .bind(now_timestamp())
     .fetch_one(pool)
@@ -490,14 +493,16 @@ pub(crate) async fn update_asset(
     label: &str,
     liquidity: &str,
     amount: f64,
+    note: Option<&str>,
 ) -> Result<(), StoreError> {
     sqlx::query(
-        "UPDATE manual_assets SET label = ?, liquidity = ?, amount = ?, updated_at = ? \
-         WHERE id = ?",
+        "UPDATE manual_assets SET label = ?, liquidity = ?, amount = ?, note = ?, \
+         updated_at = ? WHERE id = ?",
     )
     .bind(label)
     .bind(liquidity)
     .bind(amount)
+    .bind(note)
     .bind(now_timestamp())
     .bind(id)
     .execute(pool)

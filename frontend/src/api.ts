@@ -1163,6 +1163,7 @@ export interface ManualAsset {
   label: string
   liquidity: ManualAssetLiquidity
   amount: number
+  note: string | null
   sort_order: number
   updated_at: string
 }
@@ -1171,12 +1172,14 @@ export interface NewManualAsset {
   label: string
   liquidity?: ManualAssetLiquidity
   amount: number
+  note?: string | null
 }
 
 export interface ManualAssetPatch {
   label?: string
   liquidity?: ManualAssetLiquidity
   amount?: number
+  note?: string | null
 }
 
 /** The 美股 sheet's IBKR account block: manual inputs + derived cross-checks. */
@@ -1208,6 +1211,7 @@ export interface OverviewAssetRow {
   amount: number | null
   share: number | null
   manual_asset_id: number | null
+  note: string | null
 }
 
 export interface SemiLiquid {

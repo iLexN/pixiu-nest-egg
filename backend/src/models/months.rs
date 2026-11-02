@@ -252,6 +252,7 @@ pub struct ManualAsset {
     pub label: String,
     pub liquidity: ManualAssetLiquidity,
     pub amount: f64,
+    pub note: Option<String>,
     pub sort_order: i64,
     pub updated_at: String,
 }
@@ -263,14 +264,19 @@ pub struct NewManualAsset {
     #[serde(default)]
     pub liquidity: Option<ManualAssetLiquidity>,
     pub amount: f64,
+    #[serde(default)]
+    pub note: Option<String>,
 }
 
-/// Absent fields are left untouched; present fields are written.
+/// Absent fields are left untouched; present fields are written, so `null`
+/// clears an optional value.
 #[derive(Debug, Clone, Default, Deserialize, ToSchema)]
 pub struct ManualAssetPatch {
     pub label: Option<String>,
     pub liquidity: Option<ManualAssetLiquidity>,
     pub amount: Option<f64>,
+    #[serde(default, deserialize_with = "nullable")]
+    pub note: Option<Option<String>>,
 }
 
 /// A computed candidate item for a month, never stored until accepted.

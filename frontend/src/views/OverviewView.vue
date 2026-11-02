@@ -418,8 +418,8 @@ onMounted(load)
           </tr>
         </thead>
         <tbody>
-          <tr v-for="row in data.assets" :key="row.key + row.label">
-            <td>{{ row.label }}</td>
+          <tr v-for="row in data.assets" :key="row.key + row.label" :title="row.note ?? undefined">
+            <td :class="{ 'has-note': row.note }">{{ row.label }}</td>
             <td
               v-if="row.manual_asset_id !== null && editingId === row.manual_asset_id"
               class="num"
@@ -1124,6 +1124,12 @@ onMounted(load)
 }
 .overview-grid tfoot td.muted {
   white-space: normal;
+}
+/* A manual asset row with a note gets a hover cue: the note rides the row's
+   native title tooltip. */
+.has-note {
+  cursor: help;
+  text-decoration: underline dotted;
 }
 .totals-grid {
   display: grid;

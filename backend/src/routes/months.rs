@@ -573,11 +573,17 @@ pub async fn create_asset(
     let label = validate_asset(&body.label, body.amount)?;
     let sort_order = store::next_asset_sort_order(&state.pool).await?;
     let liquidity = body.liquidity.unwrap_or_default();
+    let note = body
+        .note
+        .as_deref()
+        .map(str::trim)
+        .filter(|note| !note.is_empty());
     let id = store::insert_asset(
         &state.pool,
         &label,
         liquidity.as_str(),
         body.amount,
+        note,
         sort_order,
     )
     .await?;
@@ -609,7 +615,16 @@ pub async fn update_asset(
     let liquidity = patch.liquidity.unwrap_or(existing.liquidity);
     let amount = patch.amount.unwrap_or(existing.amount);
     let label = validate_asset(&label, amount)?;
-    store::update_asset(&state.pool, id, &label, liquidity.as_str(), amount).await?;
+    let note = merge_text(patch.note, existing.note);
+    store::update_asset(
+        &state.pool,
+        id,
+        &label,
+        liquidity.as_str(),
+        amount,
+        note.as_deref(),
+    )
+    .await?;
     Ok(Json(store::load_asset(&state.pool, id).await?))
 }
 
@@ -649,6 +664,7 @@ mod tests {
                 label: "HS人壽".to_string(),
                 liquidity: None,
                 amount: 69440.47,
+                note: None,
             }),
         )
         .await
@@ -667,6 +683,7 @@ mod tests {
                 label: "Irene".to_string(),
                 liquidity: None,
                 amount: 20000.0,
+                note: None,
             }),
         )
         .await
@@ -688,6 +705,93 @@ mod tests {
 
         let stored = store::load_asset(&pool, created.id).await.expect("stored");
         assert_eq!(stored.liquidity, ManualAssetLiquidity::Short);
+    }
+
+    #[tokio::test]
+    async fn patch_asset_note_set_kept_and_cleared() {
+        let pool = connect_memory().await.expect("memory db");
+        let state = AppState { pool: pool.clone() };
+        let created = create_asset(
+            State(state.clone()),
+            Json(NewManualAsset {
+                label: "HS人壽".to_string(),
+                liquidity: None,
+                amount: 69440.47,
+                note: None,
+            }),
+        )
+        .await
+        .expect("created")
+        .1;
+        assert_eq!(created.note, None);
+
+        // Setting a note stores it.
+        let noted = update_asset(
+            State(state.clone()),
+            Path(created.id),
+            Json(ManualAssetPatch {
+                note: Some(Some("  保單 123, 2026-10 估值  ".to_string())),
+                ..Default::default()
+            }),
+        )
+        .await
+        .expect("patched")
+        .0;
+        assert_eq!(noted.note.as_deref(), Some("保單 123, 2026-10 估值"));
+
+        // An amount-only patch leaves the note untouched.
+        let reamounted = update_asset(
+            State(state.clone()),
+            Path(created.id),
+            Json(ManualAssetPatch {
+                amount: Some(70000.0),
+                ..Default::default()
+            }),
+        )
+        .await
+        .expect("patched")
+        .0;
+        assert_eq!(reamounted.note.as_deref(), Some("保單 123, 2026-10 估值"));
+
+        // `null` clears it.
+        let cleared = update_asset(
+            State(state.clone()),
+            Path(created.id),
+            Json(ManualAssetPatch {
+                note: Some(None),
+                ..Default::default()
+            }),
+        )
+        .await
+        .expect("patched")
+        .0;
+        assert_eq!(cleared.note, None);
+
+        // So does a whitespace-only value.
+        let reset = update_asset(
+            State(state.clone()),
+            Path(created.id),
+            Json(ManualAssetPatch {
+                note: Some(Some("保單 456".to_string())),
+                ..Default::default()
+            }),
+        )
+        .await
+        .expect("patched")
+        .0;
+        assert_eq!(reset.note.as_deref(), Some("保單 456"));
+        let blanked = update_asset(
+            State(state),
+            Path(created.id),
+            Json(ManualAssetPatch {
+                note: Some(Some("   ".to_string())),
+                ..Default::default()
+            }),
+        )
+        .await
+        .expect("patched")
+        .0;
+        assert_eq!(blanked.note, None);
     }
 
     #[tokio::test]

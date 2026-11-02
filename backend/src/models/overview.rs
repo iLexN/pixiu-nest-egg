@@ -57,6 +57,8 @@ pub struct OverviewAssetRow {
     pub share: Option<f64>,
     /// Set when the row is a manual balance, enabling inline edits.
     pub manual_asset_id: Option<i64>,
+    /// The manual row's note, shown as a hover tooltip on 總覽.
+    pub note: Option<String>,
 }
 
 /// The Overview!A14:C18 半流動資金 block plus the A13 ratio.

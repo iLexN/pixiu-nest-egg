@@ -157,6 +157,7 @@ pub async fn build(pool: &SqlitePool) -> Result<OverviewResponse, StoreError> {
             amount: Some(asset.amount),
             share: None,
             manual_asset_id: Some(asset.id),
+            note: asset.note.clone(),
         });
     }
     assets.push(asset_row("ibkr", "IBKR", ibkr.computed_total_hkd));
@@ -311,5 +312,6 @@ fn asset_row(key: &str, label: &str, amount: Option<f64>) -> OverviewAssetRow {
         amount,
         share: None,
         manual_asset_id: None,
+        note: None,
     }
 }

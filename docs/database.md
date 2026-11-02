@@ -249,7 +249,7 @@ One row per year, keyed by `year`, holding the YearInReview figures that cannot 
 
 ### `manual_assets`
 
-The manual 資產 Overview cells as rows: `label`, `liquidity` (`short`/`long`, default `long`), `amount`, `sort_order`, `updated_at`. They feed the live 總數/流動資產 derivation and are editable inline on the 總覽 tab. `liquidity` places a row in the Overview 策略 block's 短期可取回 or 長期可取回.
+The manual 資產 Overview cells as rows: `label`, `liquidity` (`short`/`long`, default `long`), `amount`, `note` (optional free text shown on 總覽 as a hover tooltip), `sort_order`, `updated_at`. They feed the live 總數/流動資產 derivation and are editable inline on the 總覽 tab. `liquidity` places a row in the Overview 策略 block's 短期可取回 or 長期可取回.
 
 ### `cash_accounts`
 
