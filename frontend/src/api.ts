@@ -365,6 +365,10 @@ export interface Deposit {
   credited_account_id: number | null
   /** The amount banked into `credited_account_id`. */
   credited_amount: number | null
+  /** The cash account the placement debited the principal from. */
+  debited_account_id: number | null
+  /** The amount debited from `debited_account_id` at placement. */
+  debited_amount: number | null
   note1: string | null
   note2: string | null
   sort_order: number
@@ -384,6 +388,8 @@ export interface NewDeposit {
   end_date: string
   note1?: string | null
   note2?: string | null
+  /** 扣自: the HKD bank account to debit the principal from; absent = no debit. */
+  debit_account_id?: number | null
 }
 
 export interface ReceiveDepositBody {
@@ -1146,6 +1152,8 @@ export interface ForecastMonth {
   plan_items: ForecastItem[]
   deposit_placements: ForecastPlacement[]
   trade_lines: ForecastTrade[]
+  /** The month's IBKR transfers — read-only `已轉帳` lines in the 股票 row. */
+  ibkr_lines: ForecastIbkrTransfer[]
   deposit_return: number
   cash: number | null
   locked: number | null
@@ -1196,13 +1204,41 @@ export interface IbkrBlock {
 }
 
 export interface IbkrPatch {
-  /** A bank→IBKR transfer delta in HKD; negative records a withdrawal. */
-  transfer_hkd?: number
-  /** Optional `YYYY-MM-DD`; defaults to today. */
-  transfer_date?: string
   now_value?: number | null
   hkd_cash?: number | null
   usd_cash?: number | null
+}
+
+/** An IBKR transfer dated in the month — a read-only `已轉帳` line in the
+ * 股票 row beside the trade lines. */
+export interface ForecastIbkrTransfer {
+  transfer_id: number
+  /** `YYYY-MM-DD` — the day the money left the bank account. */
+  transfer_date: string
+  /** Signed cash flow: −`amount_hkd`. */
+  amount: number
+}
+
+/** One `ibkr_transfers` log row; NULL account fields mark log-only legacy
+ * rows or a deleted account. */
+export interface IbkrTransfer {
+  id: number
+  /** `YYYY-MM-DD` — the day the cash moved. */
+  transfer_date: string
+  amount_hkd: number
+  from_account_id: number | null
+  from_account_label: string | null
+  broker_account_id: number | null
+  created_at: string
+}
+
+export interface NewIbkrTransfer {
+  /** Finite HKD amount, greater than 0. */
+  amount_hkd: number
+  /** Optional `YYYY-MM-DD`, not after today; defaults to today. */
+  transfer_date?: string
+  /** Optional source account id; defaults to the `HS` bank account. */
+  from_account_id?: number
 }
 
 export interface OverviewAssetRow {
@@ -1714,5 +1750,14 @@ export const api = {
   },
   updateIbkr(patch: IbkrPatch): Promise<IbkrBlock> {
     return request('/ibkr', { method: 'PATCH', body: JSON.stringify(patch) })
+  },
+  listIbkrTransfers(): Promise<IbkrTransfer[]> {
+    return request('/ibkr/transfers')
+  },
+  createIbkrTransfer(body: NewIbkrTransfer): Promise<IbkrTransfer> {
+    return request('/ibkr/transfers', { method: 'POST', body: JSON.stringify(body) })
+  },
+  deleteIbkrTransfer(id: number): Promise<void> {
+    return request(`/ibkr/transfers/${id}`, { method: 'DELETE' })
   },
 }

@@ -130,11 +130,15 @@ The system SHALL present a year filter defaulting to the current year, listing t
 - **THEN** the 2027 table shows January with that month's Σ interest and Σ total, and the remaining months with zero
 
 ### Requirement: Reminder checklists
-The deposits view SHALL display the workbook's "定期 start step" and "定期 end step" checklists as static reminder text; the checklist still lists "money master" as a step — the user performs it in the app's settings — while 回報率 and Overview 預測 still require manual workbook edits until those sections are migrated.
+The deposits view SHALL display the workbook's "定期 start step" and "定期 end step" checklists as static reminder text. The start step SHALL state that 新增定期 / 轉為定期 automatically debit the chosen 活期 account and record the 月結 調整 −本金. The checklist still lists "money master" as a step — the user performs it in the app's settings — while 回報率 and Overview 預測 still require manual workbook edits until those sections are migrated.
 
 #### Scenario: Checklist visible
 - **WHEN** the user opens the deposits view
 - **THEN** the start-step and end-step reminders are visible without editing capability, and the muted note no longer lists money master among the workbook-manual steps
+
+#### Scenario: Start step names the automatic debit
+- **WHEN** the user opens the deposits view
+- **THEN** the start step's first line says placing a deposit automatically 扣活期 and records the 月結調整 −本金
 
 ### Requirement: Display formatting
 Deposit display SHALL follow the app's conventions: money to 2 decimal places and rates shown as percentages; stored values are never rounded. A derived rate SHALL be displayed like an entered one and identified as derived by a hover hint; editing a deposit whose rate is derived SHALL leave the rate entry empty, showing the derived value only as a hint, so saving does not store it.
@@ -238,9 +242,19 @@ The receive endpoint also records the month's `dep-end:<id>` `adjustment` item f
 - **WHEN** the start month has no month row
 - **THEN** the deposit is stored but no item is recorded, and the `dep-start:<id>` suggestion still appears for that month
 
+#### Scenario: Debit and item in one write
+
+- **WHEN** the user creates a deposit with principal `140000`, `start_date` `2026-10-13`, and `debit_account_id` naming HS, and the `2026-10` month row exists
+- **THEN** the deposit, the HS debit of `140000`, and the `dep-start:<id>` item of `-140000` are all stored together
+
 ### Requirement: Deposit deletion
 
-`DELETE /api/deposits/{id}` SHALL delete an unreceived deposit together with every `dep-start:<id>` month item and every `dep-start:<id>` dismissal, in any month, in one write. A received (收訖) deposit SHALL NOT be deletable: the request returns 409 and changes nothing. The UI SHALL NOT offer 刪除 for a received deposit.
+`DELETE /api/deposits/{id}` SHALL delete an unreceived deposit, in one write, together with:
+
+- every `dep-start:<id>` month item and every `dep-start:<id>` dismissal, in any month;
+- the reversal of its placement debit: the stored debited amount is added back to the stored debited account, and skipped when that account no longer exists.
+
+A received (收訖) deposit SHALL NOT be deletable: the request returns 409 and changes nothing. The UI SHALL NOT offer 刪除 for a received deposit.
 
 #### Scenario: Delete removes the dep-start item
 
@@ -251,6 +265,16 @@ The receive endpoint also records the month's `dep-end:<id>` `adjustment` item f
 
 - **WHEN** the deposit's `start_date` was edited to another month after its `dep-start:<id>` item was recorded, and the user deletes the deposit
 - **THEN** the originally recorded `dep-start:<id>` item is removed too
+
+#### Scenario: Delete reverses the debit
+
+- **WHEN** a deposit that debited HS `130000` is deleted, and the HKD default has since moved to 渣打
+- **THEN** HS gains `130000` and 渣打 is unchanged
+
+#### Scenario: Debited account since deleted
+
+- **WHEN** a deposit debited 渣打, 渣打 has since been deleted, and the user deletes the deposit
+- **THEN** the deposit is deleted and no remaining account changes
 
 #### Scenario: Received deposit cannot be deleted
 
@@ -295,3 +319,51 @@ The system SHALL derive the deposit totals over exactly the deposits the unrecei
 #### Scenario: Bank rollup by bank
 - **WHEN** active deposits carry banks `SC` (four deposits) and `HS` (one deposit)
 - **THEN** the bank rollup reports an `SC` group (Σ principal 365,000) and an `HS` group (Σ principal 80,000)
+
+### Requirement: Deposit placement debit
+
+Creating a deposit SHALL accept an optional `debit_account_id`. When given, the principal is subtracted from that account in the same write as the deposit, and the deposit stores the account and amount it debited. When absent, or when the deposit has no positive principal, nothing is debited and both fields stay empty. The account MUST be an HKD bank account holding at least the principal, else 400 on `debit_account_id` and nothing is stored.
+
+#### Scenario: Placement debits the chosen account
+
+- **WHEN** the user creates a deposit with principal `130000` and `debit_account_id` naming HS, which holds `195608.15`
+- **THEN** the deposit is stored with debited account HS and debited amount `130000`, and HS holds `65608.15`
+
+#### Scenario: 不扣活期
+
+- **WHEN** the user creates a deposit with no `debit_account_id`
+- **THEN** no cash account changes and the deposit's debited account and amount are empty
+
+#### Scenario: Insufficient balance
+
+- **WHEN** the user creates a deposit with principal `130000` and `debit_account_id` naming an account holding `50000`
+- **THEN** the request returns 400 naming `debit_account_id`, and no deposit, month item, or balance change is stored
+
+#### Scenario: Not an HKD bank account
+
+- **WHEN** `debit_account_id` names a broker account or a USD account
+- **THEN** the request returns 400 naming `debit_account_id` and nothing is stored
+
+#### Scenario: Already-received deposit never debits
+
+- **WHEN** a deposit is created with `end_date` already past, so it is stored received, and `debit_account_id` is given
+- **THEN** no cash account changes and the deposit's debited account and amount are empty
+
+#### Scenario: Editing leaves the debit alone
+
+- **WHEN** a deposit that debited HS `130000` is edited to principal `120000`
+- **THEN** HS is unchanged and the stored debited amount stays `130000`
+
+### Requirement: Placement account choice in the form
+
+The 新增定期 and 轉為定期 forms SHALL offer a 扣自 choice listing the HKD bank accounts plus 不扣活期. It is preselected from the 銀行 field: `HS` → the HS account, `SC` → the 渣打 account, otherwise the HKD default account, or 不扣活期 when none exists. The edit form SHALL NOT offer it.
+
+#### Scenario: Preselected from the bank
+
+- **WHEN** the user opens 轉為定期 on an `hs_deposit` plan
+- **THEN** 銀行 shows `HS`, 扣自 preselects the HS account, and saving debits HS by the principal
+
+#### Scenario: Choosing 不扣活期
+
+- **WHEN** the user picks 不扣活期 and saves
+- **THEN** the deposit is created without a debit

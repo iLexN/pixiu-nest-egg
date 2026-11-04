@@ -56,7 +56,8 @@
       "Exec(command)",
       "Exec(read)",
       "Exec(exit)",
-      "Exec(disown)"
+      "Exec(disown)",
+      "Exec(set)"
     ]
   }
 }

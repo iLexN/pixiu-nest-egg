@@ -142,6 +142,19 @@ pub struct ForecastTrade {
     pub amount: f64,
 }
 
+/// An IBKR transfer dated in the month — a read-only `已轉帳` line in the
+/// 股票 row beside the trade lines. Log-only legacy rows appear too: they
+/// moved cash the same way.
+#[derive(Debug, Clone, Serialize, ToSchema)]
+pub struct ForecastIbkrTransfer {
+    /// The `ibkr_transfers` row id.
+    pub transfer_id: i64,
+    /// `YYYY-MM-DD` — the day the money left the bank account.
+    pub transfer_date: String,
+    /// Signed cash flow: −`amount_hkd`.
+    pub amount: f64,
+}
+
 /// One month column of the Overview 預測 grid (sheet columns B:H).
 #[derive(Debug, Clone, Serialize, ToSchema)]
 pub struct ForecastMonth {
@@ -174,10 +187,13 @@ pub struct ForecastMonth {
     /// The month's real HK trades (`trade_date` inside it), read-only lines
     /// in the 股票 row.
     pub trade_lines: Vec<ForecastTrade>,
+    /// The month's IBKR transfers (`transfer_date` inside it), read-only
+    /// `已轉帳` lines in the 股票 row.
+    pub ibkr_lines: Vec<ForecastIbkrTransfer>,
     /// Row 35 TBC - 定期 end: Σ principal returning from earlier plans.
     pub deposit_return: f64,
-    /// Row 23 活期 = Σ(start..deposit_return) − deposit placements + trade lines; absent
-    /// while `start` is.
+    /// Row 23 活期 = Σ(start..deposit_return) − deposit placements + trade
+    /// and IBKR transfer lines; absent while `start` is.
     pub cash: Option<f64>,
     /// Row 24 定期+SC: prior `locked` − finish − plans + placements − returns,
     /// anchored on the deposits held on the window's first day.

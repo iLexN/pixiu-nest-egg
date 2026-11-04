@@ -1,11 +1,14 @@
 <script setup lang="ts">
 import { onMounted, ref } from 'vue'
 import DepositForm from '../components/DepositForm.vue'
+import DepositReceiveForm from '../components/DepositReceiveForm.vue'
 import DepositTable from '../components/DepositTable.vue'
-import { api, ApiError, type Deposit } from '../api'
+import { api, ApiError, type CashAccount, type Deposit } from '../api'
 
 const showForm = ref(false)
 const editing = ref<Deposit | null>(null)
+const receiving = ref<Deposit | null>(null)
+const accounts = ref<CashAccount[]>([])
 
 const history = ref<Deposit[]>([])
 const historyYears = ref<number[]>([])
@@ -16,8 +19,12 @@ const error = ref('')
 async function load() {
   error.value = ''
   try {
-    const summary = await api.depositSummary()
+    const [summary, accountsData] = await Promise.all([
+      api.depositSummary(),
+      api.listCashAccounts(),
+    ])
     historyYears.value = summary.history_years
+    accounts.value = accountsData
     if (!historyYears.value.includes(selectedYear.value)) {
       selectedYear.value = historyYears.value.at(-1) ?? selectedYear.value
     }
@@ -72,6 +79,13 @@ function onSaved(deposit: Deposit) {
   void load()
 }
 
+function onReceived() {
+  message.value = '已記錄收訖'
+  error.value = ''
+  receiving.value = null
+  void load()
+}
+
 onMounted(load)
 </script>
 
@@ -83,6 +97,16 @@ onMounted(load)
       :editing="editing"
       @saved="onSaved"
       @cancelled="cancelForm"
+    />
+
+    <DepositReceiveForm
+      v-if="receiving"
+      :key="receiving.id"
+      class="card"
+      :deposit="receiving"
+      :accounts="accounts"
+      @saved="onReceived"
+      @cancelled="receiving = null"
     />
 
     <div class="card">
@@ -104,6 +128,7 @@ onMounted(load)
         empty-text="這年沒有到期記錄"
         @edit="startEdit"
         @remove="remove"
+        @receive="receiving = $event"
       />
     </div>
 

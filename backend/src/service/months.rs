@@ -267,6 +267,7 @@ pub async fn load_interest_events(pool: &SqlitePool) -> Result<SuggestionEvents,
         dividends: load_dividend_events(pool, None).await?,
         coupons: load_coupon_events(pool, None).await?,
         aia_payments: Vec::new(),
+        ibkr_transfers: Vec::new(),
         pool_input: 0.0,
         usd_hkd_rate: None,
     })
@@ -288,6 +289,9 @@ pub async fn load_events(
         crate::store::trades::hk_suggestion_trades(pool, &first, &next).await?;
     let aia_payments: Vec<SuggestionAiaPayment> =
         crate::store::aia::suggestion_payments(pool, &first, &next).await?;
+    // Cash-moving transfers only: log-only legacy rows already carry their
+    // manual items and must never suggest.
+    let ibkr_transfers = crate::store::ibkr::transfers_in_range(pool, &first, &next, true).await?;
 
     Ok(SuggestionEvents {
         deposits: load_deposit_events(pool, range.clone()).await?,
@@ -295,6 +299,7 @@ pub async fn load_events(
         dividends: load_dividend_events(pool, range.clone()).await?,
         coupons: load_coupon_events(pool, range).await?,
         aia_payments,
+        ibkr_transfers,
         pool_input,
         usd_hkd_rate: crate::store::fx::usd_rate(pool).await?,
     })

@@ -1,36 +1,25 @@
 <script setup lang="ts">
 import { computed, ref } from 'vue'
-import { api, ApiError, type IbkrBlock } from '../api'
+import { api, ApiError, type CashAccount, type IbkrBlock } from '../api'
 import { fmtMoney, fmtPercent, signClass, todayIso } from '../format'
 
 const props = defineProps<{ ibkr: IbkrBlock }>()
 const emit = defineEmits<{ saved: [IbkrBlock] }>()
 
-// The 美股 sheet's A1:B5 block — four manual inputs; the derived figures
-// (computed total, net vs transferred) come back in the response.
+// The 美股 sheet's A1:B5 block — three editable cash/total inputs via PATCH
+// /api/ibkr; the derived figures (computed total, net vs transferred) come
+// back in the response. 轉入 lives on its own form below, through
+// POST /api/ibkr/transfers.
 const editing = ref(false)
 const error = ref('')
 const draft = ref({
-  transferred_delta: '' as number | '',
-  transfer_date: '',
   now_value: '' as number | '',
   hkd_cash: '' as number | '',
   usd_cash: '' as number | '',
 })
 
-// The 轉入 input is a delta; this previews the new cumulative total.
-const transferredPreview = computed(() => {
-  const text = String(draft.value.transferred_delta).trim()
-  if (text === '') return null
-  const delta = Number(text)
-  if (!Number.isFinite(delta)) return null
-  return (props.ibkr.transferred_hkd ?? 0) + delta
-})
-
 function startEdit() {
   draft.value = {
-    transferred_delta: '',
-    transfer_date: todayIso(),
     now_value: props.ibkr.now_value ?? '',
     hkd_cash: props.ibkr.hkd_cash ?? '',
     usd_cash: props.ibkr.usd_cash ?? '',
@@ -49,15 +38,7 @@ function field(raw: number | '', label: string): number | null {
 
 async function save() {
   try {
-    // Undefined records nothing; a delta appends a dated transfer-log row.
-    const deltaText = String(draft.value.transferred_delta).trim()
-    const delta = deltaText === '' ? undefined : Number(deltaText)
-    if (delta !== undefined && !Number.isFinite(delta)) {
-      throw new Error('轉入金額必須是數字')
-    }
     const updated = await api.updateIbkr({
-      transfer_hkd: delta,
-      transfer_date: draft.value.transfer_date || undefined,
       now_value: field(draft.value.now_value, 'IBKR App 現值'),
       hkd_cash: field(draft.value.hkd_cash, 'HKD 現金'),
       usd_cash: field(draft.value.usd_cash, 'USD 現金'),
@@ -69,26 +50,80 @@ async function save() {
     error.value = err instanceof ApiError || err instanceof Error ? err.message : String(err)
   }
 }
+
+// ----- 轉入 (bank→IBKR cash movement) -----
+
+const transferring = ref(false)
+const bankAccounts = ref<CashAccount[]>([])
+const transferDraft = ref({
+  amount_hkd: '' as number | '',
+  transfer_date: todayIso(),
+  from_account_id: 0,
+})
+
+/** The transfer source select offers HKD bank accounts only — the backend
+ * enforces the same rule. */
+const hkdBanks = computed(() =>
+  bankAccounts.value.filter((a) => a.role === 'bank' && a.currency === 'HKD'),
+)
+const selectedSource = computed(() =>
+  hkdBanks.value.find((a) => a.id === transferDraft.value.from_account_id),
+)
+const transferAmount = computed(() => {
+  const raw = transferDraft.value.amount_hkd
+  if (raw === '') return null
+  const amount = Number(raw)
+  return Number.isFinite(amount) ? amount : null
+})
+
+async function startTransfer() {
+  try {
+    // Fresh balances so the before→after preview is current.
+    bankAccounts.value = await api.listCashAccounts()
+    transferDraft.value = {
+      amount_hkd: '',
+      transfer_date: todayIso(),
+      from_account_id:
+        hkdBanks.value.find((a) => a.label === 'HS')?.id ?? hkdBanks.value[0]?.id ?? 0,
+    }
+    transferring.value = true
+    error.value = ''
+  } catch (err) {
+    error.value = err instanceof ApiError || err instanceof Error ? err.message : String(err)
+  }
+}
+
+/** Refetch the block; `saved` lets the parent reload (總覽) or swap the
+ * block (美股 → 總覽). */
+async function refresh() {
+  emit('saved', await api.ibkr())
+}
+
+async function saveTransfer() {
+  const amount = transferAmount.value
+  if (amount === null || amount <= 0) {
+    error.value = '轉入金額必須是正數'
+    return
+  }
+  try {
+    await api.createIbkrTransfer({
+      amount_hkd: amount,
+      transfer_date: transferDraft.value.transfer_date || undefined,
+      from_account_id: transferDraft.value.from_account_id || undefined,
+    })
+    transferring.value = false
+    error.value = ''
+    await refresh()
+  } catch (err) {
+    error.value = err instanceof ApiError || err instanceof Error ? err.message : String(err)
+  }
+}
 </script>
 
 <template>
   <section class="card">
     <h3>IBKR <small class="muted">A/C U20178201</small></h3>
     <form v-if="editing" class="ibkr-form" @submit.prevent="save">
-      <label>
-        轉入 (HKD)
-        <input
-          v-model="draft.transferred_delta"
-          type="number"
-          step="any"
-          inputmode="decimal"
-          placeholder="+金額"
-        />
-      </label>
-      <label>
-        轉入日期
-        <input v-model="draft.transfer_date" type="date" />
-      </label>
       <label>
         IBKR App 現值 (HKD)
         <input v-model="draft.now_value" type="number" step="any" inputmode="decimal" />
@@ -105,12 +140,6 @@ async function save() {
         <button type="submit">儲存</button>
         <button type="button" class="link" @click="editing = false">取消</button>
       </div>
-      <p class="muted ibkr-preview">
-        累計轉入 {{ fmtMoney(ibkr.transferred_hkd) || '0' }}
-        <template v-if="transferredPreview !== null">
-          → <strong>{{ fmtMoney(transferredPreview) }}</strong>
-        </template>
-      </p>
     </form>
     <template v-else>
       <table>
@@ -145,7 +174,44 @@ async function save() {
           </tr>
         </tbody>
       </table>
-      <button type="button" class="link" @click="startEdit">編輯</button>
+      <div class="ibkr-actions">
+        <button type="button" class="link" @click="startEdit">編輯</button>
+        <button type="button" class="link" @click="startTransfer">轉入</button>
+      </div>
+      <form v-if="transferring" class="ibkr-form" @submit.prevent="saveTransfer">
+        <label>
+          轉入 (HKD)
+          <input
+            v-model="transferDraft.amount_hkd"
+            type="number"
+            step="any"
+            inputmode="decimal"
+            placeholder="+金額"
+          />
+        </label>
+        <label>
+          轉入日期
+          <input v-model="transferDraft.transfer_date" type="date" :max="todayIso()" />
+        </label>
+        <label>
+          轉出帳戶
+          <select v-model.number="transferDraft.from_account_id">
+            <option v-for="account in hkdBanks" :key="account.id" :value="account.id">
+              {{ account.label }}（{{ fmtMoney(account.amount) }}）
+            </option>
+          </select>
+        </label>
+        <div class="ibkr-actions">
+          <button type="submit">儲存</button>
+          <button type="button" class="link" @click="transferring = false">取消</button>
+        </div>
+        <p v-if="selectedSource && transferAmount !== null" class="muted ibkr-preview">
+          {{ selectedSource.label }} {{ fmtMoney(selectedSource.amount) }} →
+          {{ fmtMoney(selectedSource.amount - transferAmount) }}；IBKR HKD
+          {{ fmtMoney(ibkr.hkd_cash ?? 0) }} →
+          {{ fmtMoney((ibkr.hkd_cash ?? 0) + transferAmount) }}
+        </p>
+      </form>
     </template>
     <p v-if="error" class="error">{{ error }}</p>
   </section>

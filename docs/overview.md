@@ -56,7 +56,8 @@ The card mirrors the sheet's row order — `ref check`, `半流動`, `活期`, `
 - `TBC - 定期 end` — Σ `−amount` of deposit plans returning that month: `return_month` when set, else `hs_deposit` → +3 months, `sc_deposit` → +4 (the sheet's row-35 lags)
 - `定期 + SC` (`locked`) — anchors on the deposits held on the window's first day (`start_date` absent or before the 1st, `end_date` on or after it — not the live active (unreceived) total), then `locked(m) = locked(m−1) − finish − plan placements + real placements − returns`
 - real deposit placements — a deposit whose `start_date` falls in the month is a flow in it: 活期 −`principal`, 定期+SC +`principal`, and the deposit appears as a read-only `已定期` line in its bank's row (`bank` `HS` → 定期 HS, anything else → SC高息馬拉松). `start_date` means "the day the money left 活期" — money that left before the month's 月初 figure is dated in the prior month, so it sits in the anchor instead of subtracting twice
-- real HK trades — a trade whose `trade_date` falls in the month is a 活期 flow (BUY −`total`, SELL +`total`) and appears as a read-only `已交易` line in the 股票 row (`trade_lines`: code, trade type, signed `amount`, date); the cell's figure is Σ `stock` plan items + Σ trade `amount`, `—` while both are empty. US trades stay out — they settle inside IBKR, matching the 月結 `trade:` suggestion rule. Stock plan items are never suppressed or auto-converted: a plan is an estimate that may cover several buys of unknown final amount, so the user trims or deletes it once the real trade lands — until then both count. Same 月初 caveat as placements: a trade dated before the month's 月初 figure was entered double-counts — money that already left is inside `start` *and* counted again as a flow
+- real HK trades — a trade whose `trade_date` falls in the month is a 活期 flow (BUY −`total`, SELL +`total`) and appears as a read-only `已交易` line in the 股票 row (`trade_lines`: code, trade type, signed `amount`, date); US trades stay out — they settle inside IBKR, matching the 月結 `trade:` suggestion rule. Stock plan items are never suppressed or auto-converted: a plan is an estimate that may cover several buys of unknown final amount, so the user trims or deletes it once the real trade lands — until then both count. Same 月初 caveat as placements: a trade dated before the month's 月初 figure was entered double-counts — money that already left is inside `start` *and* counted again as a flow
+- IBKR 轉入 — an `ibkr_transfers` row whose `transfer_date` falls in the month is a 活期 flow of −`amount_hkd` and appears as a read-only `已轉帳` line in the 股票 row beside the trades (`ibkr_lines`: date, signed `amount`; every log row counts, including log-only legacy rows — they moved cash the same way). The 股票 cell's figure is Σ `stock` plan items + Σ trade `amount` + Σ `ibkr_lines` `amount`, `—` while all are empty
 - `活期` (`cash`, rendered red while below `20000`) and `半流動` (`cash + locked`); `ref check` = `半流動 − semi_liquid_target × 流動資產` (the sheet's `H1 ÷ 4` literal, same `strategy.semi_liquid_target` setting as `C14`), rendered red while negative
 
 ```text
@@ -68,12 +69,15 @@ Click a plan cell → the editor lists that (month, kind)'s items
   for the same month next year — the copy lands outside the 7-month window,
   stored but invisible until the months slide forward
 轉為定期 on an hs_deposit/sc_deposit item → DepositForm prefilled (principal
-  = −amount, bank HS/SC from the kind, end_date = return month's last day)
-  → POST /api/forecast-items/:id/convert creates the deposit and deletes the
-    plan in one transaction, so the derived return/lock never double-counts;
-    when the deposit's dates match the plan's the grid totals are unchanged —
-    the placement replaces the plan flow, and only the deposit's interest is
-    added in its end month
+  = −amount, bank HS/SC from the kind, end_date = return month's last day,
+  and the same 扣自 select as 新增定期)
+  → POST /api/forecast-items/:id/convert runs the same placement as
+    POST /api/deposits — the deposit insert, the optional 活期 debit, and
+    the start month's dep-start:<id> item — and deletes the plan in one
+    transaction, so the derived return/lock never double-counts (a rejected
+    debit leaves the plan in place); when the deposit's dates match the
+    plan's the grid totals are unchanged — the placement replaces the plan
+    flow, and only the deposit's interest is added in its end month
 ```
 
 Items whose month sits outside the window stay stored: future ones slide in as the months pass; stale ones (month already past) fire nothing — matching the sheet's shifted-out cells, and preventing a real deposit created without conversion from being double-counted by its leftover plan. One caveat: while `start_cash` is unset the first column's `start` falls back to the live 活期 sum, which is a "now" figure — a current-month placement or finish then counts both in that figure and again as a flow, so the first column can double count until the 月初 figure is entered.
@@ -83,16 +87,37 @@ Items whose month sits outside the window stay stored: future ones slide in as t
 The same `IbkrCard` component renders on 總覽 and on 美股 → 總覽 — same table, same 編輯 form.
 
 ```text
-Click 編輯 on the IBKR card → PATCH /api/ibkr with the transfer delta/date and
-    the three account fields
+Click 編輯 on the IBKR card → PATCH /api/ibkr with the three account fields
   → service::overview validates non-negative finite numbers, then in one
-    transaction appends `transfer_hkd` (any finite delta; negative undoes an
-    entry) to `ibkr_transfers` dated `transfer_date` (default today), writes each
-    provided account field to its broker cash_accounts row's amount
-    (null sets 0), writes now_value to the ibkr.reported_value setting, and
-    returns the block with the derived figures recomputed
+    transaction writes each provided account field to its broker
+    cash_accounts row's amount (null sets 0), writes now_value to the
+    ibkr.reported_value setting, and returns the block with the derived
+    figures recomputed — a patch never appends to ibkr_transfers
   → 美股 → 總覽 swaps in the returned block; 總覽 reloads the whole view so the
     asset-table IBKR row, totals, liquidity tiers, and goals refresh
+
+Click 轉入 on the same card → a form (amount, date defaulting to and capped
+    at today, a source select of the HKD bank accounts preselecting HS, and
+    a before→after preview of the source and IBKR HKD) →
+    POST /api/ibkr/transfers
+  → service::ibkr validates (amount finite > 0, date ≤ today, source an HKD
+    bank account — `from_account_id` else the `HS` row — with a sufficient
+    balance, checked inside the transaction), then in one transaction
+    appends the `ibkr_transfers` row recording both account ids, debits the
+    source, credits the IBKR HKD broker row, and records the month's
+    `ibkr:<id>` adjustment item (IBKR 轉入, −amount — skipped while the
+    month row is missing, where the suggestion fallback covers it)
+  → the card refetches the block; 總覽 reloads so the HS row, 活期, and
+    IBKR HKD 現金 all update
+
+The card shows no transfer history — it lives on the 美股-only
+股票 → 轉入記錄 tab:
+IbkrTransfersView → GET /api/ibkr/transfers → the log, newest first
+    (date, amount, source label or —, plus a 累計 row)
+刪除 on a row (confirmed) → DELETE /api/ibkr/transfers/:id
+  → reverses the recorded balance moves exactly (a NULL or deleted account
+    skips its side), drops the `ibkr:<id>` month item and its dismissals,
+    then deletes the row; the list reloads
 ```
 
 `ibkr.reported_value` (shown as 現值) is the account total as the IBKR app displays it — its implied FX rate differs from the `fx_rates` USD rate, so it stays a manual input. `computed_total_hkd` is the sheet's `美股!B7` `(美股市值 USD + USD cash) × rate + HKD cash`; `vs_now_value` is the cross-check gap between the two.
@@ -110,7 +135,7 @@ MonthStatView loads GET /api/months/summary + /api/months?year=YYYY
 
 **Payday entry** (`PATCH /api/months/:ym`, upsert): stores `start_cash` — the 新增月份 form takes no 月初 input, so a created row has none until 重新擷取 or a manual edit; the form sends `total_assets`/`liquid_assets` explicitly `null`, so the row starts live (即時) — a bare create patch that omits them still snapshots the live values — and defaults `salary` to the `ledger.salary` setting. Derived columns: `end_cash = end_cash_override ?? next row's start_cash − this row's salary` (the sheet's `=F(n+1) − <own salary>` — March rows prove it uses the pre-raise literal; `end_cash_override` is the editor's 月尾 field for hand-frozen months the chain can't reproduce, e.g. 2023-12's typed balance — blank/`null` derives), `month_spend = start_cash + Σadjustment − end_cash`, `living_spend = month_spend − Σextra_spend − Σ exclude_from_living entertainment`, `saved = salary − month_spend + Σincome`, `interest = Σ auto events (received deposit interest ending in the month + received coupons + received HK dividends) + Σ interest items`, `entertainment = Σ entertainment items`, `Changed = next − this` for both asset columns — the last stored row, while it is the current month, diffs the live totals instead (the sheet's last-row C/E cells read live `B1`/`H1`), so the in-progress month's change counts in the yearly Σ總數+.
 
-**Suggestions** (`GET /api/months/:ym` → `suggestions`, only for months ≥ current month): `dep-start:<id>` −principal (only with `start_date`), `dep-end:<id>` +principal+interest, `trade:<id>` −BUY/+SELL total (HK only), `div:<id>` (HK only — US dividends stay inside IBKR) / `coupon:<id>` +received amount, or the pending expected/estimated figure while not yet 收訖 (skipped while no amount is known — a 待定 coupon or estimate-less dividend), `aia-pay:<id>` premium × USD→HKD (skipped without a rate), `pool-input` +pool_input. Accepting stores an item with the same `auto_key` (second accept → 409); dismissing writes a tombstone so the suggestion never returns. IBKR transfers and deposits without `start_date` stay manual items. `interest_auto` lists the auto 利息 components (per deposit/coupon/HK dividend, with label and amount) that the derived `interest` adds on top of `interest` items — marking a dividend or coupon 收訖, or a deposit's 收訖, updates the figure with no month write; unreceived components carry `received: false` and preview muted in the breakdown without counting (with the expected/estimated amount, or `—` while 待定).
+**Suggestions** (`GET /api/months/:ym` → `suggestions`, only for months ≥ current month): `dep-start:<id>` −principal (only with `start_date`), `dep-end:<id>` +principal+interest, `trade:<id>` −BUY/+SELL total (HK only), `div:<id>` (HK only — US dividends stay inside IBKR) / `coupon:<id>` +received amount, or the pending expected/estimated figure while not yet 收訖 (skipped while no amount is known — a 待定 coupon or estimate-less dividend), `aia-pay:<id>` premium × USD→HKD (skipped without a rate), `ibkr:<id>` `IBKR 轉入` −amount (cash-moving transfers only — the item is normally stored by `POST /api/ibkr/transfers` itself; the candidate covers a transfer recorded before its month row existed, and log-only legacy rows never suggest), `pool-input` +pool_input. Accepting stores an item with the same `auto_key` (second accept → 409); dismissing writes a tombstone so the suggestion never returns. Deposits without `start_date` stay manual items. `interest_auto` lists the auto 利息 components (per deposit/coupon/HK dividend, with label and amount) that the derived `interest` adds on top of `interest` items — marking a dividend or coupon 收訖, or a deposit's 收訖, updates the figure with no month write; unreceived components carry `received: false` and preview muted in the breakdown without counting (with the expected/estimated amount, or `—` while 待定).
 
 **Frozen vs live**: `改為即時` patches both totals to `null` (live); `重新擷取` (`recapture: true`) re-snapshots the totals and `start_cash` (月初 = the live 活期 sum, Σ `cash_accounts` bank rows — an explicit `start_cash` in the same patch still wins). The pool balance chains per year: `balance(y) = balance(y−1) + Σinterest×rate(y) − Σentertainment + Σpool_input`, where `rate(y)` is the exact year's `pool_rates` row else the latest earlier year; years with no rate contribute zero pool income.
 

@@ -76,6 +76,23 @@ pub async fn reverse(
     }
 }
 
+/// Undo a recorded debit: add the stored amount back to the stored
+/// account. A deleted account or no debit is a no-op — [`reverse`]'s rule.
+pub async fn refund(
+    conn: &mut sqlx::SqliteConnection,
+    debit: Option<Credit>,
+    now: &str,
+) -> Result<(), StoreError> {
+    let Some(debit) = debit else {
+        return Ok(());
+    };
+    match cash_accounts::load_one(&mut *conn, debit.account_id).await {
+        Ok(_) => cash_accounts::add_amount(conn, debit.account_id, debit.amount, now).await,
+        Err(StoreError::NotFound(_)) => Ok(()),
+        Err(error) => Err(error),
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

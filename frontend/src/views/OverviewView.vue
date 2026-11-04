@@ -3,6 +3,7 @@ import { computed, onMounted, reactive, ref } from 'vue'
 import {
   api,
   ApiError,
+  type ForecastIbkrTransfer,
   type ForecastItem,
   type ForecastItemKind,
   type ForecastMonth,
@@ -82,17 +83,25 @@ function cellTradeLines(month: ForecastMonth, kind: ForecastItemKind): ForecastT
   return kind === 'stock' ? month.trade_lines : []
 }
 
-/** Σ item amounts − placement principals + trade amounts; null while the
- * cell is empty (sheet: blank). */
+/** IBKR transfers dated in the month land in the 股票 row too — read-only
+ * `已轉帳` lines beside the trades. */
+function cellIbkrLines(month: ForecastMonth, kind: ForecastItemKind): ForecastIbkrTransfer[] {
+  return kind === 'stock' ? month.ibkr_lines : []
+}
+
+/** Σ item amounts − placement principals + trade and IBKR transfer amounts;
+ * null while the cell is empty (sheet: blank). */
 function cellSum(month: ForecastMonth, kind: ForecastItemKind): number | null {
   const items = cellItems(month, kind)
   const placements = cellPlacements(month, kind)
   const tradeLines = cellTradeLines(month, kind)
-  if (!items.length && !placements.length && !tradeLines.length) return null
+  const ibkrLines = cellIbkrLines(month, kind)
+  if (!items.length && !placements.length && !tradeLines.length && !ibkrLines.length) return null
   return (
     items.reduce((sum, item) => sum + item.amount, 0) +
     placements.reduce((sum, p) => sum - p.principal, 0) +
-    tradeLines.reduce((sum, t) => sum + t.amount, 0)
+    tradeLines.reduce((sum, t) => sum + t.amount, 0) +
+    ibkrLines.reduce((sum, t) => sum + t.amount, 0)
   )
 }
 
@@ -124,6 +133,11 @@ const selectedPlacements = computed(() =>
 const selectedTrades = computed(() =>
   selectedMonth.value && selected.value
     ? cellTradeLines(selectedMonth.value, selected.value.kind)
+    : [],
+)
+const selectedIbkrLines = computed(() =>
+  selectedMonth.value && selected.value
+    ? cellIbkrLines(selectedMonth.value, selected.value.kind)
     : [],
 )
 
@@ -780,6 +794,18 @@ onMounted(load)
           <span class="num">{{ fmtMoney(t.amount) }}</span>
           <span>{{ t.trade_date }}</span>
           <span>已交易</span>
+        </div>
+        <!-- IBKR transfers dated in the month — read-only 已轉帳 lines
+             beside the trades. -->
+        <div
+          v-for="t in selectedIbkrLines"
+          :key="`ibkr-${t.transfer_id}`"
+          class="plan-row muted"
+        >
+          <span>IBKR 轉入</span>
+          <span class="num">{{ fmtMoney(t.amount) }}</span>
+          <span>{{ t.transfer_date }}</span>
+          <span>已轉帳</span>
         </div>
         <div v-for="item in selectedItems" :key="item.id" class="plan-row">
           <template v-if="drafts[item.id]">

@@ -58,6 +58,9 @@ pub struct ForecastInput<'a> {
     /// The window's HK trades (US trades settle inside IBKR and are never
     /// passed in) — their signed totals move 活期 in their month.
     pub trades: &'a [SuggestionTrade],
+    /// The window's `ibkr_transfers` rows — every row moved 活期 in its
+    /// month, log-only legacy ones included.
+    pub ibkr_transfers: &'a [SuggestionIbkrTransfer],
 }
 
 /// One derived month column of the 預測 grid.
@@ -82,9 +85,11 @@ pub struct ForecastMonthDerived {
     pub deposit_return: f64,
     /// Σ signed `trade_amount` of HK trades dated in the month.
     pub trade_flows: f64,
+    /// Σ −`amount` of IBKR transfers dated in the month.
+    pub transfer_flows: f64,
     /// start + salary + spend + finish + interest + bill + plans + deposit
-    /// plans − deposit placements + deposit return + trade flows; absent
-    /// while `start` is.
+    /// plans − deposit placements + deposit return + trade flows + transfer
+    /// flows; absent while `start` is.
     pub cash: Option<f64>,
     /// Prior `locked` − finish − deposit plans + placements − returns,
     /// anchored on `locked_base`.
@@ -241,6 +246,17 @@ pub fn forecast_months(input: &ForecastInput) -> Vec<ForecastMonthDerived> {
             .sum::<f64>()
             + 0.0;
 
+        // A recorded IBKR transfer moved 活期 the same way — it sits in the
+        // 股票 row beside the trade lines (not in `locked`: the money stayed
+        // semi-liquid, it just changed accounts).
+        let transfer_flows: f64 = input
+            .ibkr_transfers
+            .iter()
+            .filter(|transfer| in_month(transfer.date, *month))
+            .map(|transfer| -transfer.amount)
+            .sum::<f64>()
+            + 0.0;
+
         // This column's start is the chained cash before its own flows.
         let start = cash;
         cash = start.map(|start| {
@@ -255,6 +271,7 @@ pub fn forecast_months(input: &ForecastInput) -> Vec<ForecastMonthDerived> {
                 - deposit_start
                 + deposit_return
                 + trade_flows
+                + transfer_flows
         });
         locked = locked
             .map(|locked| locked - deposit_finish - deposit_plans + deposit_start - deposit_return);
@@ -270,6 +287,7 @@ pub fn forecast_months(input: &ForecastInput) -> Vec<ForecastMonthDerived> {
             deposit_start,
             deposit_return,
             trade_flows,
+            transfer_flows,
             cash,
             locked,
             semi_liquid,
@@ -303,6 +321,7 @@ mod tests {
             events,
             items,
             trades: &[],
+            ibkr_transfers: &[],
         }
     }
 
@@ -504,12 +523,14 @@ mod tests {
             assert!(
                 m.deposit_finish.is_sign_positive()
                     && m.deposit_return.is_sign_positive()
-                    && m.trade_flows.is_sign_positive(),
-                "{} finish={} return={} trades={}",
+                    && m.trade_flows.is_sign_positive()
+                    && m.transfer_flows.is_sign_positive(),
+                "{} finish={} return={} trades={} transfers={}",
                 m.month,
                 m.deposit_finish,
                 m.deposit_return,
-                m.trade_flows
+                m.trade_flows,
+                m.transfer_flows
             );
         }
     }
@@ -582,6 +603,53 @@ mod tests {
             months[1].cash.unwrap() - base[1].cash.unwrap(),
             -104_063.17
         ));
+    }
+
+    /// An in-window transfer lowers `cash` in its month and every later
+    /// column, leaves `locked` alone, and never suppresses the month's
+    /// `stock` plan items.
+    #[test]
+    fn forecast_ibkr_transfer_lowers_cash_not_locked() {
+        let events = SuggestionEvents::default();
+        let transfers = vec![SuggestionIbkrTransfer {
+            id: 1,
+            date: day("2026-10-05"),
+            amount: 50_000.0,
+        }];
+        let items = vec![plan("2026-10-01", ForecastItemKind::Stock, -60_000.0, None)];
+        let base = forecast_months(&forecast_input(&[], &events, &items));
+        let mut input = forecast_input(&[], &events, &items);
+        input.ibkr_transfers = &transfers;
+        let months = forecast_months(&input);
+        assert!(approx_eq(months[1].transfer_flows, -50_000.0));
+        assert!(approx_eq(months[1].plans, -60_000.0));
+        assert!(approx_eq(months[0].cash.unwrap(), base[0].cash.unwrap()));
+        for (with, without) in months.iter().zip(base.iter()).skip(1) {
+            assert!(approx_eq(
+                with.cash.unwrap(),
+                without.cash.unwrap() - 50_000.0
+            ));
+            assert_eq!(with.locked, without.locked);
+        }
+    }
+
+    /// A transfer dated before the window fires nothing anywhere.
+    #[test]
+    fn forecast_pre_window_ibkr_transfer_fires_nothing() {
+        let events = SuggestionEvents::default();
+        let transfers = vec![SuggestionIbkrTransfer {
+            id: 1,
+            date: day("2026-08-15"),
+            amount: 90_000.0,
+        }];
+        let base = forecast_months(&forecast_input(&[], &events, &[]));
+        let mut input = forecast_input(&[], &events, &[]);
+        input.ibkr_transfers = &transfers;
+        let months = forecast_months(&input);
+        assert!(months.iter().all(|m| m.transfer_flows == 0.0));
+        for (month, before) in months.iter().zip(&base) {
+            assert_eq!(month.cash, before.cash);
+        }
     }
 
     #[test]

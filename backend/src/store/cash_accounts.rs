@@ -84,6 +84,21 @@ where
     row.as_ref().map(row_to_account).transpose()
 }
 
+/// The `bank` account labelled `label` — `None` while no such row exists.
+/// Broker rows never match (the IBKR transfer source defaults to `HS`).
+pub async fn bank_by_label<'e, E>(exec: E, label: &str) -> Result<Option<CashAccount>, StoreError>
+where
+    E: sqlx::Executor<'e, Database = sqlx::Sqlite>,
+{
+    let row = sqlx::query(sqlx::AssertSqlSafe(format!(
+        "SELECT {COLUMNS} FROM cash_accounts WHERE role = 'bank' AND label = ?"
+    )))
+    .bind(label)
+    .fetch_optional(exec)
+    .await?;
+    row.as_ref().map(row_to_account).transpose()
+}
+
 /// Σ amount over the `bank` accounts — the live 活期 sum.
 pub async fn bank_sum<'e, E>(exec: E) -> Result<f64, StoreError>
 where
@@ -216,9 +231,10 @@ pub async fn set_amount(
 }
 
 /// Delete a bank account. Broker rows are protected — the IBKR block depends
-/// on them. Past receipts stay readable: deposits/bonds lose their
-/// `credited_account_id`, and the bond_coupons/dividends FKs clear themselves
-/// via `ON DELETE SET NULL`.
+/// on them. Past receipts and placements stay readable: deposits/bonds lose
+/// their `credited_account_id`, deposits lose `debited_account_id` (the
+/// amount stays so the record keeps what was debited), and the
+/// bond_coupons/dividends FKs clear themselves via `ON DELETE SET NULL`.
 pub async fn delete(pool: &SqlitePool, id: i64) -> Result<(), StoreError> {
     let mut tx = pool.begin().await?;
     let account = load_one(&mut *tx, id).await?;
@@ -228,6 +244,10 @@ pub async fn delete(pool: &SqlitePool, id: i64) -> Result<(), StoreError> {
         )));
     }
     sqlx::query("UPDATE deposits SET credited_account_id = NULL WHERE credited_account_id = ?")
+        .bind(id)
+        .execute(&mut *tx)
+        .await?;
+    sqlx::query("UPDATE deposits SET debited_account_id = NULL WHERE debited_account_id = ?")
         .bind(id)
         .execute(&mut *tx)
         .await?;
@@ -287,8 +307,24 @@ mod tests {
         assert!(!load_one(&pool, hs).await.unwrap().is_default_receipt);
     }
 
+    /// `bank_by_label` finds the `HS` bank row and never a broker one.
+    #[tokio::test]
+    async fn bank_by_label_matches_bank_rows_only() {
+        let pool = connect_memory().await.expect("memory db");
+        let hs = seed_bank(&pool, "HS", true).await;
+        assert_eq!(
+            bank_by_label(&pool, "HS").await.unwrap().map(|a| a.id),
+            Some(hs)
+        );
+        // The seeded IBKR broker rows share neither role nor label match.
+        assert!(bank_by_label(&pool, "IBKR HKD").await.unwrap().is_none());
+        assert!(bank_by_label(&pool, "渣打").await.unwrap().is_none());
+    }
+
     /// Broker rows are protected; deleting a bank account clears the
-    /// deposits/bonds that recorded it as their receipt target.
+    /// deposits/bonds that recorded it as their receipt target and the
+    /// deposits that recorded it as their placement debit — the debited
+    /// amount stays so the record keeps what was debited.
     #[tokio::test]
     async fn delete_refuses_broker_rows_and_nulls_credited_ids() {
         let pool = connect_memory().await.expect("memory db");
@@ -299,10 +335,12 @@ mod tests {
         let hs = seed_bank(&pool, "HS", true).await;
         sqlx::query(
             "INSERT INTO deposits (label, bank, principal, interest, end_date, \
-             received_at, credited_account_id, credited_amount, sort_order, \
-             created_at, updated_at) VALUES ('d', 'SC', 1, 0, '2026-01-01', \
-             '2026-01-01', ?, 1, 1, '2026-01-01T00:00:00', '2026-01-01T00:00:00')",
+             received_at, credited_account_id, credited_amount, debited_account_id, \
+             debited_amount, sort_order, created_at, updated_at) \
+             VALUES ('d', 'SC', 1, 0, '2026-01-01', \
+             '2026-01-01', ?, 1, ?, 1, 1, '2026-01-01T00:00:00', '2026-01-01T00:00:00')",
         )
+        .bind(hs)
         .bind(hs)
         .execute(&pool)
         .await
@@ -328,5 +366,12 @@ mod tests {
             .unwrap();
             assert_eq!(n, 0, "{table}.credited_account_id");
         }
+        let debited: (Option<i64>, Option<f64>) = sqlx::query_as(
+            "SELECT debited_account_id, debited_amount FROM deposits WHERE label = 'd'",
+        )
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+        assert_eq!(debited, (None, Some(1.0)));
     }
 }

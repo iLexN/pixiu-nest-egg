@@ -835,6 +835,28 @@ async fn deposit_receive_credits_cash_and_records_the_month_item() {
 }
 
 #[tokio::test]
+async fn deposit_placement_debits_the_account_and_delete_restores_it() {
+    let (app, pool) = app_with_pool().await;
+    let hs = seed_cash(&pool, "HS", 200000.0).await;
+
+    let deposit = create_deposit(
+        &app,
+        json!({ "label": "HS-1", "bank": "HS", "principal": 130000,
+                "interest": 1200, "start_date": "2099-10-13",
+                "end_date": "2100-02-02", "debit_account_id": hs }),
+    )
+    .await;
+    let id = deposit["id"].as_i64().expect("id");
+    assert_eq!(deposit["debited_account_id"], hs);
+    approx(&deposit["debited_amount"], 130000.0);
+    approx(&cash_amount(&pool, hs).await.into(), 70000.0);
+
+    let (status, _) = send(&app, "DELETE", &format!("/api/deposits/{id}"), None).await;
+    assert_eq!(status, StatusCode::NO_CONTENT);
+    approx(&cash_amount(&pool, hs).await.into(), 200000.0);
+}
+
+#[tokio::test]
 async fn bond_receive_credits_principal_and_records_the_month_item() {
     let (app, pool) = app_with_pool().await;
 

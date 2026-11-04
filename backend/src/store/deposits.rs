@@ -9,7 +9,8 @@ use crate::models::{Deposit, DepositStatus, NewDeposit};
 use crate::store::{Credit, StoreError, now_timestamp, today};
 
 pub const DEPOSIT_COLUMNS: &str = "id, label, bank, principal, rate, interest, start_date, \
-     end_date, received_at, credited_account_id, credited_amount, note1, note2, sort_order";
+     end_date, received_at, credited_account_id, credited_amount, \
+     debited_account_id, debited_amount, note1, note2, sort_order";
 
 pub fn row_to_deposit(row: &SqliteRow, _today: chrono::NaiveDate) -> Result<Deposit, StoreError> {
     let end_date: String = row.try_get("end_date")?;
@@ -39,6 +40,8 @@ pub fn row_to_deposit(row: &SqliteRow, _today: chrono::NaiveDate) -> Result<Depo
         received_at: received_at.clone(),
         credited_account_id: row.try_get("credited_account_id")?,
         credited_amount: row.try_get("credited_amount")?,
+        debited_account_id: row.try_get("debited_account_id")?,
+        debited_amount: row.try_get("debited_amount")?,
         note1: row.try_get("note1")?,
         note2: row.try_get("note2")?,
         sort_order: row.try_get("sort_order")?,
@@ -100,8 +103,8 @@ pub async fn list(
         .collect::<Result<Vec<_>, _>>()
 }
 
-/// `exec` may be the pool or a transaction — `POST /api/forecast-items/{id}/convert`
-/// inserts inside its own transaction.
+/// `exec` may be the pool or a transaction — `service::deposits::place`
+/// inserts inside the placement transaction.
 pub async fn insert_deposit<'e, E>(
     exec: E,
     deposit: &ValidatedDeposit,
@@ -164,6 +167,57 @@ pub async fn update_deposit(
     .execute(pool)
     .await?;
     Ok(())
+}
+
+/// Record the placement debit on the row, inside the caller's transaction.
+pub async fn set_debit(
+    conn: &mut sqlx::SqliteConnection,
+    id: i64,
+    account_id: i64,
+    amount: f64,
+    now: &str,
+) -> Result<(), StoreError> {
+    sqlx::query(
+        "UPDATE deposits SET debited_account_id = ?, debited_amount = ?, updated_at = ? \
+         WHERE id = ?",
+    )
+    .bind(account_id)
+    .bind(amount)
+    .bind(now)
+    .bind(id)
+    .execute(&mut *conn)
+    .await?;
+    Ok(())
+}
+
+/// `true` while the stored row carries `received_at` — including the
+/// auto-receive `insert_deposit` stamps on a past `end_date`, which is why
+/// `place` checks this before debiting.
+pub async fn is_received(conn: &mut sqlx::SqliteConnection, id: i64) -> Result<bool, StoreError> {
+    Ok(
+        sqlx::query_scalar("SELECT received_at IS NOT NULL FROM deposits WHERE id = ?")
+            .bind(id)
+            .fetch_one(&mut *conn)
+            .await?,
+    )
+}
+
+/// The debit a placement recorded, shaped like a `Credit` for the delete
+/// reversal; `None` while either column is NULL.
+pub async fn load_debit(
+    conn: &mut sqlx::SqliteConnection,
+    id: i64,
+) -> Result<Option<Credit>, StoreError> {
+    let row = sqlx::query("SELECT debited_account_id, debited_amount FROM deposits WHERE id = ?")
+        .bind(id)
+        .fetch_optional(&mut *conn)
+        .await?
+        .ok_or_else(|| StoreError::NotFound(format!("deposit {id} not found")))?;
+    let account_id: Option<i64> = row.try_get("debited_account_id")?;
+    let amount: Option<f64> = row.try_get("debited_amount")?;
+    Ok(account_id
+        .zip(amount)
+        .map(|(account_id, amount)| Credit { account_id, amount }))
 }
 
 /// Rows deleted, inside the caller's transaction — the service checks

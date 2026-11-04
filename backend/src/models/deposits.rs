@@ -40,6 +40,11 @@ pub struct Deposit {
     pub credited_account_id: Option<i64>,
     /// The amount banked into `credited_account_id`.
     pub credited_amount: Option<f64>,
+    /// The cash account the placement debited the principal from; NULL when
+    /// nothing was debited.
+    pub debited_account_id: Option<i64>,
+    /// The amount debited from `debited_account_id` at placement.
+    pub debited_amount: Option<f64>,
     pub note1: Option<String>,
     pub note2: Option<String>,
     pub sort_order: i64,
@@ -62,6 +67,10 @@ pub struct NewDeposit {
     pub end_date: String,
     pub note1: Option<String>,
     pub note2: Option<String>,
+    /// 扣自: the HKD bank account the principal is debited from at
+    /// placement; absent creates the deposit without moving cash.
+    #[serde(default)]
+    pub debit_account_id: Option<i64>,
 }
 
 /// Absent fields are left untouched; present fields are written, so `null`

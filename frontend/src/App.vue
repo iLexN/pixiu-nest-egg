@@ -1,9 +1,10 @@
 <script setup lang="ts">
-import { computed, ref } from 'vue'
+import { computed, ref, watch } from 'vue'
 import type { Market } from './api'
 import SummaryView from './views/SummaryView.vue'
 import TradesView from './views/TradesView.vue'
 import StocksView from './views/StocksView.vue'
+import IbkrTransfersView from './views/IbkrTransfersView.vue'
 import DepositsView from './views/DepositsView.vue'
 import DepositHistoryView from './views/DepositHistoryView.vue'
 import DividendsView from './views/DividendsView.vue'
@@ -22,6 +23,7 @@ type Tab =
   | 'summary'
   | 'stocks'
   | 'dividends'
+  | 'ibkrTransfers'
   | 'deposits'
   | 'depositHistory'
   | 'mpf'
@@ -64,6 +66,8 @@ const NAV: {
       { id: 'trades', label: '交易記錄' },
       { id: 'dividends', label: '派息' },
       { id: 'stocks', label: '管理' },
+      // 美股 only — filtered out of the rendered buttons for 港股.
+      { id: 'ibkrTransfers', label: '轉入記錄' },
     ],
   },
   {
@@ -103,6 +107,14 @@ const market = ref<Market>('HK')
 const tab = ref<Tab>('overview')
 const activeGroup = computed(() => NAV.find((g) => g.tabs.some((t) => t.id === tab.value))!)
 const group = computed(() => activeGroup.value.id)
+// The 轉入記錄 tab stays in NAV (so activeGroup resolves) but only renders
+// for 美股.
+const visibleTabs = computed(() =>
+  activeGroup.value.tabs.filter((t) => t.id !== 'ibkrTransfers' || market.value === 'US'),
+)
+watch(market, (m) => {
+  if (m === 'HK' && tab.value === 'ibkrTransfers') tab.value = 'summary'
+})
 
 function selectGroup(g: (typeof NAV)[number]) {
   tab.value = g.tabs[0].id
@@ -129,7 +141,7 @@ function selectGroup(g: (typeof NAV)[number]) {
       </nav>
       <nav class="tabs">
         <button
-          v-for="t in activeGroup.tabs"
+          v-for="t in visibleTabs"
           :key="t.id"
           :class="{ active: tab === t.id }"
           @click="tab = t.id"
@@ -164,6 +176,7 @@ function selectGroup(g: (typeof NAV)[number]) {
     <YearReviewView v-else-if="tab === 'yearReview'" />
     <HappyPoolView v-else-if="tab === 'happyPool'" />
     <FamilyDepositsView v-else-if="tab === 'family-deposits'" />
+    <IbkrTransfersView v-else-if="tab === 'ibkrTransfers'" />
     <DepositHistoryView v-else />
   </main>
 </template>

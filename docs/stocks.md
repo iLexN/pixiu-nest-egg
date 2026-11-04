@@ -192,6 +192,8 @@ Because summary figures are calculated from `trades`, deleting a trade changes h
 ```text
 SummaryView
   → GET /api/summary?market=HK or US
+  → US only: GET /api/ibkr for the shared IbkrCard (the card's 轉入 form
+    calls POST /api/ibkr/transfers — wiring in overview.md's IBKR section)
   → backend loads all stocks in that market, ordered by sort_order
   → backend loads all trade facts for that market
   → backend sums received 派息 per stock
@@ -206,6 +208,19 @@ SummaryView
     two maxima are independent
   → frontend formats and displays the response
 ```
+
+## Load 股票 → 轉入記錄 (美股 only)
+
+```text
+IbkrTransfersView
+  → GET /api/ibkr/transfers → the log, newest first (date, amount, source
+    label or —, plus a 累計 row over the listed amounts)
+  → 刪除 on a row (confirmed) → DELETE /api/ibkr/transfers/:id reverses the
+    recorded cash movement exactly and drops the ibkr:<id> month item;
+    the list reloads
+```
+
+The tab renders only while the market is 美股; switching to 港股 opens 股票 → 總覽.
 
 The summary request fetches the selected market's complete summary and never writes to `market_history` — reads are pure. History rows are recorded on successful writes instead: stock and trade create/update/delete, manual 現價 saves, and bulk price updates (`prices::apply`, UI or `import_prices` CLI) each record the touched market's totals. A write is skipped when the totals equal the latest stored row, writes on the same day replace that day's row, and no synthetic month-end rows are created. Existing `synthetic` rows come from the retired workbook import or the retired backfill.
 

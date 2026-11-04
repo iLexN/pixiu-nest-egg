@@ -311,7 +311,7 @@ The market summary response SHALL include the derived 上月 and 最高 figures,
 
 ### Requirement: IBKR account card on the 美股 summary
 
-The 美股 持倉總覽 page SHALL show an IBKR account card (the 美股 sheet's `A1:B5` block) with editable inputs for `transferred_hkd` (累計轉入 HKD), `now_value` (IBKR app display value), `hkd_cash`, and `usd_cash`, saving through `PATCH /api/ibkr`, beside the derived `computed_total_hkd`, `net`, `net_pct`, and `vs_now_value` figures. The card SHALL NOT appear on the 港股 summary.
+The 美股 持倉總覽 page SHALL show an IBKR account card (the 美股 sheet's `A1:B5` block) with editable inputs for `now_value` (IBKR app display value), `hkd_cash`, and `usd_cash`, saving through `PATCH /api/ibkr`; the 總覽 card's 「轉入」 form; and the read-only `transferred_hkd` (累計轉入 HKD) beside the derived `computed_total_hkd`, `net`, `net_pct`, and `vs_now_value` figures. The card SHALL NOT appear on the 港股 summary.
 
 #### Scenario: Edit IBKR cash
 
@@ -322,6 +322,11 @@ The 美股 持倉總覽 page SHALL show an IBKR account card (the 美股 sheet's
 
 - **WHEN** the user opens the 港股 持倉總覽
 - **THEN** no IBKR card is shown
+
+#### Scenario: 轉入 from the 美股 summary
+
+- **WHEN** the user records a `50000` 轉入 on the 美股 持倉總覽 card
+- **THEN** the card refetches the IBKR block showing 累計轉入 and HKD 現金 each `50000` higher
 
 ### Requirement: Stock display order
 For each market the system SHALL persist a user-controlled stock display order. A newly created stock SHALL be placed after the market's existing stocks. The summary SHALL let the user drag a stock row to a new position and persist that order without changing any trade or calculation data.

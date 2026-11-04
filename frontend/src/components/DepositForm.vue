@@ -1,6 +1,6 @@
 <script setup lang="ts">
-import { computed, reactive, ref, watch } from 'vue'
-import { api, ApiError, type Deposit, type ForecastItem } from '../api'
+import { computed, onMounted, reactive, ref, watch } from 'vue'
+import { api, ApiError, type CashAccount, type Deposit, type ForecastItem } from '../api'
 import DateInput from './DateInput.vue'
 import { fmtMoney, todayIso } from '../format'
 
@@ -42,11 +42,47 @@ const form = reactive<FormState>(emptyForm())
 const error = ref<ApiError | null>(null)
 const saving = ref(false)
 
+// 扣自: the HKD bank accounts the principal can be debited from (create
+// and convert only — an edit never re-syncs the stored debit).
+const debitAccounts = ref<CashAccount[]>([])
+const debitAccountId = ref<number | null>(null)
+const debitTouched = ref(false)
+
+function defaultDebitAccount(): number | null {
+  const labelled = (label: string) =>
+    debitAccounts.value.find((account) => account.label === label)?.id ?? null
+  const fallback = debitAccounts.value.find((account) => account.is_default_receipt)?.id ?? null
+  if (form.bank === 'HS') return labelled('HS') ?? fallback
+  if (form.bank === 'SC') return labelled('渣打') ?? fallback
+  return fallback
+}
+
+watch(
+  () => form.bank,
+  () => {
+    if (!debitTouched.value) debitAccountId.value = defaultDebitAccount()
+  },
+)
+
+onMounted(async () => {
+  try {
+    debitAccounts.value = (await api.listCashAccounts()).filter(
+      (account) => account.currency === 'HKD' && account.role === 'bank',
+    )
+    if (!debitTouched.value) debitAccountId.value = defaultDebitAccount()
+  } catch (err) {
+    error.value =
+      err instanceof ApiError ? err : new ApiError(0, (err as Error).message ?? 'request failed', [])
+  }
+})
+
 watch(
   () => props.editing,
   (deposit) => {
     if (!deposit) {
       Object.assign(form, emptyForm())
+      debitTouched.value = false
+      debitAccountId.value = defaultDebitAccount()
       return
     }
     Object.assign(form, {
@@ -125,13 +161,17 @@ async function submit() {
       end_date: form.end_date,
       note1: String(form.note1).trim() === '' ? null : String(form.note1).trim(),
       note2: String(form.note2).trim() === '' ? null : String(form.note2).trim(),
+      ...(props.editing ? {} : { debit_account_id: debitAccountId.value }),
     }
     const saved = props.editing
       ? await api.updateDeposit(props.editing.id, payload)
       : props.converting
         ? await api.convertForecastItem(props.converting.id, payload)
         : await api.createDeposit(payload)
-    if (!props.editing && !props.converting) Object.assign(form, emptyForm())
+    if (!props.editing && !props.converting) {
+      debitTouched.value = false
+      Object.assign(form, emptyForm())
+    }
     emit('saved', saved)
   } catch (err) {
     error.value =
@@ -199,6 +239,19 @@ async function submit() {
         <input v-model="form.interest" type="number" step="any" inputmode="decimal" />
         <small v-if="error?.fieldMessage('interest')" class="error">{{
           error.fieldMessage('interest')
+        }}</small>
+      </label>
+
+      <label v-if="!props.editing">
+        扣自
+        <select v-model="debitAccountId" @change="debitTouched = true">
+          <option :value="null">不扣活期</option>
+          <option v-for="account in debitAccounts" :key="account.id" :value="account.id">
+            {{ account.label }}（{{ fmtMoney(account.amount) }}）
+          </option>
+        </select>
+        <small v-if="error?.fieldMessage('debit_account_id')" class="error">{{
+          error.fieldMessage('debit_account_id')
         }}</small>
       </label>
 

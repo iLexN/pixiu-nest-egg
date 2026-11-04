@@ -381,6 +381,7 @@ mod tests {
             end_date: end_date.to_string(),
             note1: None,
             note2: None,
+            debit_account_id: None,
         }
     }
 

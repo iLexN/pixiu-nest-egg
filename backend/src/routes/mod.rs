@@ -120,6 +120,11 @@ pub fn api_router(state: AppState) -> (Router, utoipa::openapi::OpenApi) {
         ))
         .routes(utoipa_axum::routes!(overview::overview))
         .routes(utoipa_axum::routes!(overview::ibkr, overview::update_ibkr))
+        .routes(utoipa_axum::routes!(
+            overview::list_ibkr_transfers,
+            overview::create_ibkr_transfer
+        ))
+        .routes(utoipa_axum::routes!(overview::delete_ibkr_transfer))
         .routes(utoipa_axum::routes!(forecast::forecast))
         .routes(utoipa_axum::routes!(forecast::create_item))
         .routes(utoipa_axum::routes!(
@@ -258,6 +263,9 @@ mod tests {
             ("/api/fx-rates/{currency}", "patch"),
             ("/api/ibkr", "get"),
             ("/api/ibkr", "patch"),
+            ("/api/ibkr/transfers", "get"),
+            ("/api/ibkr/transfers", "post"),
+            ("/api/ibkr/transfers/{id}", "delete"),
             ("/api/manual-assets", "get"),
             ("/api/manual-assets", "post"),
             ("/api/manual-assets/{id}", "delete"),

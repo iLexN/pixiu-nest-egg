@@ -58,6 +58,7 @@ One row per 定期 deposit (from 定期Info's 表_定期List). Nullable columns 
 | `end_date` | `YYYY-MM-DD` text date, required |
 | `received_at` | 收訖日 (`YYYY-MM-DD`); NULL while the deposit is still on the books — it stays in 未到期定期 until 收訖 and its interest counts in Month Stat 利息 only once received |
 | `credited_account_id`, `credited_amount` | The `cash_accounts` row and amount the 收訖 action credited (optional); records where the bank-in went |
+| `debited_account_id`, `debited_amount` | The `cash_accounts` row and amount the placement debited the principal from (optional); a delete adds it back. Deleting the account clears the id but keeps the amount |
 | `note1`, `note2` | Optional notes |
 | `sort_order` | Display order; new entries append |
 | `created_at`, `updated_at` | Audit timestamps |
@@ -287,7 +288,7 @@ The 開心Pool yearly rate — one row per year.
 
 ### `ibkr_transfers`
 
-One row per bank→IBKR transfer (negative amounts record a withdrawal/correction): `transfer_date`, `amount_hkd`, `created_at`. 累計轉入 (美股!B1) is the log's sum, and each year's sum joins the year review's `invested`. The log begins with one row carrying the workbook's cumulative B1 value dated to the first US trade; saving the IBKR form's 轉入 delta appends a dated row.
+One row per bank→IBKR transfer: `transfer_date`, `amount_hkd`, `created_at`, plus `from_account_id`/`broker_account_id` recording the source bank account and the IBKR HKD broker account the transfer moved cash between (`ON DELETE SET NULL` — a deleted account clears its column). Rows written before transfers moved cash (migration 0022's seed and any PATCH-era rows) carry NULL in both and are log-only: deleting them reverses no balances. 累計轉入 (美股!B1) is the log's sum, and each year's sum joins the year review's `invested`. The log begins with one row carrying the workbook's cumulative B1 value dated to the first US trade; `POST /api/ibkr/transfers` appends a row and moves the cash in one transaction.
 
 ### `forecast_items`
 

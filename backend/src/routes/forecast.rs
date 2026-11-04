@@ -8,8 +8,8 @@ use super::{AppState, parse_ym};
 use crate::calc::{self, FieldError, ForecastItemFacts};
 use crate::error::{ApiError, ErrorBody};
 use crate::models::{
-    Deposit, ForecastItem, ForecastItemKind, ForecastItemPatch, ForecastMonth, ForecastPlacement,
-    ForecastResponse, ForecastTrade, NewDeposit, NewForecastItem,
+    Deposit, ForecastIbkrTransfer, ForecastItem, ForecastItemKind, ForecastItemPatch,
+    ForecastMonth, ForecastPlacement, ForecastResponse, ForecastTrade, NewDeposit, NewForecastItem,
 };
 use crate::store::forecast as store;
 
@@ -95,15 +95,17 @@ pub async fn forecast(State(state): State<AppState>) -> Result<Json<ForecastResp
     let events = crate::service::months::load_interest_events(pool).await?;
     // HK trades inside the window move 活期 in their month; US trades settle
     // inside IBKR and stay out (the 月結 `trade:` suggestion rule).
-    let trades = crate::store::trades::hk_suggestion_trades(
-        pool,
-        &first.to_string(),
-        &first
-            .checked_add_months(chrono::Months::new(calc::FORECAST_MONTHS))
-            .expect("forecast window overflow")
-            .to_string(),
-    )
-    .await?;
+    let window_end = first
+        .checked_add_months(chrono::Months::new(calc::FORECAST_MONTHS))
+        .expect("forecast window overflow")
+        .to_string();
+    let trades =
+        crate::store::trades::hk_suggestion_trades(pool, &first.to_string(), &window_end).await?;
+    // Every `ibkr_transfers` row in the window is a 活期 flow in its month —
+    // log-only legacy rows moved cash the same way.
+    let ibkr_transfers =
+        crate::store::ibkr::transfers_in_range(pool, &first.to_string(), &window_end, false)
+            .await?;
 
     let items = load_all_items(pool).await?;
     let mut facts = Vec::with_capacity(items.len());
@@ -133,6 +135,7 @@ pub async fn forecast(State(state): State<AppState>) -> Result<Json<ForecastResp
         events: &events,
         items: &facts,
         trades: &trades,
+        ibkr_transfers: &ibkr_transfers,
     });
     let months_out = derived
         .iter()
@@ -181,6 +184,26 @@ pub async fn forecast(State(state): State<AppState>) -> Result<Json<ForecastResp
                         a.trade_date
                             .cmp(&b.trade_date)
                             .then(a.trade_id.cmp(&b.trade_id))
+                    });
+                    lines
+                },
+                ibkr_lines: {
+                    let mut lines: Vec<ForecastIbkrTransfer> = ibkr_transfers
+                        .iter()
+                        .filter(|transfer| {
+                            transfer.date.year() == column.month.year()
+                                && transfer.date.month() == column.month.month()
+                        })
+                        .map(|transfer| ForecastIbkrTransfer {
+                            transfer_id: transfer.id,
+                            transfer_date: transfer.date.to_string(),
+                            amount: -transfer.amount,
+                        })
+                        .collect();
+                    lines.sort_by(|a, b| {
+                        a.transfer_date
+                            .cmp(&b.transfer_date)
+                            .then(a.transfer_id.cmp(&b.transfer_id))
                     });
                     lines
                 },
@@ -330,9 +353,10 @@ pub async fn remove_item(
     Ok(StatusCode::NO_CONTENT)
 }
 
-/// 轉為定期: convert a deposit plan into a real `deposits` row and delete the
-/// plan — in one transaction, so the plan's derived return/lock effects can
-/// never double-count against the deposit.
+/// 轉為定期: convert a deposit plan into a real `deposits` row — the same
+/// placement as `POST /api/deposits` (optional 活期 debit, `dep-start:<id>`
+/// item) — and delete the plan, in one transaction, so the plan's derived
+/// return/lock effects can never double-count against the deposit.
 #[utoipa::path(
     post,
     path = "/api/forecast-items/{id}/convert",
@@ -374,15 +398,242 @@ pub async fn convert(
     })
     .map_err(ApiError::Validation)?;
 
-    let mut tx = state.pool.begin().await?;
-    let sort_order = crate::store::deposits::next_sort_order_tx(&mut tx).await?;
     let deposit_id =
-        crate::store::deposits::insert_deposit(&mut *tx, &validated, sort_order, &body).await?;
-    store::delete_item_in_tx(&mut tx, id).await?;
-    tx.commit().await?;
-
+        crate::service::deposits::convert_plan(&state.pool, id, &validated, &body).await?;
     Ok((
         StatusCode::CREATED,
         Json(crate::store::deposits::load_one(&state.pool, deposit_id).await?),
     ))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::db::connect_memory;
+
+    /// An in-window transfer lands in its column's `ibkr_lines` with the
+    /// signed −amount; a pre-window one appears nowhere.
+    #[tokio::test]
+    async fn forecast_lists_the_windows_ibkr_transfers() {
+        let pool = connect_memory().await.expect("memory db");
+        let first = crate::service::months::live_from();
+        let in_window = format!("{}-05", &first.to_string()[..7]);
+        let pre_window = first
+            .checked_sub_months(chrono::Months::new(2))
+            .expect("pre-window month")
+            .to_string();
+        sqlx::query(
+            "INSERT INTO ibkr_transfers (transfer_date, amount_hkd, created_at) \
+             VALUES (?, 50000, '2026-01-01T00:00:00'), \
+                    (?, 90000, '2026-01-01T00:00:00')",
+        )
+        .bind(&in_window)
+        .bind(&pre_window)
+        .execute(&pool)
+        .await
+        .unwrap();
+
+        let response = forecast(State(AppState { pool }))
+            .await
+            .expect("forecast")
+            .0;
+        let lines: Vec<&ForecastIbkrTransfer> = response
+            .months
+            .iter()
+            .flat_map(|month| month.ibkr_lines.iter())
+            .collect();
+        assert_eq!(lines.len(), 1);
+        assert_eq!(lines[0].transfer_date, in_window);
+        assert_eq!(lines[0].amount, -50000.0);
+    }
+
+    async fn seed_bank(pool: &SqlitePool, label: &str, amount: f64) -> i64 {
+        sqlx::query_scalar(
+            "INSERT INTO cash_accounts (label, currency, role, amount, is_default_receipt, \
+             sort_order, updated_at) VALUES (?, 'HKD', 'bank', ?, 1, 1, \
+             '2026-01-01T00:00:00') RETURNING id",
+        )
+        .bind(label)
+        .bind(amount)
+        .fetch_one(pool)
+        .await
+        .unwrap()
+    }
+
+    async fn seed_month(pool: &SqlitePool, month: &str) {
+        sqlx::query("INSERT INTO month_stats (month, created_at, updated_at) VALUES (?, ?, ?)")
+            .bind(month)
+            .bind("2026-01-01T00:00:00")
+            .bind("2026-01-01T00:00:00")
+            .execute(pool)
+            .await
+            .unwrap();
+    }
+
+    /// The minimal convert body: bank/principal default from the plan.
+    fn deposit_body() -> NewDeposit {
+        NewDeposit {
+            label: Some("HS-1".to_string()),
+            bank: None,
+            principal: None,
+            rate: None,
+            interest: None,
+            start_date: Some("2099-10-13".to_string()),
+            end_date: "2100-02-10".to_string(),
+            note1: None,
+            note2: None,
+            debit_account_id: None,
+        }
+    }
+
+    /// Converting a deposit plan runs the shared placement: bank/principal
+    /// default from the plan, the start month's `dep-start:<id>` item of
+    /// −principal lands, and the plan is gone.
+    #[tokio::test]
+    async fn convert_records_the_dep_start_item_and_deletes_the_plan() {
+        let pool = connect_memory().await.expect("memory db");
+        seed_month(&pool, "2099-10-01").await;
+        let item = store::insert_item(
+            &pool,
+            "2099-10-01",
+            "hs_deposit",
+            -130000.0,
+            &None,
+            &None,
+            1,
+        )
+        .await
+        .unwrap();
+
+        let (status, deposit) = convert(
+            State(AppState { pool: pool.clone() }),
+            Path(item),
+            Json(deposit_body()),
+        )
+        .await
+        .expect("convert");
+
+        assert_eq!(status, StatusCode::CREATED);
+        assert_eq!(deposit.bank.as_deref(), Some("HS"));
+        assert_eq!(deposit.principal, Some(130000.0));
+        let item_amount: f64 = sqlx::query_scalar(
+            "SELECT amount FROM month_items WHERE month = '2099-10-01' AND auto_key = ?",
+        )
+        .bind(format!("dep-start:{}", deposit.id))
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+        assert_eq!(item_amount, -130000.0);
+        assert!(matches!(
+            store::load_item(&pool, item).await,
+            Err(crate::store::StoreError::NotFound(_))
+        ));
+    }
+
+    /// `debit_account_id` on the convert body debits the principal, and the
+    /// deposit records where it went — same as `POST /api/deposits`.
+    #[tokio::test]
+    async fn convert_debits_the_chosen_account() {
+        let pool = connect_memory().await.expect("memory db");
+        let hs = seed_bank(&pool, "HS", 200000.0).await;
+        let item = store::insert_item(
+            &pool,
+            "2099-10-01",
+            "hs_deposit",
+            -130000.0,
+            &None,
+            &None,
+            1,
+        )
+        .await
+        .unwrap();
+
+        let mut body = deposit_body();
+        body.debit_account_id = Some(hs);
+        let (_, deposit) = convert(
+            State(AppState { pool: pool.clone() }),
+            Path(item),
+            Json(body),
+        )
+        .await
+        .expect("convert");
+
+        assert_eq!(deposit.debited_account_id, Some(hs));
+        assert_eq!(deposit.debited_amount, Some(130000.0));
+        let amount: f64 = sqlx::query_scalar("SELECT amount FROM cash_accounts WHERE id = ?")
+            .bind(hs)
+            .fetch_one(&pool)
+            .await
+            .unwrap();
+        assert_eq!(amount, 70000.0);
+    }
+
+    /// A debit the account can't cover is a validation error: the plan
+    /// survives and no deposit is created.
+    #[tokio::test]
+    async fn convert_with_an_overdraft_keeps_the_plan() {
+        let pool = connect_memory().await.expect("memory db");
+        let hs = seed_bank(&pool, "HS", 50000.0).await;
+        let item = store::insert_item(
+            &pool,
+            "2099-10-01",
+            "hs_deposit",
+            -130000.0,
+            &None,
+            &None,
+            1,
+        )
+        .await
+        .unwrap();
+
+        let mut body = deposit_body();
+        body.debit_account_id = Some(hs);
+        let err = convert(
+            State(AppState { pool: pool.clone() }),
+            Path(item),
+            Json(body),
+        )
+        .await
+        .expect_err("overdraft");
+        let ApiError::Validation(fields) = err else {
+            panic!("expected validation");
+        };
+        assert_eq!(fields[0].field, "debit_account_id");
+        assert!(store::load_item(&pool, item).await.is_ok());
+        let deposits: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM deposits")
+            .fetch_one(&pool)
+            .await
+            .unwrap();
+        assert_eq!(deposits, 0);
+    }
+
+    /// A start month with no month row records no item (the dep-start
+    /// suggestion covers it); the deposit and the plan delete still land.
+    #[tokio::test]
+    async fn convert_without_a_month_row_records_no_item() {
+        let pool = connect_memory().await.expect("memory db");
+        let item = store::insert_item(&pool, "2099-10-01", "sc_deposit", -55000.0, &None, &None, 1)
+            .await
+            .unwrap();
+
+        let (status, deposit) = convert(
+            State(AppState { pool: pool.clone() }),
+            Path(item),
+            Json(deposit_body()),
+        )
+        .await
+        .expect("convert");
+
+        assert_eq!(status, StatusCode::CREATED);
+        let items: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM month_items WHERE auto_key = ?")
+            .bind(format!("dep-start:{}", deposit.id))
+            .fetch_one(&pool)
+            .await
+            .unwrap();
+        assert_eq!(items, 0);
+        assert!(matches!(
+            store::load_item(&pool, item).await,
+            Err(crate::store::StoreError::NotFound(_))
+        ));
+    }
 }

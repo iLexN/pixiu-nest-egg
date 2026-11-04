@@ -7,10 +7,17 @@ Part of the [data-flow guide](DATA_FLOW.md). Table definitions: [`deposits`, `fa
 The 新增定期 button reveals DepositForm, which collapses after a successful save.
 
 ```text
-DepositForm
+DepositForm (the 扣自 select lists the HKD bank accounts + 不扣活期,
+  preselected from 銀行 — HS → the HS account, SC → 渣打, else the HKD
+  default — until the user picks one)
   → POST /api/deposits
   → backend validates end_date and non-negative amounts
   → INSERT one row into deposits, sort_order appended
+  → when 扣自 names an account: UPDATE cash_accounts amount -= principal
+    (400 on debit_account_id unless it is an HKD bank account holding at
+    least the principal) and the row stores
+    debited_account_id/debited_amount; skipped for an auto-received insert
+    (past end_date — a historic entry never moves today's balance)
   → INSERT the dep-start:<id> adjustment month_item of −principal for the
     start month (skipped when the deposit has no start_date or the start
     month has no row — the dep-start suggestion still surfaces then; an
@@ -25,7 +32,8 @@ A blank rate is derived on read as 利息 ÷ 本金 × 365 ÷ (end_date − star
 ## Edit or delete a deposit
 
 ```text
-DepositForm edit mode (via 編輯 in a DepositTable row's ⋯ menu)
+DepositForm edit mode (via 編輯 in a DepositTable row's ⋯ menu — no 扣自
+select; the placement debit is never re-synced)
   → PATCH /api/deposits/:id
   → backend merges the patch, validates, UPDATEs one row
 
@@ -33,10 +41,11 @@ DepositForm edit mode (via 編輯 in a DepositTable row's ⋯ menu)
   → DELETE /api/deposits/:id
   → 404 for an unknown id; 409 for a received deposit, which changes
     nothing — its cash credit and dep-end:<id> item stay consistent
-  → one transaction: DELETE the dep-start:<id> month_item and every
-    dep-start:<id> dismissal tombstone, in whichever month they sit (an
-    edited start_date does not move the stored item), then DELETE the
-    deposits row
+  → one transaction: UPDATE cash_accounts amount += debited_amount on the
+    recorded debited_account_id (skipped when the account is gone), DELETE
+    the dep-start:<id> month_item and every dep-start:<id> dismissal
+    tombstone, in whichever month they sit (an edited start_date does not
+    move the stored item), then DELETE the deposits row
 ```
 
 Derived fields (`total`, `status`, end month/year) change automatically on the next read.
@@ -66,6 +75,8 @@ DepositHistoryView (定期 → 記錄)
       → history_years for the year selector
   → GET /api/deposits?year=YYYY&order=desc
       → history rows for the selected year
+  → 收訖 on an unreceived row runs the same POST /api/deposits/:id/receive
+    flow, via the shared DepositReceiveForm both views use
 ```
 
 The list and every total/rollup are receipt-based: a deposit counts while it is not 收訖, whatever its `end_date`, and leaves on 收訖 (a stored `received_at`) — including a deposit 收訖'd early. An overdue-but-unreceived deposit shows 已到期未收 in the list and still counts in active principal, 已定期, and live 流動資產 until the user runs 收訖 → 存入活期, which moves the money into a cash_accounts row.

@@ -1,34 +1,67 @@
-//! Deposit flows that span tables: create records the start month's
-//! `dep-start` item, 收訖 is one transaction — the row update, the
-//! cash-account credit, and the `dep-end` month item — and delete removes
+//! Deposit flows that span tables: placement (create and the 轉為定期
+//! conversion) inserts the row, optionally debits the principal from a
+//! chosen 活期 account, and records the start month's `dep-start` item;
+//! 收訖 is one transaction — the row update, the cash-account credit, and
+//! the `dep-end` month item — and delete reverses the debit and removes
 //! the `dep-start` item and its dismissals together with the row.
 
 use sqlx::SqlitePool;
 
-use crate::calc::ValidatedDeposit;
-use crate::models::{Currency, NewDeposit};
+use crate::calc::{FieldError, ValidatedDeposit};
+use crate::models::{CashRole, Currency, NewDeposit};
 use crate::service::{ServiceError, receipts};
-use crate::store::{StoreError, deposits, months, now_timestamp};
+use crate::store::{StoreError, cash_accounts, deposits, forecast, months, now_timestamp};
 
-/// Create a deposit: one transaction — the row insert plus the start month's
-/// `dep-start` item (−principal), as the dep-start suggestion would have. A
-/// deposit without `start_date`, or whose start month has no row, records no
-/// item; the suggestion still surfaces for it later.
-pub async fn create(
-    pool: &SqlitePool,
+/// The shared placement write, inside the caller's transaction: the row
+/// insert, the optional 活期 debit of the principal from
+/// `debit_account_id`, then the start month's `dep-start:<id>` item
+/// (−principal), as the dep-start suggestion would have. A deposit without
+/// `start_date`, or whose start month has no row, records no item; the
+/// suggestion still surfaces for it later.
+///
+/// The debit names an HKD `bank` account holding at least the principal —
+/// `Err(Validation)` on `debit_account_id` otherwise, unknown id →
+/// `Err(NotFound)` — and applies only to a positive principal on an
+/// unreceived insert: a row `insert_deposit` auto-received (past
+/// `end_date`) is a historic entry and never debits.
+async fn place(
+    conn: &mut sqlx::SqliteConnection,
     deposit: &ValidatedDeposit,
     body: &NewDeposit,
 ) -> Result<i64, ServiceError> {
-    let sort_order = deposits::next_sort_order(pool).await?;
-    let mut tx = pool.begin().await.map_err(StoreError::from)?;
-    let id = deposits::insert_deposit(&mut *tx, deposit, sort_order, body).await?;
+    let sort_order = deposits::next_sort_order_tx(&mut *conn).await?;
+    let id = deposits::insert_deposit(&mut *conn, deposit, sort_order, body).await?;
+    if let Some(account_id) = body.debit_account_id
+        && let Some(principal) = deposit.principal
+        && principal > 0.0
+        && !deposits::is_received(&mut *conn, id).await?
+    {
+        let account = cash_accounts::load_one(&mut *conn, account_id).await?;
+        if account.role != CashRole::Bank || account.currency != Currency::Hkd {
+            return Err(ServiceError::Validation(vec![FieldError::new(
+                "debit_account_id",
+                "must be an HKD bank account",
+            )]));
+        }
+        // The overdraft check reads the account inside the transaction so
+        // the check and the debit see the same balance.
+        if account.amount < principal {
+            return Err(ServiceError::Validation(vec![FieldError::new(
+                "debit_account_id",
+                format!("{} holds only {}", account.label, account.amount),
+            )]));
+        }
+        let now = now_timestamp();
+        cash_accounts::add_amount(&mut *conn, account.id, -principal, &now).await?;
+        deposits::set_debit(&mut *conn, id, account.id, principal, &now).await?;
+    }
     if let (Some(start_date), Some(principal)) = (&deposit.start_date, deposit.principal)
         && principal != 0.0
     {
         let month = format!("{}-01", &start_date[..7]);
         let label = deposit.label.as_deref().unwrap_or("定期");
         months::record_receipt_item(
-            &mut tx,
+            &mut *conn,
             &month,
             &format!("dep-start:{id}"),
             label,
@@ -36,6 +69,33 @@ pub async fn create(
         )
         .await?;
     }
+    Ok(id)
+}
+
+/// Create a deposit: one transaction — [`place`].
+pub async fn create(
+    pool: &SqlitePool,
+    deposit: &ValidatedDeposit,
+    body: &NewDeposit,
+) -> Result<i64, ServiceError> {
+    let mut tx = pool.begin().await.map_err(StoreError::from)?;
+    let id = place(&mut tx, deposit, body).await?;
+    tx.commit().await?;
+    Ok(id)
+}
+
+/// 轉為定期: [`place`] the deposit and delete the forecast item, in one
+/// transaction — a failed placement leaves the plan in place, and a failed
+/// delete can never leave both (which would double-count in the forecast).
+pub async fn convert_plan(
+    pool: &SqlitePool,
+    item_id: i64,
+    deposit: &ValidatedDeposit,
+    body: &NewDeposit,
+) -> Result<i64, ServiceError> {
+    let mut tx = pool.begin().await.map_err(StoreError::from)?;
+    let id = place(&mut tx, deposit, body).await?;
+    forecast::delete_item_in_tx(&mut tx, item_id).await?;
     tx.commit().await?;
     Ok(id)
 }
@@ -91,7 +151,9 @@ pub async fn receive(pool: &SqlitePool, id: i64, input: &ReceiveInput) -> Result
     Ok(())
 }
 
-/// Delete an unreceived deposit: one transaction — every `dep-start:<id>`
+/// Delete an unreceived deposit: one transaction — the reversal of the
+/// recorded placement debit (the stored amount added back to the stored
+/// account; skipped when the account is gone), every `dep-start:<id>`
 /// month item and dismissal for that key (in whichever month they sit — an
 /// edited start_date does not move the stored item), then the deposit row.
 /// `Err(NotFound)` while `id` names no deposit, `Err(Conflict)` when the
@@ -103,7 +165,10 @@ pub async fn delete(pool: &SqlitePool, id: i64) -> Result<(), ServiceError> {
             "deposit {id} is already received"
         )));
     }
+    let now = now_timestamp();
     let mut tx = pool.begin().await.map_err(StoreError::from)?;
+    let debit = deposits::load_debit(&mut tx, id).await?;
+    receipts::refund(&mut tx, debit, &now).await?;
     months::delete_auto_items_by_key(&mut tx, &format!("dep-start:{id}")).await?;
     deposits::delete_deposit(&mut tx, id).await?;
     tx.commit().await?;
@@ -130,6 +195,7 @@ mod tests {
             end_date: "2100-02-02".to_string(),
             note1: None,
             note2: None,
+            debit_account_id: None,
         }
     }
 
@@ -417,5 +483,227 @@ mod tests {
         let pool = crate::db::connect_memory().await.expect("memory db");
         let err = delete(&pool, 9999).await.expect_err("unknown id");
         assert!(matches!(err, ServiceError::Store(StoreError::NotFound(_))));
+    }
+
+    async fn seed_bank(pool: &SqlitePool, label: &str, amount: f64, default: bool) -> i64 {
+        let sort: i64 =
+            sqlx::query_scalar("SELECT COALESCE(MAX(sort_order), 0) + 1 FROM cash_accounts")
+                .fetch_one(pool)
+                .await
+                .unwrap();
+        sqlx::query_scalar(
+            "INSERT INTO cash_accounts (label, currency, role, amount, is_default_receipt, \
+             sort_order, updated_at) VALUES (?, 'HKD', 'bank', ?, ?, ?, \
+             '2026-01-01T00:00:00') RETURNING id",
+        )
+        .bind(label)
+        .bind(amount)
+        .bind(default as i64)
+        .bind(sort)
+        .fetch_one(pool)
+        .await
+        .unwrap()
+    }
+
+    async fn account_amount(pool: &SqlitePool, id: i64) -> f64 {
+        sqlx::query_scalar("SELECT amount FROM cash_accounts WHERE id = ?")
+            .bind(id)
+            .fetch_one(pool)
+            .await
+            .unwrap()
+    }
+
+    async fn stored_debit(pool: &SqlitePool, id: i64) -> (Option<i64>, Option<f64>) {
+        sqlx::query_as("SELECT debited_account_id, debited_amount FROM deposits WHERE id = ?")
+            .bind(id)
+            .fetch_one(pool)
+            .await
+            .unwrap()
+    }
+
+    /// `debit_account_id` debits the principal and stores the debit on the
+    /// row, alongside the dep-start item; without it nothing moves and the
+    /// debit fields stay empty.
+    #[tokio::test]
+    async fn create_debits_the_chosen_account_and_records_it() {
+        let pool = crate::db::connect_memory().await.expect("memory db");
+        seed_months(&pool, &["2099-10-01"]).await;
+        let hs = seed_bank(&pool, "HS", 200000.0, true).await;
+        let sc = seed_bank(&pool, "渣打", 800.0, false).await;
+
+        let mut debit_body = body();
+        debit_body.debit_account_id = Some(hs);
+        let id = create(&pool, &validated(input()), &debit_body)
+            .await
+            .unwrap();
+        assert_eq!(account_amount(&pool, hs).await, 60000.0);
+        assert_eq!(account_amount(&pool, sc).await, 800.0);
+        assert_eq!(stored_debit(&pool, id).await, (Some(hs), Some(140000.0)));
+        assert_eq!(dep_start_amount(&pool, id).await, Some(-140000.0));
+
+        let id = create(&pool, &validated(input()), &body()).await.unwrap();
+        assert_eq!(stored_debit(&pool, id).await, (None, None));
+        assert_eq!(account_amount(&pool, hs).await, 60000.0);
+    }
+
+    /// A debit naming an account below the principal fails before commit:
+    /// no deposit, no item, no balance change. An unknown id is a
+    /// `StoreError::NotFound`.
+    #[tokio::test]
+    async fn create_rejects_an_overdraft_and_writes_nothing() {
+        let pool = crate::db::connect_memory().await.expect("memory db");
+        seed_months(&pool, &["2099-10-01"]).await;
+        let hs = seed_bank(&pool, "HS", 50000.0, true).await;
+
+        let mut body = body();
+        body.debit_account_id = Some(hs);
+        let err = create(&pool, &validated(input()), &body)
+            .await
+            .expect_err("overdraft");
+        let ServiceError::Validation(fields) = err else {
+            panic!("expected validation");
+        };
+        assert_eq!(fields[0].field, "debit_account_id");
+        assert!(fields[0].message.contains("HS"), "{}", fields[0].message);
+
+        assert_eq!(account_amount(&pool, hs).await, 50000.0);
+        let deposits: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM deposits")
+            .fetch_one(&pool)
+            .await
+            .unwrap();
+        assert_eq!(deposits, 0);
+        let items: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM month_items")
+            .fetch_one(&pool)
+            .await
+            .unwrap();
+        assert_eq!(items, 0);
+
+        body.debit_account_id = Some(9999);
+        let err = create(&pool, &validated(input()), &body)
+            .await
+            .expect_err("unknown account");
+        assert!(matches!(err, ServiceError::Store(StoreError::NotFound(_))));
+    }
+
+    /// A broker or USD `debit_account_id` is a validation error on the
+    /// field, and nothing is stored. (The schema makes a non-HKD bank row
+    /// impossible, so the USD account here is the seeded USD broker.)
+    #[tokio::test]
+    async fn create_rejects_a_non_hkd_bank_debit() {
+        let pool = crate::db::connect_memory().await.expect("memory db");
+        let broker: i64 = sqlx::query_scalar(
+            "SELECT id FROM cash_accounts WHERE role = 'broker' AND currency = 'HKD'",
+        )
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+        let usd: i64 = sqlx::query_scalar(
+            "SELECT id FROM cash_accounts WHERE role = 'broker' AND currency = 'USD'",
+        )
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+
+        for account in [broker, usd] {
+            let mut body = body();
+            body.debit_account_id = Some(account);
+            let err = create(&pool, &validated(input()), &body)
+                .await
+                .expect_err("non-HKD-bank debit");
+            let ServiceError::Validation(fields) = err else {
+                panic!("expected validation");
+            };
+            assert_eq!(fields[0].field, "debit_account_id");
+        }
+        let deposits: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM deposits")
+            .fetch_one(&pool)
+            .await
+            .unwrap();
+        assert_eq!(deposits, 0);
+    }
+
+    /// An insert auto-received by a past `end_date` is a historic entry —
+    /// it never debits even when `debit_account_id` is given.
+    #[tokio::test]
+    async fn create_an_auto_received_insert_never_debits() {
+        let pool = crate::db::connect_memory().await.expect("memory db");
+        let hs = seed_bank(&pool, "HS", 200000.0, true).await;
+
+        let mut body = body();
+        body.start_date = Some("2019-10-13".to_string());
+        body.end_date = "2020-02-02".to_string();
+        body.debit_account_id = Some(hs);
+        let id = create(
+            &pool,
+            &validated(DepositInput {
+                label: Some("SC-1"),
+                bank: Some("SC"),
+                principal: Some(140000.0),
+                rate: None,
+                interest: Some(1279.0),
+                start_date: Some("2019-10-13"),
+                end_date: "2020-02-02",
+            }),
+            &body,
+        )
+        .await
+        .unwrap();
+
+        let stored = deposits::load_one(&pool, id).await.unwrap();
+        assert!(stored.received_at.is_some());
+        assert_eq!(stored_debit(&pool, id).await, (None, None));
+        assert_eq!(account_amount(&pool, hs).await, 200000.0);
+    }
+
+    /// Delete adds the recorded debit back to the recorded account — the
+    /// receipt default moving to 渣打 in between changes nothing.
+    #[tokio::test]
+    async fn delete_restores_the_debited_account() {
+        let pool = crate::db::connect_memory().await.expect("memory db");
+        seed_months(&pool, &["2099-10-01"]).await;
+        let hs = seed_bank(&pool, "HS", 200000.0, true).await;
+        let sc = seed_bank(&pool, "渣打", 800.0, false).await;
+
+        let mut body = body();
+        body.debit_account_id = Some(hs);
+        let id = create(&pool, &validated(input()), &body).await.unwrap();
+        assert_eq!(account_amount(&pool, hs).await, 60000.0);
+
+        sqlx::query("UPDATE cash_accounts SET is_default_receipt = 0 WHERE id = ?")
+            .bind(hs)
+            .execute(&pool)
+            .await
+            .unwrap();
+        sqlx::query("UPDATE cash_accounts SET is_default_receipt = 1 WHERE id = ?")
+            .bind(sc)
+            .execute(&pool)
+            .await
+            .unwrap();
+
+        delete(&pool, id).await.unwrap();
+        assert_eq!(account_amount(&pool, hs).await, 200000.0);
+        assert_eq!(account_amount(&pool, sc).await, 800.0);
+    }
+
+    /// The debited account deleted in between: the deposit still deletes
+    /// and no remaining account changes.
+    #[tokio::test]
+    async fn delete_with_the_debited_account_gone_moves_nothing() {
+        let pool = crate::db::connect_memory().await.expect("memory db");
+        seed_months(&pool, &["2099-10-01"]).await;
+        let hs = seed_bank(&pool, "HS", 50.0, true).await;
+        let sc = seed_bank(&pool, "渣打", 200000.0, false).await;
+
+        let mut body = body();
+        body.debit_account_id = Some(sc);
+        let id = create(&pool, &validated(input()), &body).await.unwrap();
+        cash_accounts::delete(&pool, sc).await.unwrap();
+
+        delete(&pool, id).await.unwrap();
+        assert_eq!(account_amount(&pool, hs).await, 50.0);
+        assert!(matches!(
+            deposits::load_one(&pool, id).await,
+            Err(StoreError::NotFound(_))
+        ));
     }
 }

@@ -56,9 +56,10 @@ pub async fn ibkr_block(pool: &SqlitePool) -> Result<IbkrBlock, StoreError> {
     })
 }
 
-/// `PATCH /api/ibkr`: validate the patch, then one transaction appends the
-/// transfer row, stores the reported total, and sets the broker account
-/// amounts (a `null` cash value sets 0).
+/// `PATCH /api/ibkr`: validate the patch, then one transaction stores the
+/// reported total and sets the broker account amounts (a `null` cash value
+/// sets 0). Transfers live on `POST /api/ibkr/transfers` — a patch never
+/// appends a log row.
 pub async fn update_ibkr(pool: &SqlitePool, patch: &IbkrPatch) -> Result<IbkrBlock, ServiceError> {
     let mut errors = Vec::new();
     for (field, value) in [
@@ -72,32 +73,12 @@ pub async fn update_ibkr(pool: &SqlitePool, patch: &IbkrPatch) -> Result<IbkrBlo
             errors.push(FieldError::new(field, "value must not be negative"));
         }
     }
-    // A transfer delta may be negative — it records a withdrawal or undoes a
-    // mistyped entry; it must only be finite.
-    if let Some(delta) = patch.transfer_hkd
-        && !delta.is_finite()
-    {
-        errors.push(FieldError::new("transfer_hdk", "value must be a number"));
-    }
-    let transfer_date = match &patch.transfer_date {
-        Some(date) => match chrono::NaiveDate::parse_from_str(date, "%Y-%m-%d") {
-            Ok(date) => date,
-            Err(_) => {
-                errors.push(FieldError::new("transfer_date", "date must be YYYY-MM-DD"));
-                today()
-            }
-        },
-        None => today(),
-    };
     if !errors.is_empty() {
         return Err(ServiceError::Validation(errors));
     }
 
     let now = crate::store::now_timestamp();
     let mut tx = pool.begin().await.map_err(StoreError::from)?;
-    if let Some(delta) = patch.transfer_hkd.filter(|delta| *delta != 0.0) {
-        ibkr_store::insert_transfer(&mut *tx, &transfer_date.to_string(), delta).await?;
-    }
     if let Some(value) = patch.now_value {
         settings::SettingsPatch {
             ibkr_reported_value: Some(value),

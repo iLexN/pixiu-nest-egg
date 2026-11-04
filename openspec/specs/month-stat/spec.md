@@ -171,7 +171,7 @@ An `entertainment` item MAY carry `exclude_from_living`, which also subtracts it
 
 ### Requirement: Auto-suggested items
 
-For the current month and later, `GET /api/months/:ym` SHALL also return candidate items derived from events dated in that month, including each 定期 starting (an `adjustment` of − its principal, only while the deposit carries a `start_date`), each 定期 ending (an `adjustment` of + its principal + interest), and each HK BUY/SELL trade (an `adjustment` of −/+ its total).
+For the current month and later, `GET /api/months/:ym` SHALL also return candidate items derived from events dated in that month, including each 定期 starting (an `adjustment` of − its principal, only while the deposit carries a `start_date`), each 定期 ending (an `adjustment` of + its principal + interest), each HK BUY/SELL trade (an `adjustment` of −/+ its total), and each cash-moving IBKR transfer whose item is not yet stored (an `IBKR 轉入` `adjustment` of − its amount, key `ibkr:<id>`).
 
 #### Scenario: Deposit starting suggests an adjustment
 
@@ -190,8 +190,18 @@ For the current month and later, `GET /api/months/:ym` SHALL also return candida
 
 #### Scenario: Manual-only items stay manual
 
-- **WHEN** the user adds an IBKR transfer and a yearly bonus as items
-- **THEN** they are stored as ordinary items with no `auto_key` and behave like any other item
+- **WHEN** the user adds a yearly bonus as an item
+- **THEN** it is stored as an ordinary item with no `auto_key` and behaves like any other item
+
+#### Scenario: IBKR transfer suggested when its month row was missing
+
+- **WHEN** a `50000` IBKR transfer was recorded for the current month before its month row existed, and the month row is then created
+- **THEN** the month's response suggests an `adjustment` of `−50000` labelled `IBKR 轉入` with `auto_key` `ibkr:<id>`
+
+#### Scenario: Log-only transfers never suggest
+
+- **WHEN** an IBKR transfer row carries no source account
+- **THEN** no candidate is produced for it
 
 ### Requirement: Remaining suggested candidates
 
@@ -536,3 +546,22 @@ The 月結 設定 資產 editor SHALL offer a 備註 field when adding or editin
 
 - **WHEN** the user saves the HS人壽 row with a 備註
 - **THEN** the 資產 table shows the note beneath HS人壽
+
+### Requirement: IBKR transfer month item
+
+Recording an IBKR transfer SHALL store an `adjustment` item in the month of its `transfer_date`, labelled `IBKR 轉入`, of − its amount, with `auto_key` `ibkr:<id>`, while that month row exists; otherwise nothing is stored and the candidate rule applies. Deleting the transfer SHALL remove that item and any dismissal of its key, in whatever month they sit.
+
+#### Scenario: Transfer records its 調整
+
+- **WHEN** the `2026-11` month row exists and the user records a `50000` transfer dated `2026-11-03`
+- **THEN** `2026-11` lists an `adjustment` item `IBKR 轉入` of `−50000` with `auto_key` `ibkr:<id>`, and 月支出 is not inflated by the transfer
+
+#### Scenario: Deleting the transfer removes its item
+
+- **WHEN** the user deletes that transfer
+- **THEN** the `ibkr:<id>` item is gone from `2026-11`
+
+#### Scenario: Existing manual transfer items untouched
+
+- **WHEN** the change is deployed while `2026-10` holds the manual `to IBKR` item of `−90000`
+- **THEN** that item is unchanged and no `ibkr:` item or candidate is added for the legacy transfer

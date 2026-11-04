@@ -1,9 +1,10 @@
 use axum::Json;
-use axum::extract::State;
+use axum::extract::{Path, State};
+use axum::http::StatusCode;
 
 use super::AppState;
 use crate::error::{ApiError, ErrorBody};
-use crate::models::{IbkrBlock, IbkrPatch, OverviewResponse};
+use crate::models::{IbkrBlock, IbkrPatch, IbkrTransfer, NewIbkrTransfer, OverviewResponse};
 
 #[utoipa::path(
     get,
@@ -26,7 +27,7 @@ pub async fn ibkr(State(state): State<AppState>) -> Result<Json<IbkrBlock>, ApiE
     tag = "overview",
     request_body = IbkrPatch,
     responses(
-        (status = 200, description = "Updated IBKR block; 轉入 appends a dated transfer row", body = IbkrBlock),
+        (status = 200, description = "Updated IBKR block", body = IbkrBlock),
         (status = 400, description = "Missing or invalid fields", body = ErrorBody),
     )
 )]
@@ -38,6 +39,67 @@ pub async fn update_ibkr(
         .await
         .map(Json)
         .map_err(ApiError::from)
+}
+
+/// Every `ibkr_transfers` row, newest `transfer_date` then newest id first,
+/// with the source account label joined in (NULL for log-only rows).
+#[utoipa::path(
+    get,
+    path = "/api/ibkr/transfers",
+    tag = "overview",
+    responses(
+        (status = 200, description = "IBKR transfer log, newest first", body = Vec<IbkrTransfer>),
+    )
+)]
+pub async fn list_ibkr_transfers(
+    State(state): State<AppState>,
+) -> Result<Json<Vec<IbkrTransfer>>, ApiError> {
+    crate::store::ibkr::list_transfers(&state.pool)
+        .await
+        .map(Json)
+        .map_err(ApiError::from)
+}
+
+/// A bank→IBKR transfer as one atomic cash movement: log row, source debit,
+/// broker credit, and the month's `ibkr:<id>` adjustment item.
+#[utoipa::path(
+    post,
+    path = "/api/ibkr/transfers",
+    tag = "overview",
+    request_body = NewIbkrTransfer,
+    responses(
+        (status = 201, description = "Transfer recorded and cash moved", body = IbkrTransfer),
+        (status = 400, description = "Invalid amount/date/source, or insufficient balance", body = ErrorBody),
+        (status = 404, description = "Source account not found", body = ErrorBody),
+        (status = 409, description = "No IBKR HKD broker account", body = ErrorBody),
+    )
+)]
+pub async fn create_ibkr_transfer(
+    State(state): State<AppState>,
+    Json(body): Json<NewIbkrTransfer>,
+) -> Result<(StatusCode, Json<IbkrTransfer>), ApiError> {
+    let transfer = crate::service::ibkr::create_transfer(&state.pool, &body).await?;
+    Ok((StatusCode::CREATED, Json(transfer)))
+}
+
+/// Undo a transfer exactly: reverse the recorded balance moves, drop its
+/// `ibkr:<id>` month item, then delete the row. Log-only rows move no cash.
+#[utoipa::path(
+    delete,
+    path = "/api/ibkr/transfers/{id}",
+    tag = "overview",
+    params(("id" = i64, Path, description = "IBKR transfer id")),
+    responses(
+        (status = 204, description = "Transfer deleted and its cash movement reversed"),
+        (status = 404, description = "Transfer not found", body = ErrorBody),
+    )
+)]
+pub async fn delete_ibkr_transfer(
+    State(state): State<AppState>,
+    Path(id): Path<i64>,
+) -> Result<StatusCode, ApiError> {
+    crate::service::ibkr::delete_transfer(&state.pool, id).await?;
+    Ok(StatusCode::NO_CONTENT)
 }
 
 /// `Overview!A3:C18` plus the B1/H1/J1 headline, derived on read.
@@ -173,41 +235,27 @@ mod tests {
         assert!(block.net.is_none());
     }
 
+    /// A PATCH touches only the three account fields — it never appends a
+    /// transfer row nor moves a bank balance.
     #[tokio::test]
-    async fn update_ibkr_appends_a_dated_transfer() {
+    async fn update_ibkr_appends_no_transfer() {
         let pool = connect_memory().await.expect("memory db");
         let state = AppState { pool: pool.clone() };
-        let block = update_ibkr(
-            State(state.clone()),
-            Json(IbkrPatch {
-                transfer_hkd: Some(50000.0),
-                transfer_date: Some("2026-03-01".to_string()),
-                ..Default::default()
-            }),
-        )
-        .await
-        .unwrap()
-        .0;
-        assert_eq!(block.transferred_hkd, Some(50000.0));
-
-        // A negative delta records a withdrawal/correction on top.
-        let block = update_ibkr(
+        let _ = update_ibkr(
             State(state),
             Json(IbkrPatch {
-                transfer_hkd: Some(-10000.0),
-                ..Default::default()
+                now_value: Some(Some(134232.01)),
+                hkd_cash: Some(Some(765.42)),
+                usd_cash: Some(Some(1200.25)),
             }),
         )
         .await
-        .unwrap()
-        .0;
-        assert_eq!(block.transferred_hkd, Some(40000.0));
-
+        .unwrap();
         let rows: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM ibkr_transfers")
             .fetch_one(&pool)
             .await
             .unwrap();
-        assert_eq!(rows, 2);
+        assert_eq!(rows, 0);
     }
 
     #[tokio::test]

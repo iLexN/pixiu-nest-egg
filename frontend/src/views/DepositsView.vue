@@ -1,6 +1,7 @@
 <script setup lang="ts">
-import { computed, onMounted, ref } from 'vue'
+import { onMounted, ref } from 'vue'
 import DepositForm from '../components/DepositForm.vue'
+import DepositReceiveForm from '../components/DepositReceiveForm.vue'
 import DepositTable from '../components/DepositTable.vue'
 import {
   api,
@@ -9,26 +10,13 @@ import {
   type Deposit,
   type DepositSummary,
 } from '../api'
-import { fmtBank, fmtMoney, todayIso } from '../format'
+import { fmtBank, fmtMoney } from '../format'
 
 const summary = ref<DepositSummary | null>(null)
 const accounts = ref<CashAccount[]>([])
 const message = ref('')
 const error = ref('')
 const editing = ref<Deposit | null>(null)
-
-/** HKD cash accounts a deposit can bank into. */
-const cashAccounts = computed(() =>
-  accounts.value.filter((account) => account.currency === 'HKD'),
-)
-
-/** Bank code → the cash account label it deposits into. */
-const BANK_ASSET_LABELS: Record<string, string> = { SC: '渣打', HS: 'HS' }
-
-function numOrNull(raw: string | number): number | null {
-  const parsed = Number(raw)
-  return String(raw).trim() === '' || !Number.isFinite(parsed) ? null : parsed
-}
 
 async function load() {
   error.value = ''
@@ -63,64 +51,13 @@ function onSaved(deposit: Deposit) {
   void load()
 }
 
-// ----- 收訖 (matured -> received, optional bank-in) -----
+const receiving = ref<Deposit | null>(null)
 
-const receiving = ref<{
-  deposit: Deposit
-  received_at: string
-  interest: string | number
-  account_id: number | null
-} | null>(null)
-
-/** What the cash row will be credited: principal + 實收利息 (display only). */
-const receivePreview = computed(() => {
-  const current = receiving.value
-  if (!current) return 0
-  return (
-    (current.deposit.principal ?? 0) +
-    (numOrNull(current.interest) ?? current.deposit.interest ?? 0)
-  )
-})
-
-function startReceive(deposit: Deposit) {
-  // The deposit's own bank row wins; otherwise the currency's default receipt
-  // account, else 不存入.
-  const accountLabel = deposit.bank
-    ? (BANK_ASSET_LABELS[deposit.bank] ?? deposit.bank)
-    : ''
-  const matched = cashAccounts.value.find((account) => account.label === accountLabel)
-  const fallback = cashAccounts.value.find((account) => account.is_default_receipt)
-  receiving.value = {
-    deposit,
-    received_at: todayIso(),
-    interest: deposit.interest ?? '',
-    account_id: (matched ?? fallback)?.id ?? null,
-  }
-}
-
-async function saveReceive() {
-  const current = receiving.value
-  if (!current) return
-  const interest = numOrNull(current.interest)
-  if (current.interest !== '' && interest === null) {
-    error.value = '實收利息必須是數字'
-    return
-  }
-  try {
-    await api.receiveDeposit(current.deposit.id, {
-      received_at: current.received_at || undefined,
-      interest: interest ?? undefined,
-      ...(current.account_id === null
-        ? { bank_in: false }
-        : { account_id: current.account_id }),
-    })
-    receiving.value = null
-    message.value = '已記錄收訖'
-    error.value = ''
-    await load()
-  } catch (err) {
-    error.value = err instanceof ApiError ? err.message : String(err)
-  }
+function onReceived() {
+  receiving.value = null
+  message.value = '已記錄收訖'
+  error.value = ''
+  void load()
 }
 
 onMounted(load)
@@ -133,6 +70,16 @@ onMounted(load)
       :editing="editing"
       @saved="onSaved"
       @cancelled="editing = null"
+    />
+
+    <DepositReceiveForm
+      v-if="receiving"
+      :key="receiving.id"
+      class="card"
+      :deposit="receiving"
+      :accounts="accounts"
+      @saved="onReceived"
+      @cancelled="receiving = null"
     />
 
     <div v-if="summary" class="card">
@@ -158,41 +105,8 @@ onMounted(load)
         empty-text="沒有未到期的定期"
         @edit="editing = $event"
         @remove="remove"
-        @receive="startReceive"
+        @receive="receiving = $event"
       />
-
-      <form v-if="receiving" class="inline-form" @submit.prevent="saveReceive">
-        <h4>
-          收訖 — {{ receiving.deposit.label ?? `#${receiving.deposit.id}` }}（{{
-            receiving.deposit.end_date
-          }}
-          到期）
-        </h4>
-        <label>
-          收訖日
-          <input v-model="receiving.received_at" type="date" required />
-        </label>
-        <label>
-          實收利息
-          <input v-model="receiving.interest" type="number" step="any" inputmode="decimal" />
-        </label>
-        <label>
-          存入活期
-          <select v-model="receiving.account_id">
-            <option :value="null">不存入</option>
-            <option v-for="account in cashAccounts" :key="account.id" :value="account.id">
-              {{ account.label }}（{{ fmtMoney(account.amount) }}）
-            </option>
-          </select>
-        </label>
-        <p v-if="receiving.account_id !== null" class="muted">
-          存入 {{ fmtMoney(receivePreview) }}（本金 + 實收利息）
-        </p>
-        <div class="form-actions">
-          <button type="submit">收訖</button>
-          <button type="button" class="link" @click="receiving = null">取消</button>
-        </div>
-      </form>
 
       <h4>到期月份</h4>
       <table class="rollup">
@@ -247,7 +161,7 @@ onMounted(load)
         <div>
           <h4>定期 start step</h4>
           <ol>
-            <li>新增定期（自動：月結調整 −本金）</li>
+            <li>新增定期 / 轉為定期（自動：扣活期 + 月結調整 −本金）</li>
             <li>add row 回報率</li>
             <li>add row 定期 ref</li>
             <li>update overview - 預測</li>

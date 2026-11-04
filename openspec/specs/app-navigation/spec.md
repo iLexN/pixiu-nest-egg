@@ -72,12 +72,17 @@ The app SHALL present a two-level top navigation. The first level SHALL show one
 
 ### Requirement: Sub-tab membership per group
 
-The second level SHALL show the sub-tabs of the currently active group only — 總覽 SHALL contain 總覽, 月結, 年結, HappyPool (in that order); 股票 SHALL contain 總覽, 交易記錄, 派息, 管理 (in that order); 定期 SHALL contain 總覽, 記錄 (in that order); MPF SHALL contain 總覽; 債券 SHALL contain 總覽; AIA SHALL contain 總覽; 家人 SHALL contain 定期.
+The second level SHALL show the sub-tabs of the currently active group only — 總覽 SHALL contain 總覽, 月結, 年結, HappyPool (in that order); 股票 SHALL contain 總覽, 交易記錄, 派息, 管理 (in that order), followed by 轉入記錄 while the market is 美股; 定期 SHALL contain 總覽, 記錄 (in that order); MPF SHALL contain 總覽; 債券 SHALL contain 總覽; AIA SHALL contain 總覽; 家人 SHALL contain 定期.
 
 #### Scenario: Switching groups
 
-- **WHEN** the user activates the 股票 group
+- **WHEN** the user activates the 股票 group with the 港股 market selected
 - **THEN** the second level shows 總覽, 交易記錄, 派息, 管理 in that order and no other group's tabs
+
+#### Scenario: 美股 adds 轉入記錄
+
+- **WHEN** the 股票 group is active and the user selects 美股
+- **THEN** the second level shows 總覽, 交易記錄, 派息, 管理, 轉入記錄 in that order
 
 ### Requirement: Default page is 總覽 → 總覽
 
@@ -104,7 +109,7 @@ Clicking a group button SHALL switch to that group and open its first sub-tab. T
 
 ### Requirement: Market toggle is hidden outside the 股票 group
 
-The 港股/美股 market toggle SHALL be shown while the 股票 group is active and SHALL control the market for all of its sub-pages (總覽, 交易記錄, 派息, 管理). It SHALL be hidden while the 總覽 (including its 月結 and 年結 sub-tabs), 定期, MPF, 債券, AIA, or 家人 group is active. The selected market SHALL persist when switching between stock sub-tabs.
+The 港股/美股 market toggle SHALL be shown while the 股票 group is active and SHALL control the market for all of its sub-pages (總覽, 交易記錄, 派息, 管理, and the 美股-only 轉入記錄). It SHALL be hidden while the 總覽 (including its 月結 and 年結 sub-tabs), 定期, MPF, 債券, AIA, or 家人 group is active. The selected market SHALL persist when switching between stock sub-tabs. Switching to 港股 while 轉入記錄 is open SHALL open 股票 → 總覽.
 
 #### Scenario: Market toggle on stock pages
 
@@ -155,3 +160,8 @@ The 港股/美股 market toggle SHALL be shown while the 股票 group is active 
 
 - **WHEN** the user selects 美股 on 總覽 and then opens 交易記錄
 - **THEN** 交易記錄 shows US trades
+
+#### Scenario: Switching to 港股 leaves 轉入記錄
+
+- **WHEN** the user is on 股票 → 轉入記錄 and selects 港股
+- **THEN** 股票 → 總覽 opens for 港股 and the 轉入記錄 tab is no longer shown

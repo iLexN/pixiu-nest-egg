@@ -57,6 +57,18 @@ pub struct SuggestionAiaPayment {
     pub policy: String,
 }
 
+/// An IBKR transfer as a suggestion source — cash-moving rows only
+/// (`from_account_id` recorded); log-only legacy rows never reach this.
+/// The forecast reuses the shape for its `ibkr_lines`, where legacy rows do
+/// count.
+#[derive(Debug, Clone)]
+pub struct SuggestionIbkrTransfer {
+    pub id: i64,
+    pub date: chrono::NaiveDate,
+    /// The transferred HKD amount (positive).
+    pub amount: f64,
+}
+
 /// Every dated event the suggestion builder reads, plus the month's own
 /// pool_input and the USD→HKD rate.
 #[derive(Debug, Default)]
@@ -66,6 +78,8 @@ pub struct SuggestionEvents {
     pub dividends: Vec<SuggestionReceipt>,
     pub coupons: Vec<SuggestionReceipt>,
     pub aia_payments: Vec<SuggestionAiaPayment>,
+    /// Cash-moving IBKR transfers (the `ibkr:<id>` suggestion source).
+    pub ibkr_transfers: Vec<SuggestionIbkrTransfer>,
     /// The month row's own pool_input.
     pub pool_input: f64,
     pub usd_hkd_rate: Option<f64>,
@@ -160,6 +174,21 @@ pub fn build_suggestions(
                 label: Some(coupon.label.clone()),
                 amount,
                 source: "coupon".to_string(),
+            });
+        }
+    }
+
+    // A cash-moving IBKR transfer suggests only while its month row missed
+    // the auto item — normally `record_receipt_item` stores `ibkr:<id>` at
+    // transfer time and the stored-key filter suppresses this candidate.
+    for transfer in &events.ibkr_transfers {
+        if in_month(transfer.date, month) {
+            suggestions.push(MonthSuggestion {
+                auto_key: format!("ibkr:{}", transfer.id),
+                category: MonthItemCategory::Adjustment,
+                label: Some("IBKR 轉入".to_string()),
+                amount: -transfer.amount,
+                source: "ibkr".to_string(),
             });
         }
     }
@@ -350,6 +379,19 @@ mod tests {
                 amount_usd: 8320.0,
                 policy: "年金".to_string(),
             }],
+            ibkr_transfers: vec![
+                SuggestionIbkrTransfer {
+                    id: 11,
+                    date: ym("2026-10-17"),
+                    amount: 50000.0,
+                },
+                // Dated outside the month: never suggests.
+                SuggestionIbkrTransfer {
+                    id: 12,
+                    date: ym("2026-11-17"),
+                    amount: 90000.0,
+                },
+            ],
             pool_input: 4142.66,
             usd_hkd_rate: Some(7.8),
         }
@@ -379,13 +421,23 @@ mod tests {
         assert!(!by_key.contains_key("coupon:10"));
         assert_eq!(by_key["aia-pay:7"].category, MonthItemCategory::ExtraSpend);
         assert!(approx_eq(by_key["aia-pay:7"].amount, 8320.0 * 7.8));
+        // A cash-moving IBKR transfer suggests `IBKR 轉入` of −amount, keyed
+        // `ibkr:<id>`; the out-of-month one does not.
+        assert!(approx_eq(by_key["ibkr:11"].amount, -50000.0));
+        assert_eq!(by_key["ibkr:11"].label.as_deref(), Some("IBKR 轉入"));
+        assert_eq!(by_key["ibkr:11"].category, MonthItemCategory::Adjustment);
+        assert!(!by_key.contains_key("ibkr:12"));
         assert!(approx_eq(by_key["pool-input"].amount, 4142.66));
     }
 
     #[test]
     fn suggestions_exclude_stored_and_dismissed_keys() {
         let events = suggestion_events();
-        let stored = HashSet::from(["dep-end:2".to_string(), "pool-input".to_string()]);
+        let stored = HashSet::from([
+            "dep-end:2".to_string(),
+            "pool-input".to_string(),
+            "ibkr:11".to_string(),
+        ]);
         let dismissed = HashSet::from(["trade:3".to_string()]);
         let suggestions = build_suggestions("2026-10-01", &events, &stored, &dismissed);
         let keys: HashSet<&str> = suggestions
@@ -395,6 +447,7 @@ mod tests {
         assert!(!keys.contains("dep-end:2"));
         assert!(!keys.contains("pool-input"));
         assert!(!keys.contains("trade:3"));
+        assert!(!keys.contains("ibkr:11"));
         assert!(keys.contains("dep-start:1"));
     }
 
