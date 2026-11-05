@@ -99,17 +99,21 @@ pub async fn list(
         .collect::<Result<Vec<_>, _>>()
 }
 
-pub async fn insert_trade(
-    pool: &SqlitePool,
+pub async fn insert_trade<'e, E>(
+    exec: E,
     stock_id: i64,
     trade: &ValidatedTrade,
     note: Option<&str>,
-) -> Result<i64, StoreError> {
+    settled_amount: Option<f64>,
+) -> Result<i64, StoreError>
+where
+    E: sqlx::Executor<'e, Database = sqlx::Sqlite>,
+{
     let now = now_timestamp();
     let id: i64 = sqlx::query_scalar(
         "INSERT INTO trades (stock_id, trade_type, trade_date, shares, unit_price, fee, total, \
-         input_mode, note, created_at, updated_at) \
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?) RETURNING id",
+         input_mode, note, settled_amount, created_at, updated_at) \
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?) RETURNING id",
     )
     .bind(stock_id)
     .bind(trade.trade_type.as_str())
@@ -120,23 +124,30 @@ pub async fn insert_trade(
     .bind(trade.total)
     .bind(trade.input_mode.as_str())
     .bind(note)
+    .bind(settled_amount)
     .bind(&now)
     .bind(&now)
-    .fetch_one(pool)
+    .fetch_one(exec)
     .await?;
     Ok(id)
 }
 
-pub async fn update_trade(
-    pool: &SqlitePool,
+#[allow(clippy::too_many_arguments)]
+pub async fn update_trade<'e, E>(
+    exec: E,
     id: i64,
     stock_id: i64,
     validated: &ValidatedTrade,
     note: Option<String>,
-) -> Result<(), StoreError> {
+    settled_amount: Option<f64>,
+) -> Result<(), StoreError>
+where
+    E: sqlx::Executor<'e, Database = sqlx::Sqlite>,
+{
     sqlx::query(
         "UPDATE trades SET stock_id = ?, trade_type = ?, trade_date = ?, shares = ?, \
-         unit_price = ?, fee = ?, total = ?, input_mode = ?, note = ?, updated_at = ? WHERE id = ?",
+         unit_price = ?, fee = ?, total = ?, input_mode = ?, note = ?, settled_amount = ?, \
+         updated_at = ? WHERE id = ?",
     )
     .bind(stock_id)
     .bind(validated.trade_type.as_str())
@@ -147,20 +158,40 @@ pub async fn update_trade(
     .bind(validated.total)
     .bind(validated.input_mode.as_str())
     .bind(note)
+    .bind(settled_amount)
     .bind(now_timestamp())
     .bind(id)
-    .execute(pool)
+    .execute(exec)
     .await?;
     Ok(())
 }
 
-/// Rows deleted, so the handler can tell "not found" apart from success.
-pub async fn delete_trade(pool: &SqlitePool, id: i64) -> Result<u64, StoreError> {
+/// Rows deleted, so the caller can tell "not found" apart from success.
+pub async fn delete_trade<'e, E>(exec: E, id: i64) -> Result<u64, StoreError>
+where
+    E: sqlx::Executor<'e, Database = sqlx::Sqlite>,
+{
     Ok(sqlx::query("DELETE FROM trades WHERE id = ?")
         .bind(id)
-        .execute(pool)
+        .execute(exec)
         .await?
         .rows_affected())
+}
+
+/// The signed amount the trade applied to the USD broker account, NULL when
+/// it moved no cash (also when the trade is gone). Internal settlement
+/// plumbing, not part of `Trade`.
+pub async fn settled_amount<'e, E>(exec: E, id: i64) -> Result<Option<f64>, StoreError>
+where
+    E: sqlx::Executor<'e, Database = sqlx::Sqlite>,
+{
+    Ok(
+        sqlx::query_scalar::<_, Option<f64>>("SELECT settled_amount FROM trades WHERE id = ?")
+            .bind(id)
+            .fetch_optional(exec)
+            .await?
+            .flatten(),
+    )
 }
 
 pub async fn load_one(pool: &SqlitePool, id: i64) -> Result<Trade, StoreError> {

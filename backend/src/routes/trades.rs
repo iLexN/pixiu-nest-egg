@@ -4,7 +4,7 @@ use axum::http::StatusCode;
 use serde::Deserialize;
 
 use super::{AppState, parse_market, resolve_stock};
-use crate::calc::{TradeInput, validate_trade};
+use crate::calc::{FieldError, TradeInput, validate_trade};
 use crate::error::{ApiError, ErrorBody};
 use crate::models::{InputMode, NewTrade, Trade, TradePatch};
 use crate::store::trades as store;
@@ -89,7 +89,14 @@ pub async fn create(
     })
     .map_err(ApiError::Validation)?;
 
-    let id = store::insert_trade(&state.pool, stock_id, &validated, body.note.as_deref()).await?;
+    let id = crate::service::trades::create(
+        &state.pool,
+        stock_id,
+        market,
+        &validated,
+        body.note.as_deref(),
+    )
+    .await?;
     crate::service::summary::record_market(&state.pool, market).await?;
     Ok((
         StatusCode::CREATED,
@@ -120,6 +127,14 @@ pub async fn update(
         Some(stock_id) => resolve_stock(&state.pool, Some(stock_id), None, None).await?,
         None => (existing.stock_id, existing.market),
     };
+    // US trades settle inside IBKR and HK trades at the HS bank, so a
+    // trade's market is fixed at creation — wrong market means recreate it.
+    if market != existing.market {
+        return Err(ApiError::Validation(vec![FieldError::new(
+            "stock_id",
+            "cannot change a trade's market",
+        )]));
+    }
 
     let input_mode = patch.input_mode.unwrap_or(if market == existing.market {
         existing.input_mode
@@ -157,12 +172,8 @@ pub async fn update(
     })
     .map_err(ApiError::Validation)?;
 
-    store::update_trade(&state.pool, id, stock_id, &validated, note).await?;
-    // A trade moved across stocks can move totals in both markets.
+    crate::service::trades::update(&state.pool, id, stock_id, market, &validated, note).await?;
     crate::service::summary::record_market(&state.pool, existing.market).await?;
-    if market != existing.market {
-        crate::service::summary::record_market(&state.pool, market).await?;
-    }
 
     Ok(Json(store::load_one(&state.pool, id).await?))
 }
@@ -182,9 +193,88 @@ pub async fn remove(
     Path(id): Path<i64>,
 ) -> Result<StatusCode, ApiError> {
     let market = store::load_one(&state.pool, id).await?.market;
-    if store::delete_trade(&state.pool, id).await? == 0 {
+    if !crate::service::trades::remove(&state.pool, id).await? {
         return Err(ApiError::NotFound(format!("trade {id} not found")));
     }
     crate::service::summary::record_market(&state.pool, market).await?;
     Ok(StatusCode::NO_CONTENT)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::db::connect_memory;
+    use sqlx::SqlitePool;
+
+    async fn seed_stock(pool: &SqlitePool, market: &str, code: &str) -> i64 {
+        sqlx::query_scalar("INSERT INTO stocks (market, code) VALUES (?, ?) RETURNING id")
+            .bind(market)
+            .bind(code)
+            .fetch_one(pool)
+            .await
+            .unwrap()
+    }
+
+    async fn seed_trade(pool: &SqlitePool, stock_id: i64) -> i64 {
+        sqlx::query_scalar(
+            "INSERT INTO trades (stock_id, trade_type, trade_date, shares, unit_price, fee, \
+             total, input_mode, created_at, updated_at) \
+             VALUES (?, 'BUY', '2026-11-05', 3, 696.04, 1.0, 2089.12, 'US_FEE', \
+             '2026-01-01T00:00:00', '2026-01-01T00:00:00') RETURNING id",
+        )
+        .bind(stock_id)
+        .fetch_one(pool)
+        .await
+        .unwrap()
+    }
+
+    #[tokio::test]
+    async fn update_rejects_a_stock_from_the_other_market() {
+        let pool = connect_memory().await.expect("memory db");
+        let state = AppState { pool: pool.clone() };
+        let voo = seed_stock(&pool, "US", "VOO").await;
+        let hsbc = seed_stock(&pool, "HK", "0005").await;
+        let us_trade = seed_trade(&pool, voo).await;
+        let hk_trade = seed_trade(&pool, hsbc).await;
+
+        for (trade, wrong_stock) in [(us_trade, hsbc), (hk_trade, voo)] {
+            let err = update(
+                State(state.clone()),
+                Path(trade),
+                Json(TradePatch {
+                    stock_id: Some(wrong_stock),
+                    ..Default::default()
+                }),
+            )
+            .await
+            .expect_err("cross-market repoint");
+            let ApiError::Validation(fields) = err else {
+                panic!("expected validation");
+            };
+            assert_eq!(fields[0].field, "stock_id");
+        }
+    }
+
+    #[tokio::test]
+    async fn update_allows_a_same_market_repoint() {
+        let pool = connect_memory().await.expect("memory db");
+        let state = AppState { pool: pool.clone() };
+        let voo = seed_stock(&pool, "US", "VOO").await;
+        let qqq = seed_stock(&pool, "US", "QQQ").await;
+        let trade = seed_trade(&pool, voo).await;
+
+        let updated = update(
+            State(state),
+            Path(trade),
+            Json(TradePatch {
+                stock_id: Some(qqq),
+                ..Default::default()
+            }),
+        )
+        .await
+        .unwrap()
+        .0;
+
+        assert_eq!(updated.stock_id, qqq);
+    }
 }

@@ -87,6 +87,13 @@ Items whose month sits outside the window stay stored: future ones slide in as t
 The same `IbkrCard` component renders on 總覽 and on 美股 → 總覽 — same table, same 編輯 form.
 
 ```text
+The broker cash amounts are not only manual: `POST`/`PATCH`/`DELETE
+/api/trades` move the USD broker row when a US trade with 股數 > 0 settles
+(BUY −total, SELL +total, and the recorded `settled_amount` reversed on
+edit/delete — see stocks.md), and US dividend 收訖 credits it through the
+receipt rule. PATCH /api/ibkr remains the reconcile path for what the app
+cannot see (IBKR interest, in-app FX conversions).
+
 Click 編輯 on the IBKR card → PATCH /api/ibkr with the three account fields
   → service::overview validates non-negative finite numbers, then in one
     transaction writes each provided account field to its broker

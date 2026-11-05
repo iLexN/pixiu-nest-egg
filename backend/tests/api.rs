@@ -2680,7 +2680,7 @@ async fn trade_create_and_delete_record_history() {
 }
 
 #[tokio::test]
-async fn moving_a_trade_across_markets_records_both() {
+async fn moving_a_trade_across_markets_is_rejected() {
     let (app, pool) = app_with_pool().await;
     let hk = create_stock(&app, "HK", "中國銀行", None).await;
     set_price(&app, hk, 10.0).await;
@@ -2701,6 +2701,8 @@ async fn moving_a_trade_across_markets_records_both() {
     .await;
     assert_eq!(status, StatusCode::CREATED, "body = {body}");
 
+    // A trade's market is fixed at creation — repointing it across markets
+    // is a validation error and changes nothing.
     let (status, body) = send(
         &app,
         "PATCH",
@@ -2708,17 +2710,66 @@ async fn moving_a_trade_across_markets_records_both() {
         Some(json!({ "stock_id": us })),
     )
     .await;
+    assert_eq!(status, StatusCode::BAD_REQUEST, "body = {body}");
+
+    let stock_id: i64 = sqlx::query_scalar("SELECT stock_id FROM trades WHERE id = ?")
+        .bind(moving)
+        .fetch_one(&pool)
+        .await
+        .expect("trade row");
+    assert_eq!(stock_id, hk);
+}
+
+#[tokio::test]
+async fn us_trade_settles_the_usd_broker_cash() {
+    let (app, _pool) = app_with_pool().await;
+    let voo = create_stock(&app, "US", "VOO", None).await;
+    let (status, body) = send(
+        &app,
+        "PATCH",
+        "/api/ibkr",
+        Some(json!({ "usd_cash": 5000.0 })),
+    )
+    .await;
     assert_eq!(status, StatusCode::OK, "body = {body}");
 
-    // HK dropped to the remaining trade; US gained the moved one.
-    let hk_rows = history_rows(&pool, "HK").await;
-    assert_eq!(hk_rows.len(), 1);
-    approx(&hk_rows[0].1.into(), 900.0);
-    approx(&hk_rows[0].2.into(), 1000.0);
-    let us_rows = history_rows(&pool, "US").await;
-    assert_eq!(us_rows.len(), 1);
-    approx(&us_rows[0].1.into(), 1705.0);
-    approx(&us_rows[0].2.into(), 11000.0);
+    // A US BUY debits the USD broker account by its derived total.
+    let (status, body) = send(
+        &app,
+        "POST",
+        "/api/trades",
+        Some(json!({
+            "stock_id": voo, "trade_type": "BUY", "trade_date": "2026-11-05",
+            "shares": 3, "unit_price": 696.04, "fee": 1.000009
+        })),
+    )
+    .await;
+    assert_eq!(status, StatusCode::CREATED, "body = {body}");
+    let trade = body["id"].as_i64().expect("trade id");
+    let (_, overview) = send(&app, "GET", "/api/overview", None).await;
+    approx(
+        &overview["ibkr"]["usd_cash"],
+        5000.0 - (3.0 * 696.04 + 1.000009),
+    );
+
+    // Editing the total re-applies only the delta; deleting returns it all.
+    let (status, body) = send(
+        &app,
+        "PATCH",
+        &format!("/api/trades/{trade}"),
+        Some(json!({ "shares": 4 })),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "body = {body}");
+    let (_, overview) = send(&app, "GET", "/api/overview", None).await;
+    approx(
+        &overview["ibkr"]["usd_cash"],
+        5000.0 - (4.0 * 696.04 + 1.000009),
+    );
+    let (status, _) = send(&app, "DELETE", &format!("/api/trades/{trade}"), None).await;
+    assert_eq!(status, StatusCode::NO_CONTENT);
+    let (_, overview) = send(&app, "GET", "/api/overview", None).await;
+    approx(&overview["ibkr"]["usd_cash"], 5000.0);
 }
 
 #[tokio::test]

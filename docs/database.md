@@ -41,6 +41,7 @@ One row per trade.
 | `total` | Stored total including fee |
 | `input_mode` | `HK_TOTAL` or `US_FEE` |
 | `note` | Optional note, required for zero-share or negative-fee adjustments |
+| `settled_amount` | Signed amount the trade applied to the USD broker cash account (BUY −total, SELL +total); NULL when it moved no cash — HK trades, zero-share rows, and all pre-settlement rows |
 | `created_at`, `updated_at` | Audit timestamps |
 
 ### `deposits`

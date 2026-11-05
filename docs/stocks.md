@@ -122,7 +122,10 @@ TradeForm
   → backend resolves stock_id from market + code
   → backend validates date/type/shares/price
   → backend derives fee or total
-  → INSERT one row into trades
+  → INSERT one row into trades — in the same transaction a US trade with
+    股數 > 0 applies its signed total to the IBKR USD broker cash account
+    (BUY −total, SELL +total) and records it as settled_amount; HK trades
+    and zero-share rows move no cash
   → response returns the stored trade plus per-trade 平均單價
   → frontend reloads stocks and the filtered trade list
 ```
@@ -158,12 +161,16 @@ TradeForm edit mode (via 編輯 in a TradeTable row's ⋯ menu)
   → PATCH /api/trades/:id
   → backend loads the existing trade
   → backend merges changed fields with unchanged fields
-  → backend validates and derives fee/total again
-  → UPDATE one trades row
+  → backend validates and derives fee/total again — a stock_id from the
+    other market is rejected (a trade's market is fixed at creation)
+  → UPDATE one trades row — in the same transaction a trade that recorded
+    settled_amount reverses it from the USD broker account and applies the
+    new signed total (a settled row edited to 股數 0 unwinds and records
+    none); trades with no settled_amount never move cash
   → frontend reloads stocks and the filtered trade list
 ```
 
-Editing a trade changes only that trade row. Summary values are not stored; they update automatically the next time 持倉總覽 is loaded.
+Editing a trade changes only that trade row (plus the broker cash its settlement recorded). Summary values are not stored; they update automatically the next time 持倉總覽 is loaded.
 
 ## Copy a trade
 
@@ -181,7 +188,8 @@ Copying is frontend only — no API call — and the summary uses the raw stored
 刪除 in a TradeTable row's ⋯ menu
   → browser confirmation in TradesView
   → DELETE /api/trades/:id
-  → backend deletes one trades row
+  → backend deletes one trades row — in the same transaction a recorded
+    settled_amount is reversed from the USD broker account
   → frontend reloads stocks and the filtered trade list
 ```
 
