@@ -13,8 +13,8 @@ Local Rust + SQLite + Vue app that replaced the stock-trade and other sections o
 ## Change workflow
 
 - Behavior changes (new capability, changed rule, new endpoint/table) go through OpenSpec: `openspec propose` creates `openspec/changes/<name>/` with proposal, design, delta specs, and tasks; `openspec apply` implements the tasks; `openspec archive` merges the delta specs into `openspec/specs/`. The `.devin/skills/openspec-*` skills wrap these steps.
-- When archiving a change (`openspec-archive-change`), always sync delta specs into `openspec/specs/` without asking — treat "Sync now" as the standing answer. Only stop and ask when a capability is sync-blocked or the post-sync verification fails.
-- Bug fixes and refactors that keep specified behavior unchanged skip OpenSpec, but still update `docs/` if wiring changed.
+- When archiving a change (`openspec-archive-change`), always sync delta specs into `openspec/specs/` without asking — treat "Sync now" as the standing answer. Only stop and ask when a capability is sync-blocked or the post-sync verification fails. After the archive completes, suggest a one-line commit message for the change.
+- Bug fixes and refactors that keep specified behavior unchanged also go through OpenSpec — `openspec/changes/archive/` is kept as the complete change history. Still update `docs/` if wiring changed.
 
 ## Layout
 
@@ -85,3 +85,17 @@ Backend tests are inline `#[cfg(test)]` modules next to the code they cover. The
 ## Migration status
 
 Migration out of the workbook is complete and the workbook is retired. The `YYYY回報率` projection sheets, 開心Pool independent ledger, 香港年金, FIRE, and ref1 were dropped, not migrated.
+
+## Agent skills
+
+### Issue tracker
+
+Issues live as markdown files under `.scratch/<feature>/` for pre-implementation work (triage queue, wayfinder decision tickets); all implementation changes go through OpenSpec (see Change workflow) so `openspec/changes/archive/` stays the complete history. See `docs/agents/issue-tracker.md`.
+
+### Triage labels
+
+The five canonical labels (`needs-triage`, `needs-info`, `ready-for-agent`, `ready-for-human`, `wontfix`) recorded as `Status:` values on issue files. See `docs/agents/triage-labels.md`.
+
+### Domain docs
+
+Single-context layout: `GLOSSARY.md` + `docs/adr/` at the repo root. See `docs/agents/domain.md`.
