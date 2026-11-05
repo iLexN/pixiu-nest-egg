@@ -20,7 +20,7 @@ Local Rust + SQLite + Vue app that replaced the stock-trade and other sections o
 
 - `backend/` — axum HTTP API, SQLite persistence via sqlx. `backend/src/routes/` holds thin HTTP adapters (extract input, validate, map errors); `backend/src/service/` composes across stores; `backend/src/store/` owns all SQL and returns `StoreError`; `backend/src/calc/` is pure calculation.
 - `backend/migrations/` — numbered sqlx migrations, applied automatically on startup.
-- `frontend/` — Vue 3 + TypeScript + Vite UI. Pages in `src/views/`, shared widgets in `src/components/`, API client in `src/api.ts`, display formatting in `src/format.ts`.
+- `frontend/` — Vue 3 + TypeScript + Vite UI. Pages in `src/views/`, shared widgets in `src/components/`, API client in `src/api.ts` (model types generated into `src/api-types.ts`), display formatting in `src/format.ts`.
 - `data/wealth.db` — the local SQLite database with real personal financial data. `data/` is gitignored; a fresh clone gets an empty database created by migrations.
 
 ## Run locally
@@ -54,6 +54,17 @@ cargo run -p wealth-backend --bin import_prices -- current-price.json     # bulk
 ```
 
 Honors `WEALTH_DB`.
+
+## Frontend API types
+
+`src/api-types.ts` is generated from the OpenAPI doc; `src/api.ts` aliases its model interfaces to the generated schemas. After changing `models/*.rs` or a handler's `#[utoipa::path]` request/response type:
+
+```sh
+cd frontend && pnpm gen:api   # export_openapi dumps openapi.json, openapi-typescript emits api-types.ts
+pnpm build                    # vue-tsc is the drift check
+```
+
+Never hand-edit the `components['schemas']` aliases or `api-types.ts`; the `api` object, `request()`, and frontend-only types in `api.ts` stay hand-written. `frontend/openapi.json` is gitignored — regenerated from source on every run, so codegen never types a stale server.
 
 ## Verification
 

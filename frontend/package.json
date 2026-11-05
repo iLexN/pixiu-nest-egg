@@ -6,7 +6,8 @@
   "scripts": {
     "dev": "vite",
     "build": "vue-tsc -b && vite build",
-    "preview": "vite preview"
+    "preview": "vite preview",
+    "gen:api": "cargo run -p wealth-backend --bin export_openapi -- openapi.json && openapi-typescript openapi.json -o src/api-types.ts"
   },
   "dependencies": {
     "vue": "^3.5.44"
@@ -17,6 +18,7 @@
     "@vue/tsconfig": "^0.9.1",
     "typescript": "~6.0.3",
     "vite": "^8.3.5",
-    "vue-tsc": "^3.3.13"
+    "vue-tsc": "^3.3.13",
+    "openapi-typescript": "^7.6.0"
   }
 }

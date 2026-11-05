@@ -1,93 +1,6 @@
-export type Market = 'HK' | 'US'
-export type TradeType = 'BUY' | 'SELL'
-export type InputMode = 'HK_TOTAL' | 'US_FEE'
+import type { components } from './api-types'
 
-export type Currency = 'HKD' | 'USD'
-export type CashRole = 'bank' | 'broker'
-
-/** A stored `cash_accounts` row: the 活期 bank accounts plus the broker
- * (IBKR) cash rows. */
-export interface CashAccount {
-  id: number
-  label: string
-  currency: Currency
-  role: CashRole
-  amount: number
-  /** The receipt account `account_id` falls back to for this currency. */
-  is_default_receipt: boolean
-  sort_order: number
-  updated_at: string
-}
-
-/** A stored exchange rate to HKD (`fx_rates`). */
-export interface FxRate {
-  currency: Currency
-  /** HKD per one unit of `currency`. */
-  rate_to_hkd: number
-  updated_at: string
-}
-
-/** The PATCH /fx-rates/{currency} response: nulls right after a clear. */
-export interface FxRateEntry {
-  currency: Currency
-  rate_to_hkd: number | null
-  updated_at: string | null
-}
-
-export interface NewCashAccount {
-  label: string
-  currency: Currency
-  role: CashRole
-  amount?: number
-  is_default_receipt?: boolean
-}
-
-export interface CashAccountPatch {
-  label?: string
-  currency?: Currency
-  role?: CashRole
-  amount?: number
-  is_default_receipt?: boolean
-}
-
-export interface FieldError {
-  field: string
-  message: string
-}
-
-export interface Stock {
-  id: number
-  market: Market
-  code: string
-  ticker: string | null
-  exchange: string | null
-  sector: string | null
-  manual_price: number | null
-  price_updated_at: string | null
-  pe: number | null
-  eps: number | null
-  high52: number | null
-  low52: number | null
-  note: string | null
-  is_active: boolean
-  sort_order: number
-}
-
-export interface Trade {
-  id: number
-  stock_id: number
-  market: Market
-  code: string
-  trade_type: TradeType
-  trade_date: string
-  shares: number
-  unit_price: number
-  fee: number
-  total: number
-  input_mode: InputMode
-  note: string | null
-  unit_price_incl_fee: number | null
-}
+type S = components['schemas']
 
 export interface SummaryStock extends Stock {
   shares_held: number
@@ -105,237 +18,16 @@ export interface SummaryStock extends Stock {
   trade_count: number
 }
 
-export interface SectorRollup {
-  sector: string
-  buy_cost: number
-  buy_cost_priced: number
-  market_value: number | null
-  share_of_market_value: number | null
-  percent_change: number | null
-}
-
-export interface MarketTotals {
-  buy_cost: number
-  buy_cost_priced: number
-  market_value: number | null
-  net_amount: number | null
-  net_percent: number | null
-  excluded_codes: string[]
-  dividends_received: number
-  dividend_return: number | null
-  net_invested: number
-  net_invested_priced: number
-  real_total_return: number | null
-}
-
-/** A 未實現報酬率 + 未實現金額 pair for a market's last-month or max figures. */
-export interface MarketFigures {
-  percent: number | null
-  amount: number
-}
-
-export interface SummaryResponse {
-  market: Market
-  average_price_definition: string
-  stocks: SummaryStock[]
-  sectors: SectorRollup[]
-  totals: MarketTotals
-  last_month: MarketFigures | null
-  max: MarketFigures | null
-}
-
-/** The stored frozen figures for one year; a null field means "no override". */
-export interface YearSnapshot {
-  invested: number | null
-  cost: number | null
-  market_value: number | null
-  sold_pl: number | null
-  updated_at: string
-}
-
 /** The PATCH/freeze response: the snapshot row keyed by market + year. */
 export interface YearSnapshotRow extends YearSnapshot {
   market: Market
   year: number
 }
 
-export interface YearRow {
-  year: number
-  invested: number
-  cost: number
-  market_value: number | null
-  dividends: number
-  yield_on_cost: number | null
-  yield_on_value: number | null
-  monthly_dividend: number
-  dividend_yoy: number | null
-  invested_yoy: number | null
-  sold_pl: number | null
-  snapshot: YearSnapshot | null
-}
-
 export interface YearlySummary {
   market: Market
   today: string
   years: YearRow[]
-}
-
-export interface YearlyPatch {
-  invested?: number | null
-  cost?: number | null
-  market_value?: number | null
-  sold_pl?: number | null
-}
-
-/** The stored `year_review` record: manual inputs plus the seeded overrides
- * for cells whose history was deleted from the workbook. */
-export interface YearReviewRecord {
-  income: number | null
-  invested_adjustment: number | null
-  raise: number | null
-  bond_principal: number | null
-  bond_interest: number | null
-  deposit_principal: number | null
-  deposit_interest: number | null
-}
-
-/** The A–D ledger group of one YearInReview block. */
-export interface YearReviewLedger {
-  asset_gain: number | null
-  asset_gain_avg: number | null
-  spend: number | null
-  spend_avg: number | null
-  living_avg: number | null
-  pool_income: number
-  pool_spend: number
-  pool_balance: number
-  asset_gain_yoy: number | null
-  spend_yoy: number | null
-  living_yoy: number | null
-  pool_income_yoy: number | null
-}
-
-/** The E–G investment group of one YearInReview block. */
-export interface YearReviewInvestment {
-  interest: number
-  interest_avg: number
-  sold_pl: number | null
-  net_investment: number | null
-  transferred: number | null
-  invested: number | null
-  invested_pct: number | null
-  /** 美股P/L: the year's stored US sold_pl, USD — never feeds net_investment. */
-  us_sold_pl: number | null
-  irene_pool: number
-  raise: number | null
-  interest_avg_yoy: number | null
-  invested_yoy: number | null
-}
-
-/** The H–M asset-returns group of one YearInReview block. */
-export interface YearReviewAssets {
-  bond_principal: number | null
-  bond_interest: number | null
-  bond_rate: number | null
-  stock_cost: number | null
-  stock_dividends: number | null
-  stock_rate: number | null
-  stock_now_value: number | null
-  stock_value_rate: number | null
-  /** 美股 figures in USD; only the blended 回報率 convert them to HKD. */
-  us_stock_cost: number | null
-  us_stock_dividends: number | null
-  us_stock_rate: number | null
-  us_stock_now_value: number | null
-  us_stock_value_rate: number | null
-  /** USD figure × stored USD→HKD rate; null while either input is missing. */
-  us_stock_cost_hkd: number | null
-  us_stock_now_value_hkd: number | null
-  deposit_principal: number | null
-  deposit_interest: number | null
-  income_cost_rate: number | null
-  total_value_rate: number | null
-  income_value_rate: number | null
-  income: number | null
-  income_avg: number | null
-  income_yoy: number | null
-  saved: number | null
-  saved_avg: number | null
-  saved_pct: number | null
-  bond_overridden: boolean
-  deposit_overridden: boolean
-}
-
-export interface YearReviewRow {
-  year: number
-  ledger: YearReviewLedger
-  investment: YearReviewInvestment
-  assets: YearReviewAssets
-  record: YearReviewRecord | null
-}
-
-export interface YearReviewResponse {
-  today: string
-  years: YearReviewRow[]
-}
-
-export interface YearReviewPatch {
-  income?: number | null
-  invested_adjustment?: number | null
-  raise?: number | null
-  sold_pl?: number | null
-  bond_principal?: number | null
-  bond_interest?: number | null
-  deposit_principal?: number | null
-  deposit_interest?: number | null
-}
-
-export interface NewStock {
-  market: Market
-  code: string
-  ticker?: string | null
-  exchange?: string | null
-  sector?: string | null
-  manual_price?: number | null
-  pe?: number | null
-  eps?: number | null
-  high52?: number | null
-  low52?: number | null
-  note?: string | null
-}
-
-export interface NewTrade {
-  stock_id?: number
-  market?: Market
-  code?: string
-  trade_type: TradeType
-  trade_date: string
-  shares: number
-  unit_price: number
-  total?: number | null
-  fee?: number | null
-  input_mode?: InputMode
-  note?: string | null
-}
-
-export interface PriceUpdate {
-  market: Market
-  code: string
-  symbol: string
-  price: number
-}
-
-export interface InvalidPriceEntry {
-  symbol: string | null
-  price: number | null
-  reason: string
-}
-
-export interface PriceReport {
-  updated: PriceUpdate[]
-  unmatched: string[]
-  invalid: InvalidPriceEntry[]
-  not_updated: string[]
 }
 
 export interface TradeFilters {
@@ -347,51 +39,6 @@ export interface TradeFilters {
   order?: 'asc' | 'desc'
 }
 
-export type DepositStatus = 'ACTIVE' | 'END'
-
-export interface Deposit {
-  id: number
-  label: string | null
-  bank: string | null
-  principal: number | null
-  rate: number | null
-  rate_derived: boolean
-  interest: number | null
-  start_date: string | null
-  end_date: string
-  /** 收訖日; null while the deposit is still on the books (in 未到期定期). */
-  received_at: string | null
-  /** The cash account the 收訖 banked into; null when nothing was banked. */
-  credited_account_id: number | null
-  /** The amount banked into `credited_account_id`. */
-  credited_amount: number | null
-  /** The cash account the placement debited the principal from. */
-  debited_account_id: number | null
-  /** The amount debited from `debited_account_id` at placement. */
-  debited_amount: number | null
-  note1: string | null
-  note2: string | null
-  sort_order: number
-  total: number
-  status: DepositStatus
-  end_year: number
-  end_month: number
-}
-
-export interface NewDeposit {
-  label?: string | null
-  bank?: string | null
-  principal?: number | null
-  rate?: number | null
-  interest?: number | null
-  start_date?: string | null
-  end_date: string
-  note1?: string | null
-  note2?: string | null
-  /** 扣自: the HKD bank account to debit the principal from; absent = no debit. */
-  debit_account_id?: number | null
-}
-
 export interface ReceiveDepositBody {
   /** 收訖日; defaults to today server-side. */
   received_at?: string
@@ -401,33 +48,6 @@ export interface ReceiveDepositBody {
   bank_in?: boolean
   /** The receipt cash_accounts id; falls back to the HKD default. */
   account_id?: number
-}
-
-export interface ActiveMonthBucket {
-  year: number
-  month: number
-  principal: number
-  interest: number
-  total: number
-}
-
-export interface BankRollup {
-  bank: string
-  principal: number
-  interest: number
-  total: number
-}
-
-export interface YearMonthRow {
-  month: number
-  interest: number
-  payout: number
-  total: number
-}
-
-export interface YearRollup {
-  year: number
-  months: YearMonthRow[]
 }
 
 export interface DepositSummary {
@@ -446,42 +66,6 @@ export interface DepositFilters {
   order?: 'asc' | 'desc'
 }
 
-/** A 家人 定期 record — family money, kept out of the user's own totals. */
-export interface FamilyDeposit {
-  id: number
-  /** The family member the deposit belongs to, e.g. 媽媽 / Irene. */
-  holder: string
-  /** Bank reference, e.g. SC-9179. */
-  label: string | null
-  bank: string | null
-  principal: number | null
-  interest: number | null
-  start_date: string | null
-  end_date: string
-  /** 收訖日; null while the deposit is still on the books. */
-  received_at: string | null
-  /** Free text, e.g. the bank's stepped-rate schedule. */
-  note: string | null
-  sort_order: number
-  total: number
-  status: DepositStatus
-  end_year: number
-  end_month: number
-}
-
-export interface NewFamilyDeposit {
-  holder: string
-  label?: string | null
-  bank?: string | null
-  principal?: number | null
-  interest?: number | null
-  start_date?: string | null
-  end_date: string
-  note?: string | null
-}
-
-export type FamilyDepositPatch = Partial<NewFamilyDeposit>
-
 export interface ReceiveFamilyDepositBody {
   /** 收訖日; defaults to today server-side. */
   received_at?: string
@@ -489,99 +73,11 @@ export interface ReceiveFamilyDepositBody {
   interest?: number
 }
 
-export interface FamilyHolderSummary {
-  holder: string
-  note: string | null
-  /** Unreceived deposits, earliest maturity first. */
-  upcoming: FamilyDeposit[]
-  /** Σ principal over deposits ending in the future. */
-  active_principal: number
-}
-
-export interface FamilyDepositSummary {
-  today: string
-  /** Every holder with deposits or a stored note, sorted by name. */
-  holders: FamilyHolderSummary[]
-  history_years: number[]
-}
-
 export interface FamilyDepositFilters {
   status?: 'active' | 'ended'
   holder?: string
   year?: number
   order?: 'asc' | 'desc'
-}
-
-export type DividendStatus = 'PENDING' | 'RECEIVED'
-
-export interface Dividend {
-  id: number
-  stock_id: number
-  market: Market
-  code: string
-  pay_date: string
-  per_share: number | null
-  shares_held: number | null
-  buy_cost: number | null
-  estimated_amount: number | null
-  received_amount: number | null
-  received_price: number | null
-  withholding_tax: number | null
-  gross_amount: number | null
-  /** The cash account the dividend banked into; null when nothing was banked. */
-  credited_account_id: number | null
-  /** The amount banked into `credited_account_id`. */
-  credited_amount: number | null
-  note: string | null
-  status: DividendStatus
-  amount: number | null
-  yield_on_cost: number | null
-  yield_on_price: number | null
-  variance: number | null
-}
-
-export interface NewDividend {
-  stock_id?: number
-  market?: Market
-  code?: string
-  pay_date: string
-  per_share?: number | null
-  estimated_amount?: number | null
-  shares_held?: number | null
-  buy_cost?: number | null
-  note?: string | null
-}
-
-export interface DividendPatch {
-  stock_id?: number
-  pay_date?: string
-  per_share?: number | null
-  shares_held?: number | null
-  buy_cost?: number | null
-  estimated_amount?: number | null
-  received_amount?: number | null
-  received_price?: number | null
-  /** Input-only 派息 gross; the backend stores received_amount = gross − tax. */
-  gross_amount?: number | null
-  withholding_tax?: number | null
-  note?: string | null
-  refresh_snapshots?: boolean
-  /** On 收訖, bank the amount into a cash account (HK → the HKD default,
-   * US → the USD/IBKR default). Defaults to on. */
-  bank_in?: boolean
-  /** The chosen receipt cash_accounts id; falls back to the currency default. */
-  account_id?: number
-}
-
-export interface DividendStockTotal {
-  code: string
-  received: number
-}
-
-export interface DividendYearRollup {
-  year: number
-  total: number
-  stocks: DividendStockTotal[]
 }
 
 export interface DividendSummary {
@@ -599,28 +95,6 @@ export interface DividendFilters {
   order?: 'asc' | 'desc'
 }
 
-export type BondStatus = 'ACTIVE' | 'MATURED'
-export type CouponStatus = 'PENDING_FIX' | 'PENDING' | 'RECEIVED'
-
-export interface Bond {
-  id: number
-  label: string
-  /** 發行編號, e.g. 03GB2710R */
-  issue_no: string | null
-  principal: number
-  maturity_date: string
-  /** 收訖日 for the principal return; null while matured-but-unreceived. */
-  received_at: string | null
-  /** The cash account the principal banked into; null when nothing was banked. */
-  credited_account_id: number | null
-  /** The amount banked into `credited_account_id`. */
-  credited_amount: number | null
-  note: string | null
-  sort_order: number
-  status: BondStatus
-  next_pay_date: string | null
-}
-
 export interface ReceiveBondBody {
   /** 收訖日; defaults to today server-side. */
   received_at?: string
@@ -632,69 +106,6 @@ export interface ReceiveBondBody {
   credit_amount?: number
 }
 
-export interface NewBond {
-  label: string
-  issue_no?: string | null
-  principal: number
-  maturity_date: string
-  note?: string | null
-}
-
-export interface BondCoupon {
-  id: number
-  bond_id: number
-  /** 付息日 */
-  pay_date: string
-  /** 利息釐定日 */
-  fixing_date: string | null
-  /** 年息率; null = 待定 */
-  annual_rate: number | null
-  /** 每1萬港元債券利息; null = 待定 */
-  per_10k: number | null
-  received_amount: number | null
-  /** The cash account the coupon banked into; null when nothing was banked. */
-  credited_account_id: number | null
-  /** The amount banked into `credited_account_id`. */
-  credited_amount: number | null
-  note: string | null
-  status: CouponStatus
-  /** per_10k × principal ÷ 10000 */
-  expected: number | null
-  variance: number | null
-}
-
-export interface NewBondCoupon {
-  bond_id: number
-  pay_date: string
-  fixing_date?: string | null
-  annual_rate?: number | null
-  per_10k?: number | null
-  received_amount?: number | null
-  note?: string | null
-}
-
-export interface BondCouponPatch {
-  bond_id?: number
-  pay_date?: string
-  fixing_date?: string | null
-  annual_rate?: number | null
-  per_10k?: number | null
-  received_amount?: number | null
-  note?: string | null
-  /** On 收訖, bank the amount into a cash account. Defaults to on. */
-  bank_in?: boolean
-  /** The chosen receipt cash_accounts id; falls back to the HKD default. */
-  account_id?: number
-}
-
-export interface BondWithCoupons extends Bond {
-  coupons: BondCoupon[]
-}
-
-export interface UpcomingCoupon extends BondCoupon {
-  bond_label: string
-}
-
 export interface BondSummary {
   today: string
   totals: { active_principal: number }
@@ -703,161 +114,12 @@ export interface BondSummary {
   upcoming_coupons: UpcomingCoupon[]
 }
 
-/** A rate + net gain pair; `rate` is null when contributions are zero. */
-export interface MpfFigures {
-  rate: number | null
-  gain: number
-}
-
-export interface MpfAccount {
-  id: number
-  label: string
-  trustee: string | null
-  /** 總供款額 */
-  contributions: number
-  /** 帳戶結存 */
-  balance: number
-  plan_name: string | null
-  member_no: string | null
-  sort_order: number
-  rate: number | null
-  gain: number
-  last_month: MpfFigures | null
-  max: MpfFigures
-}
-
-export interface MpfHistoryRow {
-  id: number
-  account_id: number
-  recorded_on: string
-  contributions: number
-  balance: number
-  /** true for month-end rows backfilled automatically, not real updates. */
-  synthetic: boolean
-  rate: number | null
-  gain: number
-}
-
-export interface MpfTotals {
-  buy: number
-  now: number
-  rate: number | null
-  gain: number
-  last_month: MpfFigures | null
-  max: MpfFigures
-}
-
 export interface MpfOverview {
   today: string
   accounts: MpfAccount[]
   totals: MpfTotals
   note: string | null
   history: MpfHistoryRow[]
-}
-
-export interface NewMpfAccount {
-  label: string
-  trustee?: string | null
-  contributions?: number | null
-  balance?: number | null
-  plan_name?: string | null
-  member_no?: string | null
-}
-
-export interface MpfAccountPatch {
-  label?: string
-  trustee?: string | null
-  contributions?: number | null
-  balance?: number | null
-  plan_name?: string | null
-  member_no?: string | null
-}
-
-export type AiaEventKind = 'payment' | 'withdrawal'
-
-export interface AiaPolicy {
-  id: number
-  /** Plan/group name, e.g. 年金 - 2024 - 2029 */
-  label: string
-  policy_no: string | null
-  /** Next premium-due date */
-  next_pay_date: string | null
-  premium_usd: number
-  value_usd: number
-  value_updated_at: string | null
-  remaining_years: number | null
-  withdrew_usd: number
-  note: string | null
-  link: string | null
-  /** Excluded from the portfolio totals */
-  excluded: boolean
-  /** Counted in the AIA account display value */
-  in_account: boolean
-  sort_order: number
-  /** (value + withdrew − premium) ÷ premium; null at zero premium */
-  balance_pct: number | null
-}
-
-export interface NewAiaPolicy {
-  label: string
-  policy_no?: string | null
-  next_pay_date?: string | null
-  premium_usd: number
-  value_usd: number
-  remaining_years?: number | null
-  withdrew_usd: number
-  note?: string | null
-  link?: string | null
-  excluded?: boolean
-  in_account?: boolean
-}
-
-export interface AiaPolicyPatch {
-  label?: string
-  policy_no?: string | null
-  next_pay_date?: string | null
-  premium_usd?: number
-  value_usd?: number
-  remaining_years?: number | null
-  withdrew_usd?: number
-  note?: string | null
-  link?: string | null
-  excluded?: boolean
-  in_account?: boolean
-}
-
-export interface AiaEvent {
-  id: number
-  policy_id: number
-  kind: AiaEventKind
-  event_date: string
-  amount_usd: number
-  note: string | null
-  prev_next_pay_date: string | null
-  prev_remaining_years: number | null
-}
-
-export interface NewAiaEvent {
-  policy_id: number
-  kind: AiaEventKind
-  event_date: string
-  amount_usd: number
-  note?: string | null
-  /** New next premium-due date for payments; defaults to current +1 year. */
-  next_pay_date?: string | null
-}
-
-export interface AiaTotals {
-  premium: number
-  value: number
-  withdrew: number
-  balance_pct: number | null
-  display_value: number
-  premium_hkd: number | null
-  value_hkd: number | null
-  withdrew_hkd: number | null
-  /** The sheet's B5: now − buy − drew in HKD (net position change). */
-  net_change_hkd: number | null
 }
 
 export interface AiaPolicyWithEvents extends AiaPolicy {
@@ -876,113 +138,11 @@ export interface AiaSummary {
   policies: AiaPolicyWithEvents[]
 }
 
-
-export type MonthItemCategory =
-  | 'adjustment'
-  | 'extra_spend'
-  | 'income'
-  | 'entertainment'
-  | 'interest'
-export type ManualAssetLiquidity = 'short' | 'long'
-
-export interface MonthStat {
-  month: string
-  start_cash: number | null
-  salary: number | null
-  total_assets: number | null
-  liquid_assets: number | null
-  total_assets_live: boolean
-  liquid_assets_live: boolean
-  interest: number
-  pool_input: number
-  end_cash_override: number | null
-  note: string | null
-  created_at: string
-  updated_at: string
-  end_cash: number | null
-  month_spend: number | null
-  living_spend: number | null
-  saved: number | null
-  total_change: number | null
-  liquid_change: number | null
-  living_yoy: number | null
-  adjustment_sum: number
-  extra_spend_sum: number
-  income_sum: number
-  entertainment_sum: number
-}
-
-export interface MonthItem {
-  id: number
-  month: string
-  category: MonthItemCategory
-  label: string | null
-  amount: number
-  exclude_from_living: boolean
-  auto_key: string | null
-  note: string | null
-  created_at: string
-}
-
-/** A computed, not-yet-stored item candidate for the month. */
-export interface MonthSuggestion {
-  auto_key: string
-  category: MonthItemCategory
-  label: string | null
-  amount: number
-  source: string
-}
-
-/** One auto interest component: a deposit ending, a received coupon, or a
- * received HK dividend dated in the month. */
-export interface InterestComponent {
-  source: string
-  label: string | null
-  /** Received amount, or the expected/estimated figure while pending; null
-   * when nothing is known yet (待定 coupon, estimate-less dividend). */
-  amount: number | null
-  /** Components are false until 收訖 — preview only, not counted. */
-  received: boolean
-}
-
 export interface MonthDetail {
   month: MonthStat
   items: MonthItem[]
   suggestions: MonthSuggestion[]
   interest_auto: InterestComponent[]
-}
-
-export interface MonthYearSummary {
-  year: number
-  total_change_sum: number | null
-  total_change_avg: number | null
-  spend_sum: number | null
-  spend_avg: number | null
-  living_avg: number | null
-  entertainment_sum: number
-  interest_sum: number
-  interest_avg: number
-  pool_income: number
-  pool_balance: number
-  pool_input_sum: number
-  months: number
-  /** 投資純利 — null until HK sold P/L is computed. */
-  net_investment: number | null
-}
-
-export interface MonthRunningAverages {
-  total_change_avg: number | null
-  liquid_change_avg: number | null
-  saved_avg: number | null
-  interest_avg: number | null
-}
-
-export interface PoolTotals {
-  ilex_input: number
-  irene_input: number
-  irene_payable: number
-  avg_spend: number
-  avg_input: number
 }
 
 export interface MonthSummary {
@@ -994,421 +154,119 @@ export interface MonthSummary {
   pool_rate_year: number
 }
 
-export interface AppSettings {
-  salary: number | null
-  pool_rate: number | null
-  pool_rate_year: number
-  /** The effective quarterly 差餉 amount in the forecast 繳費 row. */
-  bill_amount: number
-  /** The effective 半流動資金 buffer share of 流動資產 (0.25 while unset). */
-  semi_liquid_target: number
-  /** `money_master.start_date` (YYYY-MM-DD) — the challenge start. */
-  money_master_start_date: string | null
-  /** `money_master.saved` — the bank app's saved figure. */
-  money_master_saved: number | null
-  money_master_target_months: number | null
-  money_master_target_amount: number | null
-  /** Optional overrides pinning the derived month/coming-save while set. */
-  money_master_month_now: number | null
-  money_master_coming_save: number | null
-  /** `overview.goal1_amount`/`goal2_amount` — the 1st/2nd 目標 targets
-   * (Overview!K12/K18); null while unset. */
-  goal1_amount: number | null
-  goal2_amount: number | null
-  /** The effective 3rd-target constants (1.07 / 30 while unset). */
-  goal3_inflation: number
-  goal3_years: number
-  /** The effective Final Target salary-replacement ratio (0.7 while unset). */
-  final_replacement: number
-}
-
-export interface MonthStatPatch {
-  start_cash?: number | null
-  salary?: number | null
-  total_assets?: number | null
-  liquid_assets?: number | null
-  pool_input?: number
-  end_cash_override?: number | null
-  note?: string | null
-  recapture?: boolean
-}
-
-export interface NewMonthItem {
-  category: MonthItemCategory
-  label?: string | null
-  amount: number
-  exclude_from_living?: boolean
-  auto_key?: string | null
-  note?: string | null
-}
-
-export interface MonthItemPatch {
-  category?: MonthItemCategory
-  label?: string | null
-  amount?: number
-  exclude_from_living?: boolean
-  note?: string | null
-}
-
-export interface AppSettingsPatch {
-  salary?: number | null
-  pool_rate?: number | null
-  pool_rate_year?: number
-  /** `null` resets the 繳費 amount to the default. */
-  bill_amount?: number | null
-  /** `null` resets the 半流動資金 buffer ratio to the 25% default. */
-  semi_liquid_target?: number | null
-  money_master_start_date?: string | null
-  money_master_saved?: number | null
-  money_master_target_months?: number | null
-  money_master_target_amount?: number | null
-  /** `null` clears the override so `month_now` derives from `start_date`. */
-  money_master_month_now?: number | null
-  /** `null` clears the override so `coming_save` derives again. */
-  money_master_coming_save?: number | null
-  /** `null` clears the amount, blanking that milestone's figures. */
-  goal1_amount?: number | null
-  goal2_amount?: number | null
-  /** `null` resets the constant to its default (1.07 / 30 / 0.7). */
-  goal3_inflation?: number | null
-  goal3_years?: number | null
-  final_replacement?: number | null
-}
-
-/** A forecast plan kind — the 預測 row the item belongs to. */
-export type ForecastItemKind =
-  | 'hs_deposit'
-  | 'sc_deposit'
-  | 'interest'
-  | 'tax'
-  | 'stock'
-  | 'bill'
-  | 'other'
-
-/** One stored plan line of the 預測 grid. */
-export interface ForecastItem {
-  id: number
-  /** `YYYY-MM-01` — the month the line lands in. */
-  month: string
-  kind: ForecastItemKind
-  amount: number
-  /** `YYYY-MM-01` return-month override; null uses the kind's default lag. */
-  return_month: string | null
-  note: string | null
-  sort_order: number
-  created_at: string
-}
-
-export interface NewForecastItem {
-  kind: ForecastItemKind
-  amount: number
-  /** `YYYY-MM` or `YYYY-MM-01`; deposit kinds only. */
-  return_month?: string | null
-  note?: string | null
-}
-
-export interface ForecastItemPatch {
-  kind?: ForecastItemKind
-  amount?: number
-  return_month?: string | null
-  note?: string | null
-}
-
-/** A real deposit placed in the month — a read-only line in its bank's plan
- * row (HS → 定期 HS, else SC高息馬拉松). */
-export interface ForecastPlacement {
-  deposit_id: number
-  label: string | null
-  bank: string | null
-  principal: number
-  /** `YYYY-MM-DD` — the day the money left 活期. */
-  start_date: string
-}
-
-/** A real HK trade dated in the month — a read-only `已交易` line in the
- * 股票 row. US trades never reach the forecast (they settle inside IBKR). */
-export interface ForecastTrade {
-  trade_id: number
-  code: string
-  trade_type: TradeType
-  /** `YYYY-MM-DD` — the day the trade moved 活期. */
-  trade_date: string
-  /** Signed cash flow: −`total` for BUY, +`total` for SELL. */
-  amount: number
-}
-
-/** One month column of the 預測 grid (sheet columns B:H). */
-export interface ForecastMonth {
-  month: string
-  start: number | null
-  salary: number | null
-  spend: number | null
-  deposit_finish: number
-  interest: number
-  /** The auto receipts inside `interest` — pending ones count at their
-   * expected figure; `received` marks confirmed ones. */
-  interest_components: InterestComponent[]
-  bill: number | null
-  plan_items: ForecastItem[]
-  deposit_placements: ForecastPlacement[]
-  trade_lines: ForecastTrade[]
-  /** The month's IBKR transfers — read-only `已轉帳` lines in the 股票 row. */
-  ibkr_lines: ForecastIbkrTransfer[]
-  deposit_return: number
-  cash: number | null
-  locked: number | null
-  semi_liquid: number | null
-  ref_check: number | null
-}
-
-export interface ForecastResponse {
-  bill_amount: number
-  months: ForecastMonth[]
-}
-
-export interface ManualAsset {
-  id: number
-  label: string
-  liquidity: ManualAssetLiquidity
-  amount: number
-  note: string | null
-  sort_order: number
-  updated_at: string
-}
-
-export interface NewManualAsset {
-  label: string
-  liquidity?: ManualAssetLiquidity
-  amount: number
-  note?: string | null
-}
-
-export interface ManualAssetPatch {
-  label?: string
-  liquidity?: ManualAssetLiquidity
-  amount?: number
-  note?: string | null
-}
-
-/** The 美股 sheet's IBKR account block: manual inputs + derived cross-checks. */
-export interface IbkrBlock {
-  transferred_hkd: number | null
-  now_value: number | null
-  hkd_cash: number | null
-  usd_cash: number | null
-  stock_value_usd: number | null
-  computed_total_hkd: number | null
-  net: number | null
-  net_pct: number | null
-  vs_now_value: number | null
-}
-
-export interface IbkrPatch {
-  now_value?: number | null
-  hkd_cash?: number | null
-  usd_cash?: number | null
-}
-
-/** An IBKR transfer dated in the month — a read-only `已轉帳` line in the
- * 股票 row beside the trade lines. */
-export interface ForecastIbkrTransfer {
-  transfer_id: number
-  /** `YYYY-MM-DD` — the day the money left the bank account. */
-  transfer_date: string
-  /** Signed cash flow: −`amount_hkd`. */
-  amount: number
-}
-
-/** One `ibkr_transfers` log row; NULL account fields mark log-only legacy
- * rows or a deleted account. */
-export interface IbkrTransfer {
-  id: number
-  /** `YYYY-MM-DD` — the day the cash moved. */
-  transfer_date: string
-  amount_hkd: number
-  from_account_id: number | null
-  from_account_label: string | null
-  broker_account_id: number | null
-  created_at: string
-}
-
-export interface NewIbkrTransfer {
-  /** Finite HKD amount, greater than 0. */
-  amount_hkd: number
-  /** Optional `YYYY-MM-DD`, not after today; defaults to today. */
-  transfer_date?: string
-  /** Optional source account id; defaults to the `HS` bank account. */
-  from_account_id?: number
-}
-
-export interface OverviewAssetRow {
-  key: string
-  label: string
-  amount: number | null
-  share: number | null
-  manual_asset_id: number | null
-  note: string | null
-}
-
-export interface SemiLiquid {
-  deposits: number
-  cash_rows: CashAccount[]
-  cash_sum: number
-  total: number
-  vs_quarter_liquid: number
-  share: number | null
-}
-
-export interface TwelveMonthAverages {
-  total_change: number | null
-  month_spend: number | null
-  living_spend: number | null
-  living_budget: number | null
-  living_budget_low: boolean
-  living_budget_floor: number
-  saved: number | null
-  interest: number | null
-  pool_balance: number
-  window_start: string | null
-  window_end: string | null
-}
-
-/** The 投資目標 block (Overview!J22:N27). */
-export interface InvestTargetRow {
-  year: number
-  invested: number | null
-  raise: number | null
-  interest: number
-  pool_spend: number
-  target: number | null
-  remain: number | null
-  growth: number | null
-}
-
-export interface InvestTargets {
-  avg_invested: number | null
-  rows: InvestTargetRow[]
-}
-
-/** The 策略 block (Overview!J3:K7): 總數 re-partitioned into liquidity tiers. */
-export interface LiquidityTiers {
-  can_use: number | null
-  cannot_use: number | null
-  short_term: number | null
-  long_term: number | null
-}
-
-/** The Money Master challenge block (Overview!J29:N35): the bank app's
- * stored figures plus the derived month, coming-save, and progress cells. */
-export interface MoneyMaster {
-  start_date: string | null
-  /** Effective challenge month — override or full months since start + 1. */
-  month_now: number | null
-  months_left: number | null
-  saved: number | null
-  target_months: number | null
-  target_amount: number | null
-  /** Effective 每月需儲 — override or derived; negative while ahead. */
-  coming_save: number | null
-  avg_per_month: number | null
-  yearly_rate: number | null
-  time_progress: number | null
-  saved_progress: number | null
-  progress_gap: number | null
-  /** salary − coming_save; may exceed salary while coming_save < 0. */
-  can_use: number | null
-}
-
-/** One J10:M20 milestone (1st/2nd 目標): a stored target plus the derived
- * remain/years/ETA — all null while inputs are missing, and years/eta null
- * once the goal is reached (remain ≤ 0). */
-export interface GoalMilestone {
-  /** K12/K18. */
-  target: number | null
-  /** K14/K20 = target − current_invest. */
-  remain: number | null
-  /** L14/L20 = remain ÷ saving_year. */
-  years: number | null
-  /** J11/J17 = today + round(365 × years) days, YYYY-MM-DD. */
-  eta: string | null
-}
-
-/** One N13:P16 formula goal (3rd target / Final Target). */
-export interface FormulaGoal {
-  target: number | null
-  remain: number | null
-  /** O16/P16; null once the goal is reached. */
-  years: number | null
-  /** today + round(365 × years) days, YYYY-MM-DD; null with years. */
-  eta: string | null
-}
-
-/** The 目標 block (Overview!J10:M20 + N13:P16). */
-export interface OverviewGoals {
-  /** N4 = the latest completed year's income_value_rate, with its year. */
-  n4_rate: number | null
-  n4_year: number | null
-  /** K13 = 港股 + 債券 + IBKR. */
-  current_invest: number | null
-  /** L12/M12: the saving pace per year/month. */
-  saving_year: number | null
-  saving_month: number | null
-  /** L13/M13 = K13 × N4. */
-  passive_return_year: number | null
-  passive_return_month: number | null
-  /** The 1st/2nd 目標 rows, in order. */
-  milestones: GoalMilestone[]
-  /** O14:O16 — budget × inflation × 12 × years vs 流動資產. */
-  third: FormulaGoal
-  /** P14:P16 — salary × replacement × 12 ÷ N4 vs 總數. */
-  final_goal: FormulaGoal
-  /** The effective formula constants (defaults while unset). */
-  goal3_inflation: number
-  goal3_years: number
-  final_replacement: number
-  /** 'Month Stat' running averages (L8/N8/C8, monthly) — the last two L12
-   * terms plus the Final goal's pace base. */
-  saved_avg: number | null
-  interest_avg: number | null
-  total_change_avg: number | null
-}
-
-export interface OverviewResponse {
-  today: string
-  rate: number | null
-  salary: number | null
-  total_assets: number
-  liquid_assets: number
-  liquid_ratio: number | null
-  assets: OverviewAssetRow[]
-  assets_sum: number
-  semi_liquid: SemiLiquid
-  /** The effective buffer ratio the `C14` difference uses (0.25 while unset). */
-  semi_liquid_target: number
-  ibkr: IbkrBlock
-  averages: TwelveMonthAverages
-  invest_targets: InvestTargets
-  liquidity_tiers: LiquidityTiers
-  money_master: MoneyMaster
-  goals: OverviewGoals
-}
-
-/** Carries the server's field-level messages so forms can show them inline. */
-export class ApiError extends Error {
-  status: number
-  fields: FieldError[]
-
-  constructor(status: number, message: string, fields: FieldError[]) {
-    super(message)
-    this.name = 'ApiError'
-    this.status = status
-    this.fields = fields
-  }
-
-  fieldMessage(field: string): string | undefined {
-    return this.fields.find((f) => f.field === field)?.message
-  }
-}
+export type Market = S['Market']
+export type TradeType = S['TradeType']
+export type InputMode = S['InputMode']
+export type Currency = S['Currency']
+export type CashRole = S['CashRole']
+export type CashAccount = S['CashAccount']
+export type FxRate = S['FxRate']
+export type FxRateEntry = S['FxRateEntry']
+export type NewCashAccount = S['NewCashAccount']
+export type CashAccountPatch = S['CashAccountPatch']
+export type FieldError = S['FieldError']
+export type Stock = S['Stock']
+export type Trade = S['Trade']
+export type SectorRollup = S['SectorRollup']
+export type MarketTotals = S['MarketTotals']
+export type MarketFigures = S['MarketFigures']
+export type SummaryResponse = S['SummaryResponse']
+export type YearSnapshot = S['YearSnapshot']
+export type YearRow = S['YearRow']
+export type YearlyPatch = S['YearlyPatch']
+export type YearReviewRecord = S['YearReviewRecord']
+export type YearReviewLedger = S['YearReviewLedger']
+export type YearReviewInvestment = S['YearReviewInvestment']
+export type YearReviewAssets = S['YearReviewAssets']
+export type YearReviewRow = S['YearReviewRow']
+export type YearReviewResponse = S['YearReviewResponse']
+export type YearReviewPatch = S['YearReviewPatch']
+export type NewStock = S['NewStock']
+export type NewTrade = S['NewTrade']
+export type PriceUpdate = S['PriceUpdate']
+export type InvalidPriceEntry = S['InvalidPriceEntry']
+export type PriceReport = S['PriceReport']
+export type DepositStatus = S['DepositStatus']
+export type Deposit = S['Deposit']
+export type NewDeposit = S['NewDeposit']
+export type ActiveMonthBucket = S['ActiveMonthBucket']
+export type BankRollup = S['BankRollup']
+export type YearMonthRow = S['YearMonthRow']
+export type YearRollup = S['YearRollup']
+export type FamilyDeposit = S['FamilyDeposit']
+export type NewFamilyDeposit = S['NewFamilyDeposit']
+export type FamilyDepositPatch = S['FamilyDepositPatch']
+export type FamilyHolderSummary = S['FamilyHolderSummary']
+export type FamilyDepositSummary = S['FamilyDepositSummary']
+export type DividendStatus = S['DividendStatus']
+export type Dividend = S['Dividend']
+export type NewDividend = S['NewDividend']
+export type DividendPatch = S['DividendPatch']
+export type DividendStockTotal = S['DividendStockTotal']
+export type DividendYearRollup = S['DividendYearRollup']
+export type BondStatus = S['BondStatus']
+export type CouponStatus = S['CouponStatus']
+export type Bond = S['Bond']
+export type NewBond = S['NewBond']
+export type BondCoupon = S['BondCoupon']
+export type NewBondCoupon = S['NewBondCoupon']
+export type BondCouponPatch = S['BondCouponPatch']
+export type BondWithCoupons = S['BondWithCoupons']
+export type UpcomingCoupon = S['UpcomingCoupon']
+export type MpfFigures = S['MpfFigures']
+export type MpfAccount = S['MpfAccount']
+export type MpfHistoryRow = S['MpfHistoryRow']
+export type MpfTotals = S['MpfTotals']
+export type NewMpfAccount = S['NewMpfAccount']
+export type MpfAccountPatch = S['MpfAccountPatch']
+export type AiaEventKind = S['AiaEventKind']
+export type AiaPolicy = S['AiaPolicy']
+export type NewAiaPolicy = S['NewAiaPolicy']
+export type AiaPolicyPatch = S['AiaPolicyPatch']
+export type AiaEvent = S['AiaEvent']
+export type NewAiaEvent = S['NewAiaEvent']
+export type AiaTotals = S['AiaTotals']
+export type MonthItemCategory = S['MonthItemCategory']
+export type ManualAssetLiquidity = S['ManualAssetLiquidity']
+export type MonthStat = S['MonthStat']
+export type MonthItem = S['MonthItem']
+export type MonthSuggestion = S['MonthSuggestion']
+export type InterestComponent = S['InterestComponent']
+export type MonthYearSummary = S['MonthYearSummary']
+export type MonthRunningAverages = S['MonthRunningAverages']
+export type PoolTotals = S['PoolTotals']
+export type AppSettings = S['AppSettings']
+export type MonthStatPatch = S['MonthStatPatch']
+export type NewMonthItem = S['NewMonthItem']
+export type MonthItemPatch = S['MonthItemPatch']
+export type AppSettingsPatch = S['AppSettingsPatch']
+export type ForecastItemKind = S['ForecastItemKind']
+export type ForecastItem = S['ForecastItem']
+export type NewForecastItem = S['NewForecastItem']
+export type ForecastItemPatch = S['ForecastItemPatch']
+export type ForecastPlacement = S['ForecastPlacement']
+export type ForecastTrade = S['ForecastTrade']
+export type ForecastMonth = S['ForecastMonth']
+export type ForecastResponse = S['ForecastResponse']
+export type ManualAsset = S['ManualAsset']
+export type NewManualAsset = S['NewManualAsset']
+export type ManualAssetPatch = S['ManualAssetPatch']
+export type IbkrBlock = S['IbkrBlock']
+export type IbkrPatch = S['IbkrPatch']
+export type ForecastIbkrTransfer = S['ForecastIbkrTransfer']
+export type IbkrTransfer = S['IbkrTransfer']
+export type NewIbkrTransfer = S['NewIbkrTransfer']
+export type OverviewAssetRow = S['OverviewAssetRow']
+export type SemiLiquid = S['SemiLiquid']
+export type TwelveMonthAverages = S['TwelveMonthAverages']
+export type InvestTargetRow = S['InvestTargetRow']
+export type InvestTargets = S['InvestTargets']
+export type LiquidityTiers = S['LiquidityTiers']
+export type MoneyMaster = S['MoneyMaster']
+export type GoalMilestone = S['GoalMilestone']
+export type FormulaGoal = S['FormulaGoal']
+export type OverviewGoals = S['OverviewGoals']
+export type OverviewResponse = S['OverviewResponse']
 
 async function request<T>(path: string, init?: RequestInit): Promise<T> {
   const response = await fetch(`/api${path}`, {

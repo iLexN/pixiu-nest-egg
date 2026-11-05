@@ -13,3 +13,4 @@ data/
 # personal financial data — never commit
 財富分析報告.xlsx
 portfolio.csv
+frontend/openapi.json
