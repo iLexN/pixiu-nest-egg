@@ -7,10 +7,6 @@ use sqlx::SqlitePool;
 use crate::calc::FieldError;
 use crate::models::{AppSettings, AppSettingsPatch};
 use crate::service::ServiceError;
-use crate::service::months::{
-    DEFAULT_FINAL_REPLACEMENT, DEFAULT_GOAL3_INFLATION, DEFAULT_GOAL3_YEARS,
-    DEFAULT_SEMI_LIQUID_TARGET,
-};
 use crate::store::months::{self, DEFAULT_BILL_AMOUNT};
 use crate::store::{StoreError, settings, today};
 
@@ -170,4 +166,34 @@ pub async fn update(
         months::set_pool_rate(pool, year, rate).await?;
     }
     get(pool).await.map_err(ServiceError::from)
+}
+
+/// `goal3.inflation` / `goal3.years` / `final.replacement` — the sheet
+/// literals while no `app_meta` override exists.
+pub const DEFAULT_GOAL3_INFLATION: f64 = 1.07;
+pub const DEFAULT_GOAL3_YEARS: f64 = 30.0;
+pub const DEFAULT_FINAL_REPLACEMENT: f64 = 0.7;
+/// The semi-liquid target ratio's sheet literal while no `app_meta` override
+/// exists.
+pub const DEFAULT_SEMI_LIQUID_TARGET: f64 = 0.25;
+
+/// The effective 3rd-target/Final-Target constants — the sheet literals
+/// (`1.07`, `30`, `0.7`) while unset.
+pub async fn goal_constants(pool: &SqlitePool) -> Result<(f64, f64, f64), StoreError> {
+    let stored = crate::store::settings::Settings::load(pool).await?;
+    Ok((
+        stored.goal3_inflation.unwrap_or(DEFAULT_GOAL3_INFLATION),
+        stored.goal3_years.unwrap_or(DEFAULT_GOAL3_YEARS),
+        stored
+            .final_replacement
+            .unwrap_or(DEFAULT_FINAL_REPLACEMENT),
+    ))
+}
+
+/// The configured 半流動資金 target share of 流動資產 — `0.25` while unset.
+pub async fn semi_liquid_target(pool: &SqlitePool) -> Result<f64, StoreError> {
+    Ok(crate::store::settings::Settings::load(pool)
+        .await?
+        .semi_liquid_target
+        .unwrap_or(DEFAULT_SEMI_LIQUID_TARGET))
 }

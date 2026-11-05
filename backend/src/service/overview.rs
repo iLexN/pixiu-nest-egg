@@ -112,7 +112,7 @@ pub async fn build(pool: &SqlitePool) -> Result<OverviewResponse, StoreError> {
     let ibkr = ibkr_block(pool).await?;
     let stored = settings::Settings::load(pool).await?;
     let salary = stored.salary;
-    let semi_target = super::months::semi_liquid_target(pool).await?;
+    let semi_target = super::settings::semi_liquid_target(pool).await?;
     let manual = crate::store::months::load_assets(pool).await?;
     let bank_accounts = cash_accounts::load_all(pool).await?;
 
@@ -223,7 +223,7 @@ pub async fn build(pool: &SqlitePool) -> Result<OverviewResponse, StoreError> {
         .find(|row| row.year == n4_year)
         .and_then(|row| row.assets.income_value_rate.map(|rate| (row.year, rate)));
     let (goal3_inflation, goal3_years, final_replacement) =
-        super::months::goal_constants(pool).await?;
+        super::settings::goal_constants(pool).await?;
     let goals = crate::calc::overview_goals(&crate::calc::OverviewGoalsInput {
         // K13 = 港股 + 債券 + IBKR — absent while the rate-derived B9 is.
         current_invest: ibkr

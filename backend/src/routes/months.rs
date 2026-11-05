@@ -646,7 +646,7 @@ mod tests {
         .0;
         assert_eq!(updated.semi_liquid_target, 0.3);
         assert_eq!(
-            crate::service::months::semi_liquid_target(&pool)
+            crate::service::settings::semi_liquid_target(&pool)
                 .await
                 .unwrap(),
             0.3
@@ -692,15 +692,15 @@ mod tests {
         assert_eq!(current.goal2_amount, None);
         assert_eq!(
             current.goal3_inflation,
-            crate::service::months::DEFAULT_GOAL3_INFLATION
+            crate::service::settings::DEFAULT_GOAL3_INFLATION
         );
         assert_eq!(
             current.goal3_years,
-            crate::service::months::DEFAULT_GOAL3_YEARS
+            crate::service::settings::DEFAULT_GOAL3_YEARS
         );
         assert_eq!(
             current.final_replacement,
-            crate::service::months::DEFAULT_FINAL_REPLACEMENT
+            crate::service::settings::DEFAULT_FINAL_REPLACEMENT
         );
 
         let updated = settings::update(
@@ -718,7 +718,7 @@ mod tests {
         assert_eq!(updated.goal3_inflation, 1.05);
         assert_eq!(
             updated.goal3_years,
-            crate::service::months::DEFAULT_GOAL3_YEARS
+            crate::service::settings::DEFAULT_GOAL3_YEARS
         );
 
         // `null` clears an amount and resets a constant to its default.
@@ -736,7 +736,7 @@ mod tests {
         assert_eq!(reset.goal1_amount, None);
         assert_eq!(
             reset.goal3_inflation,
-            crate::service::months::DEFAULT_GOAL3_INFLATION
+            crate::service::settings::DEFAULT_GOAL3_INFLATION
         );
 
         // Negative amounts and non-positive constants are rejected.

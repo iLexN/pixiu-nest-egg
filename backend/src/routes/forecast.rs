@@ -79,7 +79,7 @@ pub async fn forecast(State(state): State<AppState>) -> Result<Json<ForecastResp
     let bill_amount = stored
         .bill_amount
         .unwrap_or(crate::store::months::DEFAULT_BILL_AMOUNT);
-    let semi_liquid_target = crate::service::months::semi_liquid_target(pool).await?;
+    let semi_liquid_target = crate::service::settings::semi_liquid_target(pool).await?;
     let first = crate::service::months::live_from();
     // The first column anchors on the current month's 月初(出糧後); while it is
     // unset the live 活期 sum stands in.
