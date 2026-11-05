@@ -4,7 +4,6 @@ use axum::http::StatusCode;
 use serde::Serialize;
 
 use super::AppState;
-use super::patch::{merge, merge_text};
 use crate::calc::{MpfAccountInput, MpfTotals, mpf_totals, validate_mpf_account};
 use crate::error::{ApiError, ErrorBody};
 use crate::models::{MpfAccount, MpfAccountPatch, MpfHistoryRow, MpfNotePatch, NewMpfAccount};
@@ -113,52 +112,9 @@ pub async fn update(
     Path(id): Path<i64>,
     Json(patch): Json<MpfAccountPatch>,
 ) -> Result<Json<MpfAccount>, ApiError> {
-    let existing = mpf::load_stored(&state.pool, id).await?;
-
-    let label = patch.label.unwrap_or(existing.label);
-    let trustee = merge_text(patch.trustee, existing.trustee);
-    let plan_name = merge_text(patch.plan_name, existing.plan_name);
-    let member_no = merge_text(patch.member_no, existing.member_no);
-    let contributions = merge(patch.contributions.flatten(), existing.contributions);
-    let balance = merge(patch.balance.flatten(), existing.balance);
-
-    validate_mpf_account(MpfAccountInput {
-        label: &label,
-        contributions,
-        balance,
-    })
-    .map_err(ApiError::Validation)?;
-
-    let values_changed = contributions != existing.contributions || balance != existing.balance;
-
-    let mut tx = state.pool.begin().await?;
-    mpf::update_account(
-        &mut tx,
-        id,
-        label.trim(),
-        &trustee,
-        contributions,
-        balance,
-        &plan_name,
-        &member_no,
-    )
-    .await?;
-    if values_changed {
-        mpf::record_history(
-            &mut tx,
-            id,
-            (existing.contributions, existing.balance),
-            (contributions, balance),
-            today(),
-            existing.created_on,
-        )
-        .await?;
-    }
-    tx.commit().await?;
-
-    let stored = mpf::load_stored(&state.pool, id).await?;
-    let history = mpf::load_history(&state.pool, Some(id)).await?;
-    Ok(Json(present_account(&stored, &history, today())))
+    Ok(Json(
+        crate::service::mpf::update(&state.pool, id, &patch).await?,
+    ))
 }
 
 /// An account with history rows is refused so the record never loses its past.

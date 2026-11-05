@@ -39,14 +39,26 @@ pub async fn load_records(
 pub async fn record_row(
     conn: &mut sqlx::SqliteConnection,
     year: i32,
-) -> Result<Option<sqlx::sqlite::SqliteRow>, StoreError> {
-    Ok(sqlx::query(
+) -> Result<Option<YearReviewRecord>, StoreError> {
+    let row = sqlx::query(
         "SELECT income, invested_adjustment, salary_raise, bond_principal, bond_interest, \
          deposit_principal, deposit_interest FROM year_review WHERE year = ?",
     )
     .bind(year)
     .fetch_optional(&mut *conn)
-    .await?)
+    .await?;
+    row.map(|row| {
+        Ok(YearReviewRecord {
+            income: row.try_get("income")?,
+            invested_adjustment: row.try_get("invested_adjustment")?,
+            raise: row.try_get("salary_raise")?,
+            bond_principal: row.try_get("bond_principal")?,
+            bond_interest: row.try_get("bond_interest")?,
+            deposit_principal: row.try_get("deposit_principal")?,
+            deposit_interest: row.try_get("deposit_interest")?,
+        })
+    })
+    .transpose()
 }
 
 /// Clearing every stored value removes the row. Inside the caller's

@@ -129,6 +129,21 @@ pub async fn insert_stock(
     Ok(id)
 }
 
+/// Persist a market's full ordering in one transaction: `stock_ids[i]` gets
+/// `sort_order = i + 1`. The route validates the id set; this owns the write.
+pub async fn reorder(
+    pool: &SqlitePool,
+    market: Market,
+    stock_ids: &[i64],
+) -> Result<(), StoreError> {
+    let mut tx = pool.begin().await?;
+    for (index, stock_id) in stock_ids.iter().enumerate() {
+        set_sort_order(&mut tx, index as i64 + 1, *stock_id, market).await?;
+    }
+    tx.commit().await?;
+    Ok(())
+}
+
 pub async fn set_sort_order(
     conn: &mut sqlx::SqliteConnection,
     sort_order: i64,

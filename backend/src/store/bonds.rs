@@ -216,7 +216,17 @@ pub async fn mark_received(
 /// Deleting a bond removes its coupons: nothing outside the bond references
 /// them. Returns the bond rows deleted, so the handler can tell "not found"
 /// apart from success.
-pub async fn delete_with_coupons(
+/// Delete a bond and its coupons in one transaction — the single-store
+/// entry point (see also [`delete_with_coupons_tx`] for callers inside a
+/// larger transaction).
+pub async fn delete_with_coupons(pool: &SqlitePool, id: i64) -> Result<u64, StoreError> {
+    let mut tx = pool.begin().await?;
+    let affected = delete_with_coupons_tx(&mut tx, id).await?;
+    tx.commit().await?;
+    Ok(affected)
+}
+
+pub async fn delete_with_coupons_tx(
     conn: &mut sqlx::SqliteConnection,
     id: i64,
 ) -> Result<u64, StoreError> {

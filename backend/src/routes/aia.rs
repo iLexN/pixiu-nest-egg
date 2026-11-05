@@ -7,14 +7,11 @@ use super::AppState;
 use super::mpf::NoteResponse;
 use super::patch::{merge_num, merge_text};
 use crate::calc::{
-    AiaEventInput, AiaPolicyFacts, AiaPolicyInput, AiaTotals, aia_totals, apply_aia_payment,
-    apply_aia_withdrawal, next_premium_due, undo_aia_event_amount, validate_aia_event,
-    validate_aia_policy,
+    AiaEventInput, AiaPolicyFacts, AiaPolicyInput, AiaTotals, aia_totals, next_premium_due,
+    validate_aia_event, validate_aia_policy,
 };
 use crate::error::{ApiError, ErrorBody};
-use crate::models::{
-    AiaEvent, AiaEventKind, AiaNotePatch, AiaPolicy, AiaPolicyPatch, NewAiaEvent, NewAiaPolicy,
-};
+use crate::models::{AiaEvent, AiaNotePatch, AiaPolicy, AiaPolicyPatch, NewAiaEvent, NewAiaPolicy};
 use crate::store::aia as store;
 use crate::store::{now_timestamp, today};
 
@@ -149,11 +146,9 @@ pub async fn remove(
     State(state): State<AppState>,
     Path(id): Path<i64>,
 ) -> Result<StatusCode, ApiError> {
-    let mut tx = state.pool.begin().await?;
-    if store::delete_with_events(&mut tx, id).await? == 0 {
+    if store::delete_with_events(&state.pool, id).await? == 0 {
         return Err(ApiError::NotFound(format!("aia policy {id} not found")));
     }
-    tx.commit().await?;
     Ok(StatusCode::NO_CONTENT)
 }
 
@@ -292,60 +287,14 @@ pub async fn create_event(
     })
     .map_err(ApiError::Validation)?;
 
-    let mut tx = state.pool.begin().await?;
-    let policy = store::row_to_policy(&store::policy_row(&mut *tx, body.policy_id).await?)?;
-
-    let (prev_next_pay_date, prev_remaining_years) = match validated.kind {
-        AiaEventKind::Payment => (policy.next_pay_date.clone(), policy.remaining_years),
-        AiaEventKind::Withdrawal => (None, None),
-    };
-
-    let now = now_timestamp();
-    let id = store::insert_event(
-        &mut tx,
+    let id = crate::service::aia::create_event(
+        &state.pool,
         body.policy_id,
-        validated.kind.as_str(),
-        &validated.event_date,
-        validated.amount_usd,
+        &validated,
         body.note.as_deref(),
-        prev_next_pay_date.as_deref(),
-        prev_remaining_years,
-        &now,
     )
     .await?;
 
-    match validated.kind {
-        AiaEventKind::Payment => {
-            let current_next = policy.next_pay_date.as_deref().map(parse_day).transpose()?;
-            let submitted_next = validated
-                .next_pay_date
-                .as_deref()
-                .map(parse_day)
-                .transpose()?;
-            let outcome = apply_aia_payment(
-                policy.premium_usd,
-                policy.remaining_years,
-                current_next,
-                validated.amount_usd,
-                submitted_next,
-            );
-            store::apply_payment_to_policy(
-                &mut tx,
-                body.policy_id,
-                outcome.premium_usd,
-                outcome.remaining_years,
-                outcome.next_pay_date.map(|date| date.to_string()),
-                &now,
-            )
-            .await?;
-        }
-        AiaEventKind::Withdrawal => {
-            let withdrew = apply_aia_withdrawal(policy.withdrew_usd, validated.amount_usd);
-            store::apply_withdrawal_to_policy(&mut tx, body.policy_id, withdrew, &now).await?;
-        }
-    }
-
-    tx.commit().await?;
     Ok((
         StatusCode::CREATED,
         Json(store::load_event(&state.pool, id).await?),
@@ -368,34 +317,6 @@ pub async fn remove_event(
     State(state): State<AppState>,
     Path(id): Path<i64>,
 ) -> Result<StatusCode, ApiError> {
-    let mut tx = state.pool.begin().await?;
-    let event = store::event_row(&mut tx, id).await?;
-    let policy = store::event_policy_row(&mut tx, event.policy_id).await?;
-
-    match event.kind {
-        AiaEventKind::Payment => {
-            store::apply_payment_to_policy(
-                &mut tx,
-                event.policy_id,
-                undo_aia_event_amount(policy.premium_usd, event.amount_usd),
-                event.prev_remaining_years,
-                event.prev_next_pay_date.clone(),
-                &now_timestamp(),
-            )
-            .await?;
-        }
-        AiaEventKind::Withdrawal => {
-            store::apply_withdrawal_to_policy(
-                &mut tx,
-                event.policy_id,
-                undo_aia_event_amount(policy.withdrew_usd, event.amount_usd),
-                &now_timestamp(),
-            )
-            .await?;
-        }
-    }
-
-    store::delete_event(&mut tx, id).await?;
-    tx.commit().await?;
+    crate::service::aia::remove_event(&state.pool, id).await?;
     Ok(StatusCode::NO_CONTENT)
 }

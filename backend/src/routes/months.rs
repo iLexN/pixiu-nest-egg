@@ -6,21 +6,20 @@ use axum::http::StatusCode;
 use chrono::Datelike;
 use serde::{Deserialize, Serialize};
 
-use super::patch::{merge, merge_opt, merge_text};
+use super::patch::merge_text;
 use super::{AppState, parse_ym};
 use crate::calc::{
     FieldError, MonthRunningAverages, MonthYearSummary, PoolTotals, build_suggestions,
-    interest_components, live_totals, month_derived_with_tail, month_item_sums,
-    month_running_averages, month_year_summaries, pool_balances, pool_rate_for_year, pool_totals,
-    suggestions_enabled,
+    interest_components, month_derived_with_tail, month_item_sums, month_running_averages,
+    month_year_summaries, pool_balances, pool_rate_for_year, pool_totals, suggestions_enabled,
 };
 use crate::error::{ApiError, ErrorBody};
 use crate::models::{
-    InterestComponent, ManualAsset, ManualAssetPatch, MonthItem, MonthItemCategory, MonthItemPatch,
-    MonthStat, MonthStatPatch, MonthSuggestion, NewManualAsset, NewMonthItem,
+    InterestComponent, ManualAsset, ManualAssetPatch, MonthItem, MonthItemPatch, MonthStat,
+    MonthStatPatch, MonthSuggestion, NewManualAsset, NewMonthItem,
 };
 use crate::store::months as store;
-use crate::store::{now_timestamp, today};
+use crate::store::today;
 
 #[derive(Debug, Deserialize, utoipa::ToSchema, utoipa::IntoParams)]
 pub struct ListQuery {
@@ -228,88 +227,9 @@ pub async fn upsert(
     Json(patch): Json<MonthStatPatch>,
 ) -> Result<Json<MonthStat>, ApiError> {
     let month = parse_ym(&ym)?;
-    let month_key = month.to_string();
     validate_figures(&patch)?;
-
-    let existing = store::load_month(&state.pool, &month_key).await?;
-    let now = now_timestamp();
-
-    match existing {
-        None => {
-            // Body-supplied totals win; otherwise snapshot the live values.
-            let live = live_totals(&crate::service::wealth::totals_input(&state.pool).await?);
-            let total_assets = patch.total_assets.unwrap_or(Some(live.total_assets));
-            let liquid_assets = patch.liquid_assets.unwrap_or(Some(live.liquid_assets));
-            let salary = match patch.salary {
-                Some(salary) => Some(salary),
-                None => {
-                    crate::store::settings::Settings::load(&state.pool)
-                        .await?
-                        .salary
-                }
-            };
-            store::insert_month(
-                &state.pool,
-                &month_key,
-                patch.start_cash,
-                salary,
-                total_assets,
-                liquid_assets,
-                patch.pool_input.unwrap_or(0.0),
-                patch.end_cash_override.flatten(),
-                patch.note.flatten(),
-                &now,
-            )
-            .await?;
-        }
-        Some(existing) => {
-            // A present field wins over recapture, recapture wins over the
-            // stored value, and `null` stores NULL (live).
-            let input = if patch.recapture == Some(true) {
-                Some(crate::service::wealth::totals_input(&state.pool).await?)
-            } else {
-                None
-            };
-            let live = input.map(|input| live_totals(&input));
-            let start_cash = patch
-                .start_cash
-                .or_else(|| input.map(|input| input.cash_sum))
-                .or(existing.start_cash);
-            let total_assets = match (patch.total_assets, live) {
-                (Some(value), _) => value,
-                (None, Some(live)) => Some(live.total_assets),
-                (None, None) => existing.total_assets,
-            };
-            let liquid_assets = match (patch.liquid_assets, live) {
-                (Some(value), _) => value,
-                (None, Some(live)) => Some(live.liquid_assets),
-                (None, None) => existing.liquid_assets,
-            };
-            store::update_month(
-                &state.pool,
-                &month_key,
-                start_cash,
-                merge_opt(patch.salary, existing.salary),
-                total_assets,
-                liquid_assets,
-                merge(patch.pool_input, existing.pool_input),
-                patch
-                    .end_cash_override
-                    .unwrap_or(existing.end_cash_override),
-                merge_text(patch.note, existing.note),
-                &now,
-            )
-            .await?;
-        }
-    }
-
-    let stored = store::load_month(&state.pool, &month_key)
-        .await?
-        .expect("just written");
     Ok(Json(
-        crate::service::months::MonthBook::open(&state.pool)
-            .await?
-            .present_one(&stored)?,
+        crate::service::months::upsert(&state.pool, month, &patch).await?,
     ))
 }
 
@@ -356,54 +276,11 @@ pub async fn create_item(
     Json(body): Json<NewMonthItem>,
 ) -> Result<(StatusCode, Json<MonthItem>), ApiError> {
     let month_key = parse_ym(&ym)?.to_string();
-    if store::load_month(&state.pool, &month_key).await?.is_none() {
-        return Err(ApiError::NotFound(format!("month {month_key} not found")));
-    }
     if !body.amount.is_finite() {
         return Err(ApiError::field("amount", "amount must be a number"));
     }
-    if body.exclude_from_living && body.category != MonthItemCategory::Entertainment {
-        return Err(ApiError::field(
-            "exclude_from_living",
-            "exclude_from_living only applies to 娛樂支出 items",
-        ));
-    }
-    let label = body
-        .label
-        .map(|label| label.trim().to_string())
-        .filter(|label| !label.is_empty());
-    let auto_key = body
-        .auto_key
-        .map(|key| key.trim().to_string())
-        .filter(|key| !key.is_empty());
-    let note = body
-        .note
-        .map(|note| note.trim().to_string())
-        .filter(|note| !note.is_empty());
-
-    let mut tx = state.pool.begin().await?;
-    if let Some(auto_key) = &auto_key {
-        // Accepting a suggestion clears any dismissal of the same key.
-        store::clear_dismissal(&mut tx, &month_key, auto_key).await?;
-    }
-    // A duplicate (month, auto_key) hits the partial unique index → 409.
-    let id = store::insert_item(
-        &mut tx,
-        &month_key,
-        body.category.as_str(),
-        &label,
-        body.amount,
-        body.exclude_from_living,
-        &auto_key,
-        &note,
-    )
-    .await?;
-    tx.commit().await?;
-
-    Ok((
-        StatusCode::CREATED,
-        Json(store::item_row(&state.pool, id).await?),
-    ))
+    let item = crate::service::months::create_item(&state.pool, &month_key, &body).await?;
+    Ok((StatusCode::CREATED, Json(item)))
 }
 
 #[utoipa::path(
@@ -423,42 +300,9 @@ pub async fn update_item(
     Path(id): Path<i64>,
     Json(patch): Json<MonthItemPatch>,
 ) -> Result<Json<MonthItem>, ApiError> {
-    let existing = store::load_item(&state.pool, id).await?;
-
-    let category = patch.category.unwrap_or(existing.category);
-    let label = merge_text(patch.label, existing.label);
-    let amount = patch.amount.unwrap_or(existing.amount);
-    let note = merge_text(patch.note, existing.note);
-    if !amount.is_finite() {
-        return Err(ApiError::field("amount", "amount must be a number"));
-    }
-    // The flag is entertainment-only: moving an item to another category
-    // clears it, while setting it on a non-entertainment item is rejected.
-    let exclude_from_living = match (patch.exclude_from_living, category) {
-        (Some(true), MonthItemCategory::Entertainment) => true,
-        (Some(true), _) => {
-            return Err(ApiError::field(
-                "exclude_from_living",
-                "exclude_from_living only applies to 娛樂支出 items",
-            ));
-        }
-        (Some(false), _) => false,
-        (None, MonthItemCategory::Entertainment) => existing.exclude_from_living,
-        (None, _) => false,
-    };
-
-    store::update_item(
-        &state.pool,
-        id,
-        category.as_str(),
-        &label,
-        amount,
-        exclude_from_living,
-        &note,
-    )
-    .await?;
-
-    Ok(Json(store::item_row(&state.pool, id).await?))
+    Ok(Json(
+        crate::service::months::update_item(&state.pool, id, &patch).await?,
+    ))
 }
 
 #[utoipa::path(

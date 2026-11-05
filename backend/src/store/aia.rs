@@ -198,7 +198,17 @@ pub async fn update_policy(
 /// Deleting a policy removes its events: nothing outside them references a
 /// policy. Returns the policy rows deleted, so the handler can tell "not
 /// found" apart from success.
-pub async fn delete_with_events(
+/// Delete a policy and its events in one transaction — the single-store
+/// entry point (see also [`delete_with_events_tx`] for callers inside a
+/// larger transaction).
+pub async fn delete_with_events(pool: &SqlitePool, id: i64) -> Result<u64, StoreError> {
+    let mut tx = pool.begin().await?;
+    let affected = delete_with_events_tx(&mut tx, id).await?;
+    tx.commit().await?;
+    Ok(affected)
+}
+
+pub async fn delete_with_events_tx(
     conn: &mut sqlx::SqliteConnection,
     id: i64,
 ) -> Result<u64, StoreError> {

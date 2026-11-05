@@ -129,11 +129,7 @@ pub async fn reorder(
         ));
     }
 
-    let mut transaction = state.pool.begin().await?;
-    for (index, stock_id) in body.stock_ids.iter().enumerate() {
-        store::set_sort_order(&mut transaction, index as i64 + 1, *stock_id, market).await?;
-    }
-    transaction.commit().await?;
+    store::reorder(&state.pool, market, &body.stock_ids).await?;
 
     Ok(Json(store::load_stocks(&state.pool, Some(market)).await?))
 }

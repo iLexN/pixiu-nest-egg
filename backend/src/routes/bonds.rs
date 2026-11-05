@@ -1,9 +1,3 @@
-use axum::Json;
-use axum::extract::{Path, Query, State};
-use axum::http::StatusCode;
-use serde::{Deserialize, Serialize};
-use sqlx::SqlitePool;
-
 use super::AppState;
 use super::patch::{merge_num, merge_text};
 use crate::calc::{BondInput, CouponInput, validate_bond, validate_coupon};
@@ -13,6 +7,10 @@ use crate::models::{
 };
 use crate::store::bonds as store;
 use crate::store::today;
+use axum::Json;
+use axum::extract::{Path, Query, State};
+use axum::http::StatusCode;
+use serde::{Deserialize, Serialize};
 
 #[derive(Debug, Deserialize, utoipa::ToSchema, utoipa::IntoParams)]
 pub struct ListQuery {
@@ -205,11 +203,9 @@ pub async fn remove(
     State(state): State<AppState>,
     Path(id): Path<i64>,
 ) -> Result<StatusCode, ApiError> {
-    let mut tx = state.pool.begin().await?;
-    if store::delete_with_coupons(&mut tx, id).await? == 0 {
+    if store::delete_with_coupons(&state.pool, id).await? == 0 {
         return Err(ApiError::NotFound(format!("bond {id} not found")));
     }
-    tx.commit().await?;
     Ok(StatusCode::NO_CONTENT)
 }
 
@@ -217,20 +213,6 @@ pub async fn remove(
 pub struct BondTotals {
     /// The sheet's `Total` cell: Σ principal over active bonds.
     pub active_principal: f64,
-}
-
-/// 債券!B1: Σ principal over active bonds, over already-loaded rows.
-pub fn active_principal_of(bonds: &[Bond]) -> f64 {
-    bonds
-        .iter()
-        .filter(|bond| bond.status == BondStatus::Active)
-        .map(|bond| bond.principal)
-        .sum()
-}
-
-/// 債券!B1 for callers that have not loaded the bonds (live month totals).
-pub async fn active_principal(pool: &SqlitePool) -> Result<f64, ApiError> {
-    Ok(active_principal_of(&store::load_all_bonds(pool).await?))
 }
 
 /// A bond with its coupon schedule attached.
@@ -275,7 +257,7 @@ pub async fn summary(State(state): State<AppState>) -> Result<Json<BondSummaryRe
     let today = today();
     let bonds = store::load_all_bonds(&state.pool).await?;
 
-    let active_principal = active_principal_of(&bonds);
+    let active_principal = crate::service::bonds::active_principal_of(&bonds);
     let mut active = Vec::new();
     let mut matured = Vec::new();
     let mut upcoming_coupons = Vec::new();

@@ -22,6 +22,7 @@ impl From<sqlx::Error> for ServiceError {
     }
 }
 
+pub mod aia;
 pub mod bonds;
 pub mod cash_accounts;
 pub mod deposits;
