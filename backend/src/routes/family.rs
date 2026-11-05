@@ -29,6 +29,7 @@ pub struct ListQuery {
 }
 
 #[utoipa::path(
+    operation_id = "family_list",
     get,
     path = "/api/family/deposits",
     tag = "family",
@@ -72,6 +73,7 @@ fn validate_holder(holder: &str) -> Result<String, ApiError> {
 }
 
 #[utoipa::path(
+    operation_id = "family_create",
     post,
     path = "/api/family/deposits",
     tag = "family",
@@ -112,6 +114,7 @@ pub async fn create(
 }
 
 #[utoipa::path(
+    operation_id = "family_update",
     patch,
     path = "/api/family/deposits/{id}",
     tag = "family",
@@ -159,6 +162,7 @@ pub async fn update(
 }
 
 #[utoipa::path(
+    operation_id = "family_remove",
     delete,
     path = "/api/family/deposits/{id}",
     tag = "family",
@@ -189,6 +193,7 @@ pub struct ReceiveFamilyDeposit {
 /// 收訖: mark the deposit received and optionally correct the interest — no
 /// cash credit and no month item; family money never enters the ledger.
 #[utoipa::path(
+    operation_id = "family_receive",
     post,
     path = "/api/family/deposits/{id}/receive",
     tag = "family",
@@ -239,6 +244,7 @@ pub struct HolderNoteResponse {
 
 /// `PUT /family/holders/:holder/note` — an empty or `null` note clears it.
 #[utoipa::path(
+    operation_id = "family_update_note",
     put,
     path = "/api/family/holders/{holder}/note",
     tag = "family",
@@ -287,6 +293,7 @@ pub struct FamilyDepositSummary {
 
 /// Every figure here is derived from the stored family deposits on each read.
 #[utoipa::path(
+    operation_id = "family_summary",
     get,
     path = "/api/family/deposits/summary",
     tag = "family",

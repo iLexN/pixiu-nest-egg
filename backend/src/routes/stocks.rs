@@ -18,6 +18,7 @@ pub struct ListQuery {
 }
 
 #[utoipa::path(
+    operation_id = "stocks_list",
     get,
     path = "/api/stocks",
     tag = "stocks",
@@ -36,6 +37,7 @@ pub async fn list(
 }
 
 #[utoipa::path(
+    operation_id = "stocks_create",
     post,
     path = "/api/stocks",
     tag = "stocks",
@@ -101,6 +103,7 @@ pub struct ReorderRequest {
 /// Persist a complete ordering for one market. Requiring every stock prevents a
 /// partial drag/drop request from silently dropping rows from the saved order.
 #[utoipa::path(
+    operation_id = "stocks_reorder",
     post,
     path = "/api/stocks/order",
     tag = "stocks",
@@ -135,6 +138,7 @@ pub async fn reorder(
 }
 
 #[utoipa::path(
+    operation_id = "stocks_update",
     patch,
     path = "/api/stocks/{id}",
     tag = "stocks",
@@ -205,6 +209,7 @@ pub async fn update(
 /// Bulk 現價 update from a `current-price.json` body. Takes the raw file text
 /// so parse errors surface as a normal validation response.
 #[utoipa::path(
+    operation_id = "stocks_upload_prices",
     post,
     path = "/api/stocks/prices",
     tag = "stocks",
@@ -227,6 +232,7 @@ pub async fn upload_prices(
 }
 
 #[utoipa::path(
+    operation_id = "stocks_remove",
     delete,
     path = "/api/stocks/{id}",
     tag = "stocks",

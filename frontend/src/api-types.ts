@@ -11,7 +11,7 @@ export interface paths {
             path?: never;
             cookie?: never;
         };
-        get: operations["list_events"];
+        get: operations["aia_list_events"];
         put?: never;
         /**
          * Recording an event is one transaction: snapshot the policy fields it will
@@ -19,7 +19,7 @@ export interface paths {
          *     grows the premium, counts down a remaining year and moves the next due
          *     date; a withdrawal grows the withdrew figure.
          */
-        post: operations["create_event"];
+        post: operations["aia_create_event"];
         delete?: never;
         options?: never;
         head?: never;
@@ -40,7 +40,7 @@ export interface paths {
          * Deleting an event undoes it: the amount leaves its cumulative field and the
          *     policy fields the event recorded snap back.
          */
-        delete: operations["remove_event"];
+        delete: operations["aia_remove_event"];
         options?: never;
         head?: never;
         patch?: never;
@@ -63,7 +63,7 @@ export interface paths {
          * The section's free-text note, kept in `app_meta` under `aia.note` — the
          *     same facility as the MPF page note; an empty note deletes the key.
          */
-        patch: operations["update_note"];
+        patch: operations["aia_update_note"];
         trace?: never;
     };
     "/api/aia/policies": {
@@ -73,9 +73,9 @@ export interface paths {
             path?: never;
             cookie?: never;
         };
-        get: operations["list"];
+        get: operations["aia_list"];
         put?: never;
-        post: operations["create"];
+        post: operations["aia_create"];
         delete?: never;
         options?: never;
         head?: never;
@@ -96,10 +96,10 @@ export interface paths {
          * Deleting a policy removes its events: nothing outside them references a
          *     policy, so delete is always permitted.
          */
-        delete: operations["remove"];
+        delete: operations["aia_remove"];
         options?: never;
         head?: never;
-        patch: operations["update"];
+        patch: operations["aia_update"];
         trace?: never;
     };
     "/api/aia/summary": {
@@ -110,7 +110,7 @@ export interface paths {
             cookie?: never;
         };
         /** Every figure here is derived from the stored rows on each read. */
-        get: operations["summary"];
+        get: operations["aia_summary"];
         put?: never;
         post?: never;
         delete?: never;
@@ -126,9 +126,9 @@ export interface paths {
             path?: never;
             cookie?: never;
         };
-        get: operations["list"];
+        get: operations["bonds_list"];
         put?: never;
-        post: operations["create"];
+        post: operations["bonds_create"];
         delete?: never;
         options?: never;
         head?: never;
@@ -143,7 +143,7 @@ export interface paths {
             cookie?: never;
         };
         /** Every figure here is derived from the stored rows on each read. */
-        get: operations["summary"];
+        get: operations["bonds_summary"];
         put?: never;
         post?: never;
         delete?: never;
@@ -166,10 +166,10 @@ export interface paths {
          * Deleting a bond removes its coupons: nothing outside the bond references
          *     them, so delete is always permitted.
          */
-        delete: operations["remove"];
+        delete: operations["bonds_remove"];
         options?: never;
         head?: never;
-        patch: operations["update"];
+        patch: operations["bonds_update"];
         trace?: never;
     };
     "/api/bonds/{id}/receive": {
@@ -187,7 +187,7 @@ export interface paths {
          *     `bond-end` adjustment item. Coupons keep their own 收訖 — this is only
          *     about the principal.
          */
-        post: operations["receive"];
+        post: operations["bonds_receive"];
         delete?: never;
         options?: never;
         head?: never;
@@ -201,9 +201,9 @@ export interface paths {
             path?: never;
             cookie?: never;
         };
-        get: operations["list"];
+        get: operations["cash_accounts_list"];
         put?: never;
-        post: operations["create"];
+        post: operations["cash_accounts_create"];
         delete?: never;
         options?: never;
         head?: never;
@@ -220,10 +220,10 @@ export interface paths {
         get?: never;
         put?: never;
         post?: never;
-        delete: operations["remove"];
+        delete: operations["cash_accounts_remove"];
         options?: never;
         head?: never;
-        patch: operations["update"];
+        patch: operations["cash_accounts_update"];
         trace?: never;
     };
     "/api/coupons": {
@@ -233,9 +233,9 @@ export interface paths {
             path?: never;
             cookie?: never;
         };
-        get: operations["list_coupons"];
+        get: operations["bonds_list_coupons"];
         put?: never;
-        post: operations["create_coupon"];
+        post: operations["bonds_create_coupon"];
         delete?: never;
         options?: never;
         head?: never;
@@ -252,10 +252,10 @@ export interface paths {
         get?: never;
         put?: never;
         post?: never;
-        delete: operations["remove_coupon"];
+        delete: operations["bonds_remove_coupon"];
         options?: never;
         head?: never;
-        patch: operations["update_coupon"];
+        patch: operations["bonds_update_coupon"];
         trace?: never;
     };
     "/api/deposits": {
@@ -265,9 +265,9 @@ export interface paths {
             path?: never;
             cookie?: never;
         };
-        get: operations["list"];
+        get: operations["deposits_list"];
         put?: never;
-        post: operations["create"];
+        post: operations["deposits_create"];
         delete?: never;
         options?: never;
         head?: never;
@@ -282,7 +282,7 @@ export interface paths {
             cookie?: never;
         };
         /** Every figure here is derived from the stored deposits on each read. */
-        get: operations["summary"];
+        get: operations["deposits_summary"];
         put?: never;
         post?: never;
         delete?: never;
@@ -301,10 +301,10 @@ export interface paths {
         get?: never;
         put?: never;
         post?: never;
-        delete: operations["remove"];
+        delete: operations["deposits_remove"];
         options?: never;
         head?: never;
-        patch: operations["update"];
+        patch: operations["deposits_update"];
         trace?: never;
     };
     "/api/deposits/{id}/receive": {
@@ -321,7 +321,7 @@ export interface paths {
          *     (corrected) interest to a cash manual asset, and record the month's
          *     `dep-end` adjustment item — the whole sheet "定期 end step" in one action.
          */
-        post: operations["receive"];
+        post: operations["deposits_receive"];
         delete?: never;
         options?: never;
         head?: never;
@@ -335,9 +335,9 @@ export interface paths {
             path?: never;
             cookie?: never;
         };
-        get: operations["list"];
+        get: operations["dividends_list"];
         put?: never;
-        post: operations["create"];
+        post: operations["dividends_create"];
         delete?: never;
         options?: never;
         head?: never;
@@ -352,7 +352,7 @@ export interface paths {
             cookie?: never;
         };
         /** Every figure here is derived from the stored dividends on each read. */
-        get: operations["summary"];
+        get: operations["dividends_summary"];
         put?: never;
         post?: never;
         delete?: never;
@@ -371,10 +371,10 @@ export interface paths {
         get?: never;
         put?: never;
         post?: never;
-        delete: operations["remove"];
+        delete: operations["dividends_remove"];
         options?: never;
         head?: never;
-        patch: operations["update"];
+        patch: operations["dividends_update"];
         trace?: never;
     };
     "/api/family/deposits": {
@@ -384,9 +384,9 @@ export interface paths {
             path?: never;
             cookie?: never;
         };
-        get: operations["list"];
+        get: operations["family_list"];
         put?: never;
-        post: operations["create"];
+        post: operations["family_create"];
         delete?: never;
         options?: never;
         head?: never;
@@ -401,7 +401,7 @@ export interface paths {
             cookie?: never;
         };
         /** Every figure here is derived from the stored family deposits on each read. */
-        get: operations["summary"];
+        get: operations["family_summary"];
         put?: never;
         post?: never;
         delete?: never;
@@ -420,10 +420,10 @@ export interface paths {
         get?: never;
         put?: never;
         post?: never;
-        delete: operations["remove"];
+        delete: operations["family_remove"];
         options?: never;
         head?: never;
-        patch: operations["update"];
+        patch: operations["family_update"];
         trace?: never;
     };
     "/api/family/deposits/{id}/receive": {
@@ -439,7 +439,7 @@ export interface paths {
          * 收訖: mark the deposit received and optionally correct the interest — no
          *     cash credit and no month item; family money never enters the ledger.
          */
-        post: operations["receive"];
+        post: operations["family_receive"];
         delete?: never;
         options?: never;
         head?: never;
@@ -455,7 +455,7 @@ export interface paths {
         };
         get?: never;
         /** `PUT /family/holders/:holder/note` — an empty or `null` note clears it. */
-        put: operations["update_note"];
+        put: operations["family_update_note"];
         post?: never;
         delete?: never;
         options?: never;
@@ -471,7 +471,7 @@ export interface paths {
             cookie?: never;
         };
         /** The seven-month 預測 grid (`Overview!A20:H36`), fully derived on read. */
-        get: operations["forecast"];
+        get: operations["forecast_forecast"];
         put?: never;
         post?: never;
         delete?: never;
@@ -490,10 +490,10 @@ export interface paths {
         get?: never;
         put?: never;
         post?: never;
-        delete: operations["remove_item"];
+        delete: operations["forecast_remove_item"];
         options?: never;
         head?: never;
-        patch: operations["update_item"];
+        patch: operations["forecast_update_item"];
         trace?: never;
     };
     "/api/forecast-items/{id}/convert": {
@@ -511,7 +511,7 @@ export interface paths {
          *     item) — and delete the plan, in one transaction, so the plan's derived
          *     return/lock effects can never double-count against the deposit.
          */
-        post: operations["convert"];
+        post: operations["forecast_convert"];
         delete?: never;
         options?: never;
         head?: never;
@@ -527,7 +527,7 @@ export interface paths {
         };
         get?: never;
         put?: never;
-        post: operations["create_item"];
+        post: operations["forecast_create_item"];
         delete?: never;
         options?: never;
         head?: never;
@@ -541,7 +541,7 @@ export interface paths {
             path?: never;
             cookie?: never;
         };
-        get: operations["list"];
+        get: operations["fx_list"];
         put?: never;
         post?: never;
         delete?: never;
@@ -567,7 +567,7 @@ export interface paths {
          * Only `USD` exists in `fx_rates`; a number stores the rate and `null`
          *     clears the row so every HKD-priced total drops out of the responses.
          */
-        patch: operations["update"];
+        patch: operations["fx_update"];
         trace?: never;
     };
     "/api/ibkr": {
@@ -577,13 +577,13 @@ export interface paths {
             path?: never;
             cookie?: never;
         };
-        get: operations["ibkr"];
+        get: operations["overview_ibkr"];
         put?: never;
         post?: never;
         delete?: never;
         options?: never;
         head?: never;
-        patch: operations["update_ibkr"];
+        patch: operations["overview_update_ibkr"];
         trace?: never;
     };
     "/api/ibkr/transfers": {
@@ -597,13 +597,13 @@ export interface paths {
          * Every `ibkr_transfers` row, newest `transfer_date` then newest id first,
          *     with the source account label joined in (NULL for log-only rows).
          */
-        get: operations["list_ibkr_transfers"];
+        get: operations["overview_list_ibkr_transfers"];
         put?: never;
         /**
          * A bank→IBKR transfer as one atomic cash movement: log row, source debit,
          *     broker credit, and the month's `ibkr:<id>` adjustment item.
          */
-        post: operations["create_ibkr_transfer"];
+        post: operations["overview_create_ibkr_transfer"];
         delete?: never;
         options?: never;
         head?: never;
@@ -624,7 +624,7 @@ export interface paths {
          * Undo a transfer exactly: reverse the recorded balance moves, drop its
          *     `ibkr:<id>` month item, then delete the row. Log-only rows move no cash.
          */
-        delete: operations["delete_ibkr_transfer"];
+        delete: operations["overview_delete_ibkr_transfer"];
         options?: never;
         head?: never;
         patch?: never;
@@ -637,9 +637,9 @@ export interface paths {
             path?: never;
             cookie?: never;
         };
-        get: operations["list_assets"];
+        get: operations["months_list_assets"];
         put?: never;
-        post: operations["create_asset"];
+        post: operations["months_create_asset"];
         delete?: never;
         options?: never;
         head?: never;
@@ -656,10 +656,10 @@ export interface paths {
         get?: never;
         put?: never;
         post?: never;
-        delete: operations["remove_asset"];
+        delete: operations["months_remove_asset"];
         options?: never;
         head?: never;
-        patch: operations["update_asset"];
+        patch: operations["months_update_asset"];
         trace?: never;
     };
     "/api/month-items/{id}": {
@@ -672,10 +672,10 @@ export interface paths {
         get?: never;
         put?: never;
         post?: never;
-        delete: operations["remove_item"];
+        delete: operations["months_remove_item"];
         options?: never;
         head?: never;
-        patch: operations["update_item"];
+        patch: operations["months_update_item"];
         trace?: never;
     };
     "/api/months": {
@@ -685,7 +685,7 @@ export interface paths {
             path?: never;
             cookie?: never;
         };
-        get: operations["list"];
+        get: operations["months_list"];
         put?: never;
         post?: never;
         delete?: never;
@@ -701,7 +701,7 @@ export interface paths {
             path?: never;
             cookie?: never;
         };
-        get: operations["summary"];
+        get: operations["months_summary"];
         put?: never;
         post?: never;
         delete?: never;
@@ -717,14 +717,14 @@ export interface paths {
             path?: never;
             cookie?: never;
         };
-        get: operations["show"];
+        get: operations["months_show"];
         put?: never;
         post?: never;
         /**
          * Deleting a month removes its items via the FK cascade; dismissal tombstones
          *     stay (they are per-month keys, harmless without the row).
          */
-        delete: operations["remove"];
+        delete: operations["months_remove"];
         options?: never;
         head?: never;
         /**
@@ -732,7 +732,7 @@ export interface paths {
          *     salary; explicit `null` on a total keeps it live, `recapture` re-snapshots
          *     the totals plus 月初 (the live 活期 cash sum).
          */
-        patch: operations["upsert"];
+        patch: operations["months_upsert"];
         trace?: never;
     };
     "/api/months/{ym}/items": {
@@ -744,7 +744,7 @@ export interface paths {
         };
         get?: never;
         put?: never;
-        post: operations["create_item"];
+        post: operations["months_create_item"];
         delete?: never;
         options?: never;
         head?: never;
@@ -761,7 +761,7 @@ export interface paths {
         get?: never;
         put?: never;
         /** Tombstone a suggestion key so it never reappears for the month. */
-        post: operations["dismiss_item"];
+        post: operations["months_dismiss_item"];
         delete?: never;
         options?: never;
         head?: never;
@@ -775,7 +775,7 @@ export interface paths {
             path?: never;
             cookie?: never;
         };
-        get: operations["overview"];
+        get: operations["mpf_overview"];
         put?: never;
         post?: never;
         delete?: never;
@@ -793,7 +793,7 @@ export interface paths {
         };
         get?: never;
         put?: never;
-        post: operations["create"];
+        post: operations["mpf_create"];
         delete?: never;
         options?: never;
         head?: never;
@@ -811,10 +811,10 @@ export interface paths {
         put?: never;
         post?: never;
         /** An account with history rows is refused so the record never loses its past. */
-        delete: operations["remove"];
+        delete: operations["mpf_remove"];
         options?: never;
         head?: never;
-        patch: operations["update"];
+        patch: operations["mpf_update"];
         trace?: never;
     };
     "/api/mpf/history/{id}": {
@@ -828,7 +828,7 @@ export interface paths {
         put?: never;
         post?: never;
         /** Deleting a stale row recomputes last-month/max without it on next read. */
-        delete: operations["remove_history"];
+        delete: operations["mpf_remove_history"];
         options?: never;
         head?: never;
         patch?: never;
@@ -847,7 +847,7 @@ export interface paths {
         delete?: never;
         options?: never;
         head?: never;
-        patch: operations["update_note"];
+        patch: operations["mpf_update_note"];
         trace?: never;
     };
     "/api/overview": {
@@ -858,7 +858,7 @@ export interface paths {
             cookie?: never;
         };
         /** `Overview!A3:C18` plus the B1/H1/J1 headline, derived on read. */
-        get: operations["overview"];
+        get: operations["overview_overview"];
         put?: never;
         post?: never;
         delete?: never;
@@ -874,13 +874,13 @@ export interface paths {
             path?: never;
             cookie?: never;
         };
-        get: operations["get"];
+        get: operations["settings_get"];
         put?: never;
         post?: never;
         delete?: never;
         options?: never;
         head?: never;
-        patch: operations["update"];
+        patch: operations["settings_update"];
         trace?: never;
     };
     "/api/stocks": {
@@ -890,9 +890,9 @@ export interface paths {
             path?: never;
             cookie?: never;
         };
-        get: operations["list"];
+        get: operations["stocks_list"];
         put?: never;
-        post: operations["create"];
+        post: operations["stocks_create"];
         delete?: never;
         options?: never;
         head?: never;
@@ -912,7 +912,7 @@ export interface paths {
          * Persist a complete ordering for one market. Requiring every stock prevents a
          *     partial drag/drop request from silently dropping rows from the saved order.
          */
-        post: operations["reorder"];
+        post: operations["stocks_reorder"];
         delete?: never;
         options?: never;
         head?: never;
@@ -932,7 +932,7 @@ export interface paths {
          * Bulk 現價 update from a `current-price.json` body. Takes the raw file text
          *     so parse errors surface as a normal validation response.
          */
-        post: operations["upload_prices"];
+        post: operations["stocks_upload_prices"];
         delete?: never;
         options?: never;
         head?: never;
@@ -949,10 +949,10 @@ export interface paths {
         get?: never;
         put?: never;
         post?: never;
-        delete: operations["remove"];
+        delete: operations["stocks_remove"];
         options?: never;
         head?: never;
-        patch: operations["update"];
+        patch: operations["stocks_update"];
         trace?: never;
     };
     "/api/summary": {
@@ -962,7 +962,7 @@ export interface paths {
             path?: never;
             cookie?: never;
         };
-        get: operations["show"];
+        get: operations["summary_show"];
         put?: never;
         post?: never;
         delete?: never;
@@ -978,7 +978,7 @@ export interface paths {
             path?: never;
             cookie?: never;
         };
-        get: operations["list"];
+        get: operations["yearly_list"];
         put?: never;
         post?: never;
         delete?: never;
@@ -1000,7 +1000,7 @@ export interface paths {
         delete?: never;
         options?: never;
         head?: never;
-        patch: operations["update"];
+        patch: operations["yearly_update"];
         trace?: never;
     };
     "/api/summary/yearly/{market}/{year}/freeze": {
@@ -1016,7 +1016,7 @@ export interface paths {
          * Freeze the year: store the currently computed cumulative 成本 and the
          *     live 總市值 as the snapshot. `invested` is left untouched.
          */
-        post: operations["freeze"];
+        post: operations["yearly_freeze"];
         delete?: never;
         options?: never;
         head?: never;
@@ -1030,9 +1030,9 @@ export interface paths {
             path?: never;
             cookie?: never;
         };
-        get: operations["list"];
+        get: operations["trades_list"];
         put?: never;
-        post: operations["create"];
+        post: operations["trades_create"];
         delete?: never;
         options?: never;
         head?: never;
@@ -1049,10 +1049,10 @@ export interface paths {
         get?: never;
         put?: never;
         post?: never;
-        delete: operations["remove"];
+        delete: operations["trades_remove"];
         options?: never;
         head?: never;
-        patch: operations["update"];
+        patch: operations["trades_update"];
         trace?: never;
     };
     "/api/year-review": {
@@ -1066,7 +1066,7 @@ export interface paths {
          * Every figure here derives from stored data on each read except the manual
          *     inputs and seeded overrides in `year_review`.
          */
-        get: operations["list"];
+        get: operations["year_review_list"];
         put?: never;
         post?: never;
         delete?: never;
@@ -1094,7 +1094,7 @@ export interface paths {
          *     stays as-is; `null` clears it back to live derivation; clearing every
          *     stored value removes the row.
          */
-        patch: operations["update"];
+        patch: operations["year_review_update"];
         trace?: never;
     };
 }
@@ -1139,12 +1139,12 @@ export interface components {
             /** Format: int64 */
             id: number;
             kind: components["schemas"]["AiaEventKind"];
-            note?: string | null;
+            note: string | null;
             /** Format: int64 */
             policy_id: number;
-            prev_next_pay_date?: string | null;
+            prev_next_pay_date: string | null;
             /** Format: double */
-            prev_remaining_years?: number | null;
+            prev_remaining_years: number | null;
         };
         /**
          * @description One recorded premium payment or withdrawal. `prev_next_pay_date` /
@@ -1166,7 +1166,7 @@ export interface components {
              * Format: double
              * @description (value_usd + withdrew_usd − premium_usd) ÷ premium_usd; absent at 0.
              */
-            balance_pct?: number | null;
+            balance_pct: number | null;
             /** @description Not counted in the portfolio totals. */
             excluded: boolean;
             /** Format: int64 */
@@ -1176,22 +1176,22 @@ export interface components {
             /** @description Plan or group name, e.g. `年金 - 2024 - 2029`. */
             label: string;
             /** @description The remark column's hyperlink target (manual entry). */
-            link?: string | null;
+            link: string | null;
             /** @description Next premium-due date. */
-            next_pay_date?: string | null;
-            note?: string | null;
+            next_pay_date: string | null;
+            note: string | null;
             /** @description e.g. `B632611401`. */
-            policy_no?: string | null;
+            policy_no: string | null;
             /**
              * Format: double
              * @description The sheet's `buy usd`.
              */
             premium_usd: number;
             /** Format: double */
-            remaining_years?: number | null;
+            remaining_years: number | null;
             /** Format: int64 */
             sort_order: number;
-            value_updated_at?: string | null;
+            value_updated_at: string | null;
             /**
              * Format: double
              * @description The sheet's `now usd`.
@@ -1227,15 +1227,15 @@ export interface components {
         };
         AiaSummaryResponse: {
             /** @description Earliest premium-due date still ahead — the premium the user owes next. */
-            next_premium_due?: string | null;
+            next_premium_due: string | null;
             /** @description The section's free-text note (`aia.note` in `app_meta`). */
-            note?: string | null;
+            note: string | null;
             policies: components["schemas"]["PolicyWithEvents"][];
             /**
              * Format: double
              * @description The manual USD→HKD rate; HKD figures are absent while it is unset.
              */
-            rate?: number | null;
+            rate: number | null;
             today: string;
             totals: components["schemas"]["AiaTotals"];
         };
@@ -1245,7 +1245,7 @@ export interface components {
              * Format: double
              * @description Same formula as the per-policy figure, on the totals (the sheet's `B4`).
              */
-            balance_pct?: number | null;
+            balance_pct: number | null;
             /**
              * Format: double
              * @description Σ value over in-account rows (the sheet's `AIA display value`).
@@ -1256,7 +1256,7 @@ export interface components {
              * @description The sheet's unlabeled B5 scratch cell: `now − buy − drew` in HKD —
              *     net position change, counting withdrawals as outflow.
              */
-            net_change_hkd?: number | null;
+            net_change_hkd: number | null;
             /**
              * Format: double
              * @description Σ premium over non-excluded rows (the sheet's `buy usd`).
@@ -1266,21 +1266,21 @@ export interface components {
              * Format: double
              * @description HKD conversions via the stored rate; absent while no rate exists.
              */
-            premium_hkd?: number | null;
+            premium_hkd: number | null;
             /**
              * Format: double
              * @description Σ value over non-excluded rows (the sheet's `now usd`).
              */
             value: number;
             /** Format: double */
-            value_hkd?: number | null;
+            value_hkd: number | null;
             /**
              * Format: double
              * @description Σ withdrew over non-excluded rows (the sheet's drew column).
              */
             withdrew: number;
             /** Format: double */
-            withdrew_hkd?: number | null;
+            withdrew_hkd: number | null;
         };
         /**
          * @description The month-stat settings held in `app_meta`: the current salary, the
@@ -1304,9 +1304,9 @@ export interface components {
              * @description `overview.goal1_amount`/`overview.goal2_amount` — the 1st/2nd 目標
              *     milestone targets (Overview!K12/K18); `null` while unset.
              */
-            goal1_amount?: number | null;
+            goal1_amount: number | null;
             /** Format: double */
-            goal2_amount?: number | null;
+            goal2_amount: number | null;
             /**
              * Format: double
              * @description `overview.goal3_inflation`/`overview.goal3_years` — the 3rd target's
@@ -1316,40 +1316,40 @@ export interface components {
             /** Format: double */
             goal3_years: number;
             /** Format: double */
-            money_master_coming_save?: number | null;
+            money_master_coming_save: number | null;
             /**
              * Format: double
              * @description `money_master.month_now`/`coming_save` — optional overrides pinning
              *     the derived figures while set.
              */
-            money_master_month_now?: number | null;
+            money_master_month_now: number | null;
             /**
              * Format: double
              * @description `money_master.saved` — the bank app's saved figure (L31).
              */
-            money_master_saved?: number | null;
+            money_master_saved: number | null;
             /**
              * @description `money_master.start_date` — the bank challenge's start `YYYY-MM-DD`;
              *     `month_now` derives from it.
              */
-            money_master_start_date?: string | null;
+            money_master_start_date: string | null;
             /** Format: double */
-            money_master_target_amount?: number | null;
+            money_master_target_amount: number | null;
             /**
              * Format: double
              * @description `money_master.target_months`/`target_amount` — the challenge params
              *     (K32/L32).
              */
-            money_master_target_months?: number | null;
+            money_master_target_months: number | null;
             /**
              * Format: double
              * @description The rate in effect for `pool_rate_year`.
              */
-            pool_rate?: number | null;
+            pool_rate: number | null;
             /** Format: int32 */
             pool_rate_year: number;
             /** Format: double */
-            salary?: number | null;
+            salary: number | null;
             /**
              * Format: double
              * @description `overview.semi_liquid_target` — the share of 流動資產 the 半流動資金
@@ -1430,30 +1430,30 @@ export interface components {
              * Format: int64
              * @description The cash account the principal banked into; NULL when nothing was banked.
              */
-            credited_account_id?: number | null;
+            credited_account_id: number | null;
             /**
              * Format: double
              * @description The amount banked into `credited_account_id`.
              */
-            credited_amount?: number | null;
+            credited_amount: number | null;
             /** Format: int64 */
             id: number;
             /** @description 發行編號, e.g. `03GB2710R`. */
-            issue_no?: string | null;
+            issue_no: string | null;
             /** @description The sheet's label column, e.g. `silver bond`. */
             label: string;
             /** @description The sheet's `end` column. */
             maturity_date: string;
             /** @description Earliest pay_date among this bond's non-received coupons. */
-            next_pay_date?: string | null;
-            note?: string | null;
+            next_pay_date: string | null;
+            note: string | null;
             /** Format: double */
             principal: number;
             /**
              * @description 收訖日: when the user confirmed the principal came back; NULL while
              *     matured-but-unreceived (the coupon lifecycle is separate).
              */
-            received_at?: string | null;
+            received_at: string | null;
             /** Format: int64 */
             sort_order: number;
             /**
@@ -1471,47 +1471,47 @@ export interface components {
              * Format: double
              * @description 年息率 as a fraction (0.04 = 4%); NULL = 待定.
              */
-            annual_rate?: number | null;
+            annual_rate: number | null;
             /** Format: int64 */
             bond_id: number;
             /**
              * Format: int64
              * @description The cash account the coupon banked into; NULL when nothing was banked.
              */
-            credited_account_id?: number | null;
+            credited_account_id: number | null;
             /**
              * Format: double
              * @description The amount banked into `credited_account_id`.
              */
-            credited_amount?: number | null;
+            credited_amount: number | null;
             /**
              * Format: double
              * @description per_10k × bond principal ÷ 10000 (the sheet's interest column).
              */
-            expected?: number | null;
+            expected: number | null;
             /** @description The sheet's 利息釐定日. */
-            fixing_date?: string | null;
+            fixing_date: string | null;
             /** Format: int64 */
             id: number;
-            note?: string | null;
+            note: string | null;
             /** @description The sheet's 付息日. */
             pay_date: string;
             /**
              * Format: double
              * @description 每1萬港元債券利息; NULL = 待定.
              */
-            per_10k?: number | null;
+            per_10k: number | null;
             /**
              * Format: double
              * @description 實收利息; NULL while unreceived.
              */
-            received_amount?: number | null;
+            received_amount: number | null;
             status: components["schemas"]["CouponStatus"];
             /**
              * Format: double
              * @description received_amount − expected when both are present.
              */
-            variance?: number | null;
+            variance: number | null;
         };
         /**
          * @description Absent fields are left untouched; present fields are written, so `null`
@@ -1627,28 +1627,28 @@ export interface components {
          */
         Deposit: {
             /** @description Bank code derived from the label prefix (SC = 渣打, HS = 恒生). */
-            bank?: string | null;
+            bank: string | null;
             /**
              * Format: int64
              * @description The cash account the 收訖 banked into; NULL when nothing was banked.
              */
-            credited_account_id?: number | null;
+            credited_account_id: number | null;
             /**
              * Format: double
              * @description The amount banked into `credited_account_id`.
              */
-            credited_amount?: number | null;
+            credited_amount: number | null;
             /**
              * Format: int64
              * @description The cash account the placement debited the principal from; NULL when
              *     nothing was debited.
              */
-            debited_account_id?: number | null;
+            debited_account_id: number | null;
             /**
              * Format: double
              * @description The amount debited from `debited_account_id` at placement.
              */
-            debited_amount?: number | null;
+            debited_amount: number | null;
             end_date: string;
             /** Format: int32 */
             end_month: number;
@@ -1660,23 +1660,23 @@ export interface components {
              * Format: double
              * @description 利息.
              */
-            interest?: number | null;
+            interest: number | null;
             /** @description The sheet's `id` column: a bank reference like `SC-9632`. */
-            label?: string | null;
-            note1?: string | null;
-            note2?: string | null;
+            label: string | null;
+            note1: string | null;
+            note2: string | null;
             /**
              * Format: double
              * @description The sheet's `input` column.
              */
-            principal?: number | null;
+            principal: number | null;
             /**
              * Format: double
              * @description Annual rate as a fraction (0.03 = 3%): the stored rate when entered,
              *     else the rate derived on read from interest, principal and the
              *     start→end days.
              */
-            rate?: number | null;
+            rate: number | null;
             /**
              * @description True when `rate` was derived on read (no stored rate) from interest,
              *     principal and the start→end days.
@@ -1686,11 +1686,11 @@ export interface components {
              * @description 收訖日: when the user confirmed the money came back; NULL while the
              *     deposit is still on the books (it stays in 未到期定期 until then).
              */
-            received_at?: string | null;
+            received_at: string | null;
             /** Format: int64 */
             sort_order: number;
             /** @description When the principal left the bank account; NULL when unknown. */
-            start_date?: string | null;
+            start_date: string | null;
             /** @description `END` once 收訖; `ACTIVE` while unreceived (even past `end_date`). */
             status: components["schemas"]["DepositStatus"];
             /**
@@ -1751,59 +1751,59 @@ export interface components {
              * Format: double
              * @description received_amount when present, else estimated_amount.
              */
-            amount?: number | null;
+            amount: number | null;
             /**
              * Format: double
              * @description 總買入成本 snapshot on or before pay_date (the sheet's L denominator).
              */
-            buy_cost?: number | null;
+            buy_cost: number | null;
             code: string;
             /**
              * Format: int64
              * @description The cash account the dividend banked into; NULL when nothing was banked.
              */
-            credited_account_id?: number | null;
+            credited_account_id: number | null;
             /**
              * Format: double
              * @description The amount banked into `credited_account_id`.
              */
-            credited_amount?: number | null;
+            credited_amount: number | null;
             /**
              * Format: double
              * @description 預期派息.
              */
-            estimated_amount?: number | null;
+            estimated_amount: number | null;
             /**
              * Format: double
              * @description 派息 gross: received_amount + withholding_tax when both are present.
              */
-            gross_amount?: number | null;
+            gross_amount: number | null;
             /** Format: int64 */
             id: number;
             market: components["schemas"]["Market"];
-            note?: string | null;
+            note: string | null;
             /** @description The sheet's K column: the pay date. */
             pay_date: string;
             /**
              * Format: double
              * @description Announced 每股派息.
              */
-            per_share?: number | null;
+            per_share: number | null;
             /**
              * Format: double
              * @description 實收派息 (net of withholding tax); NULL while pending.
              */
-            received_amount?: number | null;
+            received_amount: number | null;
             /**
              * Format: double
              * @description 現價 snapshot at receipt (the sheet's N denominator).
              */
-            received_price?: number | null;
+            received_price: number | null;
             /**
              * Format: double
              * @description 股數 snapshot: ΣBUY − ΣSELL shares on or before pay_date.
              */
-            shares_held?: number | null;
+            shares_held: number | null;
             status: components["schemas"]["DividendStatus"];
             /** Format: int64 */
             stock_id: number;
@@ -1811,22 +1811,22 @@ export interface components {
              * Format: double
              * @description received_amount − estimated_amount when both are present.
              */
-            variance?: number | null;
+            variance: number | null;
             /**
              * Format: double
              * @description Tax withheld from the gross 派息; NULL when none was recorded.
              */
-            withholding_tax?: number | null;
+            withholding_tax: number | null;
             /**
              * Format: double
              * @description amount ÷ buy_cost (the sheet's rate column).
              */
-            yield_on_cost?: number | null;
+            yield_on_cost: number | null;
             /**
              * Format: double
              * @description amount ÷ (received_price × shares_held).
              */
-            yield_on_price?: number | null;
+            yield_on_price: number | null;
         };
         /**
          * @description Absent fields are left untouched; present fields are written, so `null`
@@ -1904,7 +1904,7 @@ export interface components {
         };
         ErrorBody: {
             error: string;
-            fields?: components["schemas"]["FieldError"][];
+            fields: components["schemas"]["FieldError"][];
             message: string;
         };
         /**
@@ -1913,7 +1913,7 @@ export interface components {
          *     `status`, `end_year` and `end_month` are derived on read, never stored.
          */
         FamilyDeposit: {
-            bank?: string | null;
+            bank: string | null;
             end_date: string;
             /** Format: int32 */
             end_month: number;
@@ -1927,19 +1927,19 @@ export interface components {
              * Format: double
              * @description 利息.
              */
-            interest?: number | null;
+            interest: number | null;
             /** @description The bank reference, e.g. `SC-9179`. */
-            label?: string | null;
+            label: string | null;
             /** @description Free text, e.g. the bank's stepped-rate schedule. */
-            note?: string | null;
+            note: string | null;
             /** Format: double */
-            principal?: number | null;
+            principal: number | null;
             /** @description 收訖日; NULL while the deposit is still on the books. */
-            received_at?: string | null;
+            received_at: string | null;
             /** Format: int64 */
             sort_order: number;
             /** @description When the principal left the bank account; NULL when unknown. */
-            start_date?: string | null;
+            start_date: string | null;
             /** @description `END` once 收訖; `ACTIVE` while unreceived (even past `end_date`). */
             status: components["schemas"]["DepositStatus"];
             /**
@@ -1979,7 +1979,7 @@ export interface components {
              */
             active_principal: number;
             holder: string;
-            note?: string | null;
+            note: string | null;
             /** @description Unreceived deposits, earliest maturity first. */
             upcoming: components["schemas"]["FamilyDeposit"][];
         };
@@ -2019,9 +2019,9 @@ export interface components {
             kind: components["schemas"]["ForecastItemKind"];
             /** @description `YYYY-MM-01`: the month the cash line lands in. */
             month: string;
-            note?: string | null;
+            note: string | null;
             /** @description `YYYY-MM-01` override for the return month; NULL uses the kind's lag. */
-            return_month?: string | null;
+            return_month: string | null;
             /** Format: int64 */
             sort_order: number;
         };
@@ -2051,13 +2051,13 @@ export interface components {
              * @description Row 34 繳費: −bill_amount on Jan/Apr/Jul/Oct, or Σ `bill` items when
              *     any exist; absent otherwise.
              */
-            bill?: number | null;
+            bill: number | null;
             /**
              * Format: double
              * @description Row 23 活期 = Σ(start..deposit_return) − deposit placements + trade
              *     and IBKR transfer lines; absent while `start` is.
              */
-            cash?: number | null;
+            cash: number | null;
             /**
              * Format: double
              * @description Row 28 定期 finish: Σ principal of deposits ending in the month.
@@ -2095,7 +2095,7 @@ export interface components {
              * @description Row 24 定期+SC: prior `locked` − finish − plans + placements − returns,
              *     anchored on the deposits held on the window's first day.
              */
-            locked?: number | null;
+            locked: number | null;
             /** @description `YYYY-MM-01`, the first of the projected month. */
             month: string;
             /** @description The month's stored forecast items — the sheet's editable cells. */
@@ -2104,28 +2104,28 @@ export interface components {
              * Format: double
              * @description Row 20 = `semi_liquid` − 流動資產 ÷ 4; absent while either side is.
              */
-            ref_check?: number | null;
+            ref_check: number | null;
             /**
              * Format: double
              * @description Row 26: `overview.salary`; absent while unset.
              */
-            salary?: number | null;
+            salary: number | null;
             /**
              * Format: double
              * @description Row 21 半流動 = `cash` + `locked`.
              */
-            semi_liquid?: number | null;
+            semi_liquid: number | null;
             /**
              * Format: double
              * @description Row 27 支出: −生活預算; absent while the trailing window is empty.
              */
-            spend?: number | null;
+            spend: number | null;
             /**
              * Format: double
              * @description Row 25 start: the first column's 月初(出糧後), later the prior column's
              *     `cash`.
              */
-            start?: number | null;
+            start: number | null;
             /**
              * @description The month's real HK trades (`trade_date` inside it), read-only lines
              *     in the 股票 row.
@@ -2141,14 +2141,14 @@ export interface components {
              * @description The deposit's bank; `HS` maps to the 定期 HS row, anything else to
              *     SC高息馬拉松.
              */
-            bank?: string | null;
+            bank: string | null;
             /**
              * Format: int64
              * @description The `deposits` row id.
              */
             deposit_id: number;
             /** @description The deposit's label (`SC-9632`-style), absent while unset. */
-            label?: string | null;
+            label: string | null;
             /** Format: double */
             principal: number;
             /** @description `YYYY-MM-DD` — the day the money left 活期. */
@@ -2194,22 +2194,22 @@ export interface components {
              * @description today + round(365 × years) days, `YYYY-MM-DD` — absent while `years`
              *     is absent, including once the goal is reached.
              */
-            eta?: string | null;
+            eta: string | null;
             /**
              * Format: double
              * @description O15/P15 = target − 流動資產 (3rd) / 總數 (final).
              */
-            remain?: number | null;
+            remain: number | null;
             /**
              * Format: double
              * @description O14/P14: the formula target.
              */
-            target?: number | null;
+            target: number | null;
             /**
              * Format: double
              * @description O16/P16 = remain ÷ the goal's yearly pace; absent once `remain ≤ 0`.
              */
-            years?: number | null;
+            years: number | null;
         };
         /** @description A stored exchange rate to HKD (`fx_rates`). */
         FxRate: {
@@ -2228,8 +2228,8 @@ export interface components {
         FxRateEntry: {
             currency: components["schemas"]["Currency"];
             /** Format: double */
-            rate_to_hkd?: number | null;
-            updated_at?: string | null;
+            rate_to_hkd: number | null;
+            updated_at: string | null;
         };
         /**
          * @description `PATCH /api/fx-rates/{currency}`: a number stores the rate, `null`/absent
@@ -2246,26 +2246,26 @@ export interface components {
          */
         GoalMilestone: {
             /** @description J11/J17 = today + round(365 × years) days, `YYYY-MM-DD`. */
-            eta?: string | null;
+            eta: string | null;
             /**
              * Format: double
              * @description K14/K20 = target − current_invest.
              */
-            remain?: number | null;
+            remain: number | null;
             /**
              * Format: double
              * @description K12/K18: the target amount (`overview.goal1_amount`/`goal2_amount`).
              */
-            target?: number | null;
+            target: number | null;
             /**
              * Format: double
              * @description L14/L20 = remain ÷ saving_year.
              */
-            years?: number | null;
+            years: number | null;
         };
         HolderNoteResponse: {
             holder: string;
-            note?: string | null;
+            note: string | null;
         };
         /**
          * @description The 美股 sheet's IBKR account block (A1:B5 + B7): four manual inputs plus
@@ -2278,41 +2278,41 @@ export interface components {
              * @description 美股!B7 = (stock_value_usd + usd_cash) × rate + hkd_cash — the figure
              *     Overview!B9 links to.
              */
-            computed_total_hkd?: number | null;
+            computed_total_hkd: number | null;
             /**
              * Format: double
              * @description 美股!B4/B5: the account's cash positions.
              */
-            hkd_cash?: number | null;
+            hkd_cash: number | null;
             /**
              * Format: double
              * @description C1 = now_value − transferred_hkd; C2 = net ÷ transferred.
              */
-            net?: number | null;
+            net: number | null;
             /** Format: double */
-            net_pct?: number | null;
+            net_pct: number | null;
             /**
              * Format: double
              * @description 美股!B2: the account total shown in the IBKR app.
              */
-            now_value?: number | null;
+            now_value: number | null;
             /**
              * Format: double
              * @description US stock market value in USD (美股!E2).
              */
-            stock_value_usd?: number | null;
+            stock_value_usd: number | null;
             /**
              * Format: double
              * @description 美股!B1: cumulative bank→IBKR transfers — Σ `ibkr_transfers`.
              */
-            transferred_hkd?: number | null;
+            transferred_hkd: number | null;
             /** Format: double */
-            usd_cash?: number | null;
+            usd_cash: number | null;
             /**
              * Format: double
              * @description computed_total_hkd − now_value: the FX-gap cross-check.
              */
-            vs_now_value?: number | null;
+            vs_now_value: number | null;
         };
         /**
          * @description Absent fields are left untouched; `null` clears a field. Transfers live
@@ -2342,15 +2342,15 @@ export interface components {
              * Format: int64
              * @description The credited IBKR HKD broker account; NULL on log-only rows.
              */
-            broker_account_id?: number | null;
+            broker_account_id: number | null;
             created_at: string;
             /**
              * Format: int64
              * @description The debited bank account; NULL on log-only rows.
              */
-            from_account_id?: number | null;
+            from_account_id: number | null;
             /** @description The source account's label; NULL on log-only rows or a deleted source. */
-            from_account_label?: string | null;
+            from_account_label: string | null;
             /** Format: int64 */
             id: number;
             /** @description `YYYY-MM-DD` — the day the cash moved. */
@@ -2373,8 +2373,8 @@ export interface components {
              * @description The received amount, else the expected/estimated figure while pending;
              *     NULL when nothing is known yet (待定 coupon, estimate-less dividend).
              */
-            amount?: number | null;
-            label?: string | null;
+            amount: number | null;
+            label: string | null;
             received: boolean;
             /** @description `deposit`, `coupon` or `dividend`. */
             source: string;
@@ -2382,9 +2382,9 @@ export interface components {
         /** @description A file entry that was skipped: missing symbol or non-positive price. */
         InvalidPriceEntry: {
             /** Format: double */
-            price?: number | null;
+            price: number | null;
             reason: string;
-            symbol?: string | null;
+            symbol: string | null;
         };
         /**
          * @description One 投資目標 row (J:N): invested, the effective raise, and the derived
@@ -2396,7 +2396,7 @@ export interface components {
              * @description N column: invested YoY for completed years; target vs last invested
              *     for the current year.
              */
-            growth?: number | null;
+            growth: number | null;
             /**
              * Format: double
              * @description The year-review 利息回報 feeding the target formula (0 when none).
@@ -2406,7 +2406,7 @@ export interface components {
              * Format: double
              * @description K column: the year-review `invested`; absent while none.
              */
-            invested?: number | null;
+            invested: number | null;
             /**
              * Format: double
              * @description The year-review 開心Pool支出 feeding the target formula (0 when none).
@@ -2416,17 +2416,17 @@ export interface components {
              * Format: double
              * @description The year's effective 月薪增幅 (override or salary-derived).
              */
-            raise?: number | null;
+            raise: number | null;
             /**
              * Format: double
              * @description M column: target − invested, on the current year only.
              */
-            remain?: number | null;
+            remain: number | null;
             /**
              * Format: double
              * @description L column: the year's target; absent without a prior-year `invested`.
              */
-            target?: number | null;
+            target: number | null;
             /** Format: int32 */
             year: number;
         };
@@ -2439,7 +2439,7 @@ export interface components {
              * Format: double
              * @description J22: mean `invested` over the last three completed years, skip-absent.
              */
-            avg_invested?: number | null;
+            avg_invested: number | null;
             rows: components["schemas"]["InvestTargetRow"][];
         };
         /** @description The Overview `J3:K7` 策略 block: 總數 re-partitioned into liquidity tiers. */
@@ -2448,24 +2448,24 @@ export interface components {
              * Format: double
              * @description K4 可動用 = 半流動資金 − `cannot_use`; absent without a stored salary.
              */
-            can_use?: number | null;
+            can_use: number | null;
             /**
              * Format: double
              * @description K5 不可動用 = salary × 6 (the sheet's `N6`); absent without a salary.
              */
-            cannot_use?: number | null;
+            cannot_use: number | null;
             /**
              * Format: double
              * @description K7 長期可取回 = 基金 + MPF + `long` manual asset rows; absent while
              *     `aia.usd_hkd_rate` is unset.
              */
-            long_term?: number | null;
+            long_term: number | null;
             /**
              * Format: double
              * @description K6 短期可取回 = 港股 + 債券 + IBKR + `short` manual asset rows;
              *     absent while `aia.usd_hkd_rate` is unset.
              */
-            short_term?: number | null;
+            short_term: number | null;
         };
         /** @description A named manual balance (the Overview cells B7/B8/B16/B17). */
         ManualAsset: {
@@ -2475,7 +2475,7 @@ export interface components {
             id: number;
             label: string;
             liquidity: components["schemas"]["ManualAssetLiquidity"];
-            note?: string | null;
+            note: string | null;
             /** Format: int64 */
             sort_order: number;
             updated_at: string;
@@ -2508,7 +2508,7 @@ export interface components {
             /** Format: double */
             amount: number;
             /** Format: double */
-            percent?: number | null;
+            percent: number | null;
         };
         MarketTotals: {
             /** Format: double */
@@ -2519,7 +2519,7 @@ export interface components {
              * Format: double
              * @description Σ 累計派息 ÷ Σ 總買入成本; empty when `buy_cost` is 0.
              */
-            dividend_return?: number | null;
+            dividend_return: number | null;
             /**
              * Format: double
              * @description Σ 累計派息 across all stocks in the market.
@@ -2528,9 +2528,9 @@ export interface components {
             /** @description Stocks left out of `market_value`/`net_*` because they have no 現價. */
             excluded_codes: string[];
             /** Format: double */
-            market_value?: number | null;
+            market_value: number | null;
             /** Format: double */
-            net_amount?: number | null;
+            net_amount: number | null;
             /**
              * Format: double
              * @description Σ 淨投入總本金 across all stocks: `buy_cost − dividends_received`.
@@ -2542,13 +2542,13 @@ export interface components {
              */
             net_invested_priced: number;
             /** Format: double */
-            net_percent?: number | null;
+            net_percent: number | null;
             /**
              * Format: double
              * @description (market_value − net_invested_priced) ÷ net_invested_priced;
              *     empty when nothing is priced or the denominator is 0.
              */
-            real_total_return?: number | null;
+            real_total_return: number | null;
         };
         /**
          * @description The `Overview!J29:N35` Money Master challenge block: the bank app's
@@ -2560,63 +2560,63 @@ export interface components {
              * Format: double
              * @description M31 = saved ÷ month_now.
              */
-            avg_per_month?: number | null;
+            avg_per_month: number | null;
             /**
              * Format: double
              * @description K35 = salary − coming_save; may exceed salary while coming_save < 0.
              */
-            can_use?: number | null;
+            can_use: number | null;
             /**
              * Format: double
              * @description K34: override or `salary + (target_amount − saved) ÷ months_left`;
              *     negative while ahead of target.
              */
-            coming_save?: number | null;
+            coming_save: number | null;
             /**
              * Format: double
              * @description K31: override or `full months elapsed since start_date + 1` (the
              *     bank's 1-indexed month counter).
              */
-            month_now?: number | null;
+            month_now: number | null;
             /**
              * Format: double
              * @description Months left counting the current challenge month, floored at 1.
              */
-            months_left?: number | null;
+            months_left: number | null;
             /**
              * Format: double
              * @description M33 = saved_progress − time_progress.
              */
-            progress_gap?: number | null;
+            progress_gap: number | null;
             /**
              * Format: double
              * @description L31: the bank app's saved figure.
              */
-            saved?: number | null;
+            saved: number | null;
             /**
              * Format: double
              * @description L33 = saved ÷ target_amount.
              */
-            saved_progress?: number | null;
+            saved_progress: number | null;
             /** @description `money_master.start_date` — the challenge start `YYYY-MM-DD`. */
-            start_date?: string | null;
+            start_date: string | null;
             /** Format: double */
-            target_amount?: number | null;
+            target_amount: number | null;
             /**
              * Format: double
              * @description K32/L32: the challenge parameters.
              */
-            target_months?: number | null;
+            target_months: number | null;
             /**
              * Format: double
              * @description K33 = month_now ÷ target_months.
              */
-            time_progress?: number | null;
+            time_progress: number | null;
             /**
              * Format: double
              * @description N31 = avg_per_month × 12.
              */
-            yearly_rate?: number | null;
+            yearly_rate: number | null;
         };
         MonthDetailResponse: {
             /**
@@ -2638,16 +2638,16 @@ export interface components {
             /** Format: double */
             amount: number;
             /** @description Links the item to the app event it was suggested from; NULL = manual. */
-            auto_key?: string | null;
+            auto_key: string | null;
             category: components["schemas"]["MonthItemCategory"];
             created_at: string;
             /** @description Entertainment items only: also subtract from 生活支出. */
             exclude_from_living: boolean;
             /** Format: int64 */
             id: number;
-            label?: string | null;
+            label: string | null;
             month: string;
-            note?: string | null;
+            note: string | null;
         };
         /**
          * @description The month-item categories replacing the sheet's opaque sum columns:
@@ -2677,22 +2677,22 @@ export interface components {
              * @description AVERAGE of 利息 over months that carry a value — same rule as the
              *     yearly `interest_avg` (non-NULL `start_cash` or nonzero interest).
              */
-            interest_avg?: number | null;
+            interest_avg: number | null;
             /**
              * Format: double
              * @description AVERAGE of liquid_change (流動資產 Changed) over months that have it.
              */
-            liquid_change_avg?: number | null;
+            liquid_change_avg: number | null;
             /**
              * Format: double
              * @description AVERAGE of 存 over months that have it.
              */
-            saved_avg?: number | null;
+            saved_avg: number | null;
             /**
              * Format: double
              * @description AVERAGE of total_change over months that have it.
              */
-            total_change_avg?: number | null;
+            total_change_avg: number | null;
         };
         /**
          * @description One month of the Month Stat ledger (`YYYY-MM-01`). Only entered figures are
@@ -2713,13 +2713,13 @@ export interface components {
              * @description H 月尾(出糧前): the stored override, else next row's start_cash −
              *     salary; absent on the latest row.
              */
-            end_cash?: number | null;
+            end_cash: number | null;
             /**
              * Format: double
              * @description Hand-frozen H 月尾 value for months the `=F(n+1) − salary` chain cannot
              *     reproduce (e.g. the first ledger month's typed bank balance).
              */
-            end_cash_override?: number | null;
+            end_cash_override: number | null;
             /**
              * Format: double
              * @description O 娛樂支出: Σ entertainment items.
@@ -2744,31 +2744,31 @@ export interface components {
              * Format: double
              * @description D 流動資產 (effective: frozen value or live-derived).
              */
-            liquid_assets?: number | null;
+            liquid_assets: number | null;
             /** @description True while `liquid_assets` is live-derived rather than stored. */
             liquid_assets_live: boolean;
             /**
              * Format: double
              * @description E Changed: next row's liquid_assets − this row's.
              */
-            liquid_change?: number | null;
+            liquid_change: number | null;
             /**
              * Format: double
              * @description J 生活支出: month_spend − Σextra_spend − Σ flagged entertainment.
              */
-            living_spend?: number | null;
+            living_spend: number | null;
             /**
              * Format: double
              * @description Sheet column K: `(J − J a year earlier) / J` — YoY living-spend change.
              */
-            living_yoy?: number | null;
+            living_yoy: number | null;
             month: string;
             /**
              * Format: double
              * @description I 月支出: start_cash + Σadjustment − end_cash.
              */
-            month_spend?: number | null;
-            note?: string | null;
+            month_spend: number | null;
+            note: string | null;
             /**
              * Format: double
              * @description P Irene + 開心 Pool.
@@ -2778,29 +2778,29 @@ export interface components {
              * Format: double
              * @description The salary in effect that month, snapshotted at creation.
              */
-            salary?: number | null;
+            salary: number | null;
             /**
              * Format: double
              * @description L 存: salary − month_spend + Σincome.
              */
-            saved?: number | null;
+            saved: number | null;
             /**
              * Format: double
              * @description F 月初(出糧後): the 活期 total right after salary lands.
              */
-            start_cash?: number | null;
+            start_cash: number | null;
             /**
              * Format: double
              * @description B 總數 (effective: frozen value or live-derived).
              */
-            total_assets?: number | null;
+            total_assets: number | null;
             /** @description True while `total_assets` is live-derived rather than stored. */
             total_assets_live: boolean;
             /**
              * Format: double
              * @description C Changed: next row's total_assets − this row's.
              */
-            total_change?: number | null;
+            total_change: number | null;
             updated_at: string;
         };
         /**
@@ -2833,7 +2833,7 @@ export interface components {
             amount: number;
             auto_key: string;
             category: components["schemas"]["MonthItemCategory"];
-            label?: string | null;
+            label: string | null;
             /** @description Which app event produced it: deposit, trade, dividend, coupon, aia, pool. */
             source: string;
         };
@@ -2847,7 +2847,7 @@ export interface components {
              * Format: double
              * @description The current year's effective pool rate (incl. earlier-year fallback).
              */
-            pool_rate?: number | null;
+            pool_rate: number | null;
             /** Format: int32 */
             pool_rate_year: number;
             /**
@@ -2887,7 +2887,7 @@ export interface components {
              * Format: double
              * @description 生活平均支出.
              */
-            living_avg?: number | null;
+            living_avg: number | null;
             /** @description Stored months in the year. */
             months: number;
             /**
@@ -2896,7 +2896,7 @@ export interface components {
              *     figure the app does not compute yet); absent while the year has no
              *     sold-P/L entry.
              */
-            net_investment?: number | null;
+            net_investment: number | null;
             /**
              * Format: double
              * @description 開心Pool結餘: the year's chained closing balance.
@@ -2916,22 +2916,22 @@ export interface components {
              * Format: double
              * @description 平均支出.
              */
-            spend_avg?: number | null;
+            spend_avg: number | null;
             /**
              * Format: double
              * @description 支出: Σ month_spend.
              */
-            spend_sum?: number | null;
+            spend_sum: number | null;
             /**
              * Format: double
              * @description 平均總數.
              */
-            total_change_avg?: number | null;
+            total_change_avg: number | null;
             /**
              * Format: double
              * @description 總數+: Σ total_change.
              */
-            total_change_sum?: number | null;
+            total_change_sum: number | null;
             /** Format: int32 */
             year: number;
         };
@@ -2960,22 +2960,22 @@ export interface components {
             id: number;
             /** @description The sheet's account name, e.g. `new type`, `強積金個人帳戶`. */
             label: string;
-            last_month?: components["schemas"]["MpfFigures"] | null;
+            last_month: components["schemas"]["MpfFigures"] | null;
             /**
              * @description All-time maxima over the seed, every history row, and current values.
              *     Rate and gain are independent and may come from different moments.
              */
             max: components["schemas"]["MpfFigures"];
-            member_no?: string | null;
-            plan_name?: string | null;
+            member_no: string | null;
+            plan_name: string | null;
             /**
              * Format: double
              * @description (balance − contributions) ÷ contributions; empty when contributions = 0.
              */
-            rate?: number | null;
+            rate: number | null;
             /** Format: int64 */
             sort_order: number;
-            trustee?: string | null;
+            trustee: string | null;
         };
         /**
          * @description Absent fields are left untouched; present fields are written, so `null`
@@ -2997,7 +2997,7 @@ export interface components {
             /** Format: double */
             gain: number;
             /** Format: double */
-            rate?: number | null;
+            rate: number | null;
         };
         /** @description One recorded account state. Synthetic rows backfill months with no update. */
         MpfHistoryRow: {
@@ -3012,7 +3012,7 @@ export interface components {
             /** Format: int64 */
             id: number;
             /** Format: double */
-            rate?: number | null;
+            rate: number | null;
             /** @description YYYY-MM-DD. */
             recorded_on: string;
             synthetic: boolean;
@@ -3023,7 +3023,7 @@ export interface components {
         MpfResponse: {
             accounts: components["schemas"]["MpfAccount"][];
             history: components["schemas"]["MpfHistoryRow"][];
-            note?: string | null;
+            note: string | null;
             today: string;
             totals: components["schemas"]["MpfTotals"];
         };
@@ -3036,7 +3036,7 @@ export interface components {
             buy: number;
             /** Format: double */
             gain: number;
-            last_month?: components["schemas"]["MpfFigures"] | null;
+            last_month: components["schemas"]["MpfFigures"] | null;
             max: components["schemas"]["MpfFigures"];
             /**
              * Format: double
@@ -3044,7 +3044,7 @@ export interface components {
              */
             now: number;
             /** Format: double */
-            rate?: number | null;
+            rate: number | null;
         };
         NewAiaEvent: {
             /** Format: double */
@@ -3258,7 +3258,7 @@ export interface components {
             unit_price: number;
         };
         NoteResponse: {
-            note?: string | null;
+            note: string | null;
         };
         /**
          * @description One row of the 總覽 asset table (Overview!A3:C9): a module total or a
@@ -3269,21 +3269,21 @@ export interface components {
              * Format: double
              * @description The row's HKD amount; absent while rate-dependent and no rate is set.
              */
-            amount?: number | null;
+            amount: number | null;
             key: string;
             label: string;
             /**
              * Format: int64
              * @description Set when the row is a manual balance, enabling inline edits.
              */
-            manual_asset_id?: number | null;
+            manual_asset_id: number | null;
             /** @description The manual row's note, shown as a hover tooltip on 總覽. */
-            note?: string | null;
+            note: string | null;
             /**
              * Format: double
              * @description amount ÷ assets_sum.
              */
-            share?: number | null;
+            share: number | null;
         };
         /**
          * @description The `Overview!J10:M20` + `N13:P16` 目標 block: the shared saving/return
@@ -3294,7 +3294,7 @@ export interface components {
              * Format: double
              * @description K13 = 港股 + 債券 + IBKR; absent while the IBKR HKD total is absent.
              */
-            current_invest?: number | null;
+            current_invest: number | null;
             /** @description P14:P16 Final Target = salary × replacement × 12 ÷ N4 vs 總數. */
             final_goal: components["schemas"]["FormulaGoal"];
             /** Format: double */
@@ -3308,7 +3308,7 @@ export interface components {
             /** Format: double */
             goal3_years: number;
             /** Format: double */
-            interest_avg?: number | null;
+            interest_avg: number | null;
             /** @description The 1st/2nd 目標 rows, in order. */
             milestones: components["schemas"]["GoalMilestone"][];
             /**
@@ -3316,35 +3316,35 @@ export interface components {
              * @description N4 = `income_value_rate` of the latest completed year (today's − 1);
              *     both absent while that year's row or rate is missing.
              */
-            n4_rate?: number | null;
+            n4_rate: number | null;
             /** Format: int32 */
-            n4_year?: number | null;
+            n4_year: number | null;
             /** Format: double */
-            passive_return_month?: number | null;
+            passive_return_month: number | null;
             /**
              * Format: double
              * @description L13 = K13 × N4; M13 = L13 ÷ 12.
              */
-            passive_return_year?: number | null;
+            passive_return_year: number | null;
             /**
              * Format: double
              * @description 'Month Stat' running averages (L8/N8/C8, monthly) — the last two L12
              *     terms plus the Final goal's pace base, echoed so the card can expand
              *     存/年 and label each goal's pace.
              */
-            saved_avg?: number | null;
+            saved_avg: number | null;
             /** Format: double */
-            saving_month?: number | null;
+            saving_month: number | null;
             /**
              * Format: double
              * @description L12 = the sheet's AVERAGE over the five saving sources, absent terms
              *     skipped; M12 = L12 ÷ 12.
              */
-            saving_year?: number | null;
+            saving_year: number | null;
             /** @description O14:O16 3rd target = 生活預算 × inflation × 12 × years vs 流動資產. */
             third: components["schemas"]["FormulaGoal"];
             /** Format: double */
-            total_change_avg?: number | null;
+            total_change_avg: number | null;
         };
         /** @description `GET /api/overview`: the sheet's A3:C18 block plus the B1/H1/J1 headline. */
         OverviewResponse: {
@@ -3370,7 +3370,7 @@ export interface components {
              * Format: double
              * @description J1 = liquid_assets ÷ (salary × 100); absent without a salary.
              */
-            liquid_ratio?: number | null;
+            liquid_ratio: number | null;
             /** @description J3:K7. */
             liquidity_tiers: components["schemas"]["LiquidityTiers"];
             /** @description J29:N35. */
@@ -3379,12 +3379,12 @@ export interface components {
              * Format: double
              * @description `aia.usd_hkd_rate`; absent while unset.
              */
-            rate?: number | null;
+            rate: number | null;
             /**
              * Format: double
              * @description `overview.salary`; feeds J1.
              */
-            salary?: number | null;
+            salary: number | null;
             semi_liquid: components["schemas"]["SemiLiquid"];
             /**
              * Format: double
@@ -3507,12 +3507,12 @@ export interface components {
              */
             buy_cost_priced: number;
             /** Format: double */
-            market_value?: number | null;
+            market_value: number | null;
             /** Format: double */
-            percent_change?: number | null;
+            percent_change: number | null;
             sector: string;
             /** Format: double */
-            share_of_market_value?: number | null;
+            share_of_market_value: number | null;
         };
         /** @description The Overview!A14:C18 半流動資金 block plus the A13 ratio. */
         SemiLiquid: {
@@ -3532,7 +3532,7 @@ export interface components {
              * Format: double
              * @description A13 = total ÷ (港股 + 債券 + total + IBKR); absent while a term is missing.
              */
-            share?: number | null;
+            share: number | null;
             /**
              * Format: double
              * @description 半流動資金 (B14) = deposits + cash_sum.
@@ -3548,26 +3548,26 @@ export interface components {
         Stock: {
             code: string;
             /** Format: double */
-            eps?: number | null;
-            exchange?: string | null;
+            eps: number | null;
+            exchange: string | null;
             /** Format: double */
-            high52?: number | null;
+            high52: number | null;
             /** Format: int64 */
             id: number;
             is_active: boolean;
             /** Format: double */
-            low52?: number | null;
+            low52: number | null;
             /** Format: double */
-            manual_price?: number | null;
+            manual_price: number | null;
             market: components["schemas"]["Market"];
-            note?: string | null;
+            note: string | null;
             /** Format: double */
-            pe?: number | null;
-            price_updated_at?: string | null;
-            sector?: string | null;
+            pe: number | null;
+            price_updated_at: string | null;
+            sector: string | null;
             /** Format: int64 */
             sort_order: number;
-            ticker?: string | null;
+            ticker: string | null;
         };
         /**
          * @description Absent fields are left untouched; present fields are written, so `null`
@@ -3596,24 +3596,24 @@ export interface components {
         };
         StockSummary: {
             /** Format: double */
-            current_price?: number | null;
+            current_price: number | null;
             /**
              * Format: double
              * @description 累計派息% = 累計派息 ÷ 總買入成本; empty when cost is 0.
              */
-            dividend_return?: number | null;
+            dividend_return: number | null;
             /**
              * Format: double
              * @description 累計派息: Σ received dividend amounts; pending estimates excluded.
              */
             dividends_received: number;
             /** Format: double */
-            market_value?: number | null;
+            market_value: number | null;
             /**
              * Format: double
              * @description 淨攤薄單價 = 淨投入總本金 ÷ 股數 held; empty when held is 0.
              */
-            net_diluted_price?: number | null;
+            net_diluted_price: number | null;
             /**
              * Format: double
              * @description 淨投入總本金 = 總買入成本 − 累計派息.
@@ -3624,7 +3624,7 @@ export interface components {
              * @description 實質動態總回報% = (當前總市值 − 淨投入總本金) ÷ 淨投入總本金;
              *     empty without a market value or when 淨投入總本金 is 0.
              */
-            real_total_return?: number | null;
+            real_total_return: number | null;
             /**
              * Format: double
              * @description ΣBUY 股數 − ΣSELL 股數
@@ -3636,9 +3636,9 @@ export interface components {
              */
             total_buy_cost: number;
             /** Format: double */
-            unrealized_amount?: number | null;
+            unrealized_amount: number | null;
             /** Format: double */
-            unrealized_return?: number | null;
+            unrealized_return: number | null;
             /**
              * Format: double
              * @description 總買入成本 ÷ Σ BUY 股數 (shares bought, not held), 0 when nothing held
@@ -3647,9 +3647,9 @@ export interface components {
         };
         SummaryResponse: {
             average_price_definition: string;
-            last_month?: components["schemas"]["MarketFigures"] | null;
+            last_month: components["schemas"]["MarketFigures"] | null;
             market: components["schemas"]["Market"];
-            max?: components["schemas"]["MarketFigures"] | null;
+            max: components["schemas"]["MarketFigures"] | null;
             sectors: components["schemas"]["SectorRollup"][];
             stocks: components["schemas"]["StockRow"][];
             totals: components["schemas"]["MarketTotals"];
@@ -3662,7 +3662,7 @@ export interface components {
             id: number;
             input_mode: components["schemas"]["InputMode"];
             market: components["schemas"]["Market"];
-            note?: string | null;
+            note: string | null;
             /** Format: double */
             shares: number;
             /** Format: int64 */
@@ -3677,7 +3677,7 @@ export interface components {
              * Format: double
              * @description 平均單價 for this trade: total (fee included) / shares.
              */
-            unit_price_incl_fee?: number | null;
+            unit_price_incl_fee: number | null;
         };
         TradePatch: {
             /** Format: double */
@@ -3707,12 +3707,12 @@ export interface components {
              * Format: double
              * @description G8 利息.
              */
-            interest?: number | null;
+            interest: number | null;
             /**
              * Format: double
              * @description H6 生活預算 = ROUNDUP(living_spend × 1.05, −2).
              */
-            living_budget?: number | null;
+            living_budget: number | null;
             /**
              * Format: double
              * @description `liquid_assets × 0.0001 × 30 + 9000` — the floor the budget is
@@ -3725,12 +3725,12 @@ export interface components {
              * Format: double
              * @description G6 生活支出.
              */
-            living_spend?: number | null;
+            living_spend: number | null;
             /**
              * Format: double
              * @description G5 支出.
              */
-            month_spend?: number | null;
+            month_spend: number | null;
             /**
              * Format: double
              * @description G10 開心Pool — the live balance.
@@ -3740,15 +3740,15 @@ export interface components {
              * Format: double
              * @description G7 存.
              */
-            saved?: number | null;
+            saved: number | null;
             /**
              * Format: double
              * @description G4 總數增加.
              */
-            total_change?: number | null;
-            window_end?: string | null;
+            total_change: number | null;
+            window_end: string | null;
             /** @description The window's first/last months (e.g. "2025-09-01"). */
-            window_start?: string | null;
+            window_start: string | null;
         };
         /** @description A coupon shown under 即將付息, carrying its bond's label. */
         UpcomingCoupon: components["schemas"]["BondCoupon"] & {
@@ -3778,7 +3778,7 @@ export interface components {
         /** @description The sheet's H–M asset-returns group for one year. */
         YearReviewAssets: {
             /** Format: double */
-            bond_interest?: number | null;
+            bond_interest: number | null;
             /** @description True when a stored override replaced the derived figure. */
             bond_overridden: boolean;
             /**
@@ -3787,14 +3787,14 @@ export interface components {
              *     stored overrides win where set. Absent while neither derives nor an
              *     override exists.
              */
-            bond_principal?: number | null;
+            bond_principal: number | null;
             /**
              * Format: double
              * @description 債券 interest ÷ principal.
              */
-            bond_rate?: number | null;
+            bond_rate: number | null;
             /** Format: double */
-            deposit_interest?: number | null;
+            deposit_interest: number | null;
             deposit_overridden: boolean;
             /**
              * Format: double
@@ -3802,17 +3802,17 @@ export interface components {
              *     year and not after today (the sheet's `End` filter) — the stored
              *     overrides win where set.
              */
-            deposit_principal?: number | null;
+            deposit_principal: number | null;
             /**
              * Format: double
              * @description 收入: the stored manual figure.
              */
-            income?: number | null;
+            income: number | null;
             /**
              * Format: double
              * @description 收入 ÷ 12.
              */
-            income_avg?: number | null;
+            income_avg: number | null;
             /**
              * Format: double
              * @description 回報率 blends (the 2026 layout), with the US figures converted at
@@ -3820,89 +3820,89 @@ export interface components {
              *     income ÷ (bond principal + stock cost + us stock cost × rate).
              *     Absent when the year has US figures but no rate is stored.
              */
-            income_cost_rate?: number | null;
+            income_cost_rate: number | null;
             /**
              * Format: double
              * @description (bond + stock returns) ÷ (bond principal + stock now value +
              *     us now value × rate).
              */
-            income_value_rate?: number | null;
+            income_value_rate: number | null;
             /**
              * Format: double
              * @description The L-column YoY on 收入.
              */
-            income_yoy?: number | null;
+            income_yoy: number | null;
             /**
              * Format: double
              * @description 存: income − spend.
              */
-            saved?: number | null;
+            saved: number | null;
             /**
              * Format: double
              * @description 存 ÷ 12.
              */
-            saved_avg?: number | null;
+            saved_avg: number | null;
             /**
              * Format: double
              * @description 存 %: saved ÷ income.
              */
-            saved_pct?: number | null;
+            saved_pct: number | null;
             /**
              * Format: double
              * @description 港股 (HK only, matching the sheet — US enters only through the
              *     invested adjustment): year-end 成本 / 當年派息 / 總市值.
              */
-            stock_cost?: number | null;
+            stock_cost: number | null;
             /** Format: double */
-            stock_dividends?: number | null;
+            stock_dividends: number | null;
             /** Format: double */
-            stock_now_value?: number | null;
+            stock_now_value: number | null;
             /**
              * Format: double
              * @description dividends ÷ cost.
              */
-            stock_rate?: number | null;
+            stock_rate: number | null;
             /**
              * Format: double
              * @description dividends ÷ now_value.
              */
-            stock_value_rate?: number | null;
+            stock_value_rate: number | null;
             /**
              * Format: double
              * @description all returns ÷ (bond principal + stock now value + us now value × rate).
              */
-            total_value_rate?: number | null;
+            total_value_rate: number | null;
             /**
              * Format: double
              * @description 美股 (USD figures, not HKD-converted): the same five figures derived
              *     from the US yearly table. Only the blended 回報率 convert them.
              */
-            us_stock_cost?: number | null;
+            us_stock_cost: number | null;
             /**
              * Format: double
              * @description us_stock_cost × the stored USD→HKD rate — the cell's HKD sub-line;
              *     absent while the USD figure or the rate is missing.
              */
-            us_stock_cost_hkd?: number | null;
+            us_stock_cost_hkd: number | null;
             /** Format: double */
-            us_stock_dividends?: number | null;
+            us_stock_dividends: number | null;
             /** Format: double */
-            us_stock_now_value?: number | null;
+            us_stock_now_value: number | null;
             /**
              * Format: double
              * @description us_stock_now_value × the stored USD→HKD rate.
              */
-            us_stock_now_value_hkd?: number | null;
+            us_stock_now_value_hkd: number | null;
             /**
              * Format: double
              * @description us_stock_dividends ÷ us_stock_cost.
              */
-            us_stock_rate?: number | null;
+            us_stock_rate: number | null;
             /**
              * Format: double
              * @description us_stock_dividends ÷ us_stock_now_value.
              */
-            us_stock_value_rate?: number | null;
+            us_stock_value_rate: number | null;
         };
         /** @description The sheet's E–G investment group for one year. */
         YearReviewInvestment: {
@@ -3920,20 +3920,20 @@ export interface components {
              * Format: double
              * @description The G-column YoY deltas on 平均回報 and invested.
              */
-            interest_avg_yoy?: number | null;
+            interest_avg_yoy: number | null;
             /**
              * Format: double
              * @description invested: HK net invested + the year's IBKR 轉入 + invested_adjustment;
              *     absent while none of the three exists.
              */
-            invested?: number | null;
+            invested: number | null;
             /**
              * Format: double
              * @description invested %: invested ÷ (income + interest); absent without income.
              */
-            invested_pct?: number | null;
+            invested_pct: number | null;
             /** Format: double */
-            invested_yoy?: number | null;
+            invested_yoy: number | null;
             /**
              * Format: double
              * @description Irene + 開心 Pool: Σ pool_input.
@@ -3943,29 +3943,29 @@ export interface components {
              * Format: double
              * @description 投資純利: interest + sold_pl; absent without sold_pl.
              */
-            net_investment?: number | null;
+            net_investment: number | null;
             /**
              * Format: double
              * @description 月薪增幅: the stored `raise` override, else the salary-derived figure;
              *     absent while neither exists. Feeds the Overview 投資目標 target.
              */
-            raise?: number | null;
+            raise: number | null;
             /**
              * Format: double
              * @description 投資P/L: the year's stored HK sold_pl; absent while none is stored.
              */
-            sold_pl?: number | null;
+            sold_pl: number | null;
             /**
              * Format: double
              * @description IBKR 轉入: Σ the year's `ibkr_transfers`; absent while none.
              */
-            transferred?: number | null;
+            transferred: number | null;
             /**
              * Format: double
              * @description 美股P/L: the year's stored US sold_pl (USD, display-only); absent
              *     while none is stored. Never feeds net_investment.
              */
-            us_sold_pl?: number | null;
+            us_sold_pl: number | null;
         };
         /**
          * @description The sheet's A–D ledger group for one year: the Month Stat yearly block
@@ -3977,24 +3977,24 @@ export interface components {
              * Format: double
              * @description 總數+: Σ total_change.
              */
-            asset_gain?: number | null;
+            asset_gain: number | null;
             /**
              * Format: double
              * @description 平均總數+: asset_gain ÷ 12.
              */
-            asset_gain_avg?: number | null;
+            asset_gain_avg: number | null;
             /**
              * Format: double
              * @description The D-column YoY deltas; absent without a usable prior row.
              */
-            asset_gain_yoy?: number | null;
+            asset_gain_yoy: number | null;
             /**
              * Format: double
              * @description 生活平均支出: mean living_spend.
              */
-            living_avg?: number | null;
+            living_avg: number | null;
             /** Format: double */
-            living_yoy?: number | null;
+            living_yoy: number | null;
             /**
              * Format: double
              * @description 開心 Pool 結餘: the chained closing balance.
@@ -4006,7 +4006,7 @@ export interface components {
              */
             pool_income: number;
             /** Format: double */
-            pool_income_yoy?: number | null;
+            pool_income_yoy: number | null;
             /**
              * Format: double
              * @description 開心 Pool 支出: Σ entertainment items.
@@ -4016,14 +4016,14 @@ export interface components {
              * Format: double
              * @description 支出: Σ month_spend.
              */
-            spend?: number | null;
+            spend: number | null;
             /**
              * Format: double
              * @description 平均支出: spend ÷ 12.
              */
-            spend_avg?: number | null;
+            spend_avg: number | null;
             /** Format: double */
-            spend_yoy?: number | null;
+            spend_yoy: number | null;
         };
         /**
          * @description `PATCH /api/year-review/:year` body. Absent fields are left untouched;
@@ -4059,26 +4059,26 @@ export interface components {
          */
         YearReviewRecord: {
             /** Format: double */
-            bond_interest?: number | null;
+            bond_interest: number | null;
             /**
              * Format: double
              * @description Overrides for the 債券 row; None derives from coupons/bonds.
              */
-            bond_principal?: number | null;
+            bond_principal: number | null;
             /** Format: double */
-            deposit_interest?: number | null;
+            deposit_interest: number | null;
             /**
              * Format: double
              * @description Overrides for the 定期 row; None derives from deposits ending in the
              *     year.
              */
-            deposit_principal?: number | null;
+            deposit_principal: number | null;
             /**
              * Format: double
              * @description 收入: the year's income, entered by hand (the sheet's own cell is a
              *     hand-built formula).
              */
-            income?: number | null;
+            income: number | null;
             /**
              * Format: double
              * @description Added to the year's invested on top of the year's `ibkr_transfers` sum
@@ -4086,14 +4086,14 @@ export interface components {
              *     `− 110000 + 美股!B1` for 2026, where the 美股!B1 part now derives from
              *     the transfer log).
              */
-            invested_adjustment?: number | null;
+            invested_adjustment: number | null;
             /**
              * Format: double
              * @description 月薪增幅 override for the Overview 投資目標 formula (the `salary_raise`
              *     column — `raise` is a SQLite keyword); None derives from the stored
              *     month salaries (last of the year minus last of the prior).
              */
-            raise?: number | null;
+            raise: number | null;
         };
         YearReviewResponse: {
             /** @description The date the response was generated. */
@@ -4108,7 +4108,7 @@ export interface components {
             assets: components["schemas"]["YearReviewAssets"];
             investment: components["schemas"]["YearReviewInvestment"];
             ledger: components["schemas"]["YearReviewLedger"];
-            record?: components["schemas"]["YearReviewRecord"] | null;
+            record: components["schemas"]["YearReviewRecord"] | null;
             /** Format: int32 */
             year: number;
         };
@@ -4135,7 +4135,7 @@ export interface components {
              * @description (dividends − prior year's dividends) ÷ prior year's dividends;
              *     empty for the first row or a zero prior year.
              */
-            dividend_yoy?: number | null;
+            dividend_yoy: number | null;
             /**
              * Format: double
              * @description 當年派息: Σ received_amount with pay_date in the year; pending
@@ -4153,37 +4153,37 @@ export interface components {
              * @description (cost − prior year's cost) ÷ prior year's cost — the sheet's
              *     (F−F′)/F′ over the cumulative cost column; empty like dividend_yoy.
              */
-            invested_yoy?: number | null;
+            invested_yoy: number | null;
             /**
              * Format: double
              * @description 年末總市值: the snapshot value, the live total for the current year
              *     without a snapshot, or empty for a past year without one.
              */
-            market_value?: number | null;
+            market_value: number | null;
             /**
              * Format: double
              * @description 月均派息 = dividends ÷ 12.
              */
             monthly_dividend: number;
-            snapshot?: components["schemas"]["YearSnapshot"] | null;
+            snapshot: components["schemas"]["YearSnapshot"] | null;
             /**
              * Format: double
              * @description 賣出損益: the year's realized sell P/L — the stored manual figure,
              *     absent while none is stored (SELL trades are not recorded).
              */
-            sold_pl?: number | null;
+            sold_pl: number | null;
             /** Format: int32 */
             year: number;
             /**
              * Format: double
              * @description 報酬率 1 = dividends ÷ cost; empty when cost is not positive.
              */
-            yield_on_cost?: number | null;
+            yield_on_cost: number | null;
             /**
              * Format: double
              * @description 報酬率 2 = dividends ÷ market_value; empty without a market value.
              */
-            yield_on_value?: number | null;
+            yield_on_value: number | null;
         };
         /** @description Stored frozen figures for one (market, year) in the yearly summary. */
         YearSnapshot: {
@@ -4191,26 +4191,26 @@ export interface components {
              * Format: double
              * @description Frozen 年末總成本; NULL falls back to cumulative Σ BUY total.
              */
-            cost?: number | null;
+            cost: number | null;
             /**
              * Format: double
              * @description Manual override for the year's net invested; NULL falls back to
              *     Σ BUY − Σ SELL of the year.
              */
-            invested?: number | null;
+            invested: number | null;
             market: components["schemas"]["Market"];
             /**
              * Format: double
              * @description Frozen 年末總市值; NULL stays live for the current year, empty for
              *     past years.
              */
-            market_value?: number | null;
+            market_value: number | null;
             /**
              * Format: double
              * @description 賣出損益: the year's realized sell P/L, entered by hand — the
              *     workbook never recorded SELL trades. NULL reports it absent.
              */
-            sold_pl?: number | null;
+            sold_pl: number | null;
             updated_at: string;
             /** Format: int32 */
             year: number;
@@ -4247,7 +4247,7 @@ export interface components {
 }
 export type $defs = Record<string, never>;
 export interface operations {
-    list_events: {
+    aia_list_events: {
         parameters: {
             query?: {
                 policy_id?: number | null;
@@ -4269,7 +4269,7 @@ export interface operations {
             };
         };
     };
-    create_event: {
+    aia_create_event: {
         parameters: {
             query?: never;
             header?: never;
@@ -4311,7 +4311,7 @@ export interface operations {
             };
         };
     };
-    remove_event: {
+    aia_remove_event: {
         parameters: {
             query?: never;
             header?: never;
@@ -4341,7 +4341,7 @@ export interface operations {
             };
         };
     };
-    update_note: {
+    aia_update_note: {
         parameters: {
             query?: never;
             header?: never;
@@ -4365,7 +4365,7 @@ export interface operations {
             };
         };
     };
-    list: {
+    aia_list: {
         parameters: {
             query?: never;
             header?: never;
@@ -4385,7 +4385,7 @@ export interface operations {
             };
         };
     };
-    create: {
+    aia_create: {
         parameters: {
             query?: never;
             header?: never;
@@ -4418,7 +4418,7 @@ export interface operations {
             };
         };
     };
-    remove: {
+    aia_remove: {
         parameters: {
             query?: never;
             header?: never;
@@ -4448,7 +4448,7 @@ export interface operations {
             };
         };
     };
-    update: {
+    aia_update: {
         parameters: {
             query?: never;
             header?: never;
@@ -4493,7 +4493,7 @@ export interface operations {
             };
         };
     };
-    summary: {
+    aia_summary: {
         parameters: {
             query?: never;
             header?: never;
@@ -4513,7 +4513,7 @@ export interface operations {
             };
         };
     };
-    list: {
+    bonds_list: {
         parameters: {
             query?: {
                 /** @description `active` (maturity in the future) or `matured`. */
@@ -4538,7 +4538,7 @@ export interface operations {
             };
         };
     };
-    create: {
+    bonds_create: {
         parameters: {
             query?: never;
             header?: never;
@@ -4571,7 +4571,7 @@ export interface operations {
             };
         };
     };
-    summary: {
+    bonds_summary: {
         parameters: {
             query?: never;
             header?: never;
@@ -4591,7 +4591,7 @@ export interface operations {
             };
         };
     };
-    remove: {
+    bonds_remove: {
         parameters: {
             query?: never;
             header?: never;
@@ -4621,7 +4621,7 @@ export interface operations {
             };
         };
     };
-    update: {
+    bonds_update: {
         parameters: {
             query?: never;
             header?: never;
@@ -4666,7 +4666,7 @@ export interface operations {
             };
         };
     };
-    receive: {
+    bonds_receive: {
         parameters: {
             query?: never;
             header?: never;
@@ -4720,7 +4720,7 @@ export interface operations {
             };
         };
     };
-    list: {
+    cash_accounts_list: {
         parameters: {
             query?: never;
             header?: never;
@@ -4740,7 +4740,7 @@ export interface operations {
             };
         };
     };
-    create: {
+    cash_accounts_create: {
         parameters: {
             query?: never;
             header?: never;
@@ -4782,7 +4782,7 @@ export interface operations {
             };
         };
     };
-    remove: {
+    cash_accounts_remove: {
         parameters: {
             query?: never;
             header?: never;
@@ -4821,7 +4821,7 @@ export interface operations {
             };
         };
     };
-    update: {
+    cash_accounts_update: {
         parameters: {
             query?: never;
             header?: never;
@@ -4875,7 +4875,7 @@ export interface operations {
             };
         };
     };
-    list_coupons: {
+    bonds_list_coupons: {
         parameters: {
             query?: {
                 bond_id?: number | null;
@@ -4897,7 +4897,7 @@ export interface operations {
             };
         };
     };
-    create_coupon: {
+    bonds_create_coupon: {
         parameters: {
             query?: never;
             header?: never;
@@ -4939,7 +4939,7 @@ export interface operations {
             };
         };
     };
-    remove_coupon: {
+    bonds_remove_coupon: {
         parameters: {
             query?: never;
             header?: never;
@@ -4969,7 +4969,7 @@ export interface operations {
             };
         };
     };
-    update_coupon: {
+    bonds_update_coupon: {
         parameters: {
             query?: never;
             header?: never;
@@ -5014,7 +5014,7 @@ export interface operations {
             };
         };
     };
-    list: {
+    deposits_list: {
         parameters: {
             query?: {
                 /** @description `active` (not yet 收訖, even past end date) or `ended` (received). */
@@ -5041,7 +5041,7 @@ export interface operations {
             };
         };
     };
-    create: {
+    deposits_create: {
         parameters: {
             query?: never;
             header?: never;
@@ -5074,7 +5074,7 @@ export interface operations {
             };
         };
     };
-    summary: {
+    deposits_summary: {
         parameters: {
             query?: never;
             header?: never;
@@ -5094,7 +5094,7 @@ export interface operations {
             };
         };
     };
-    remove: {
+    deposits_remove: {
         parameters: {
             query?: never;
             header?: never;
@@ -5133,7 +5133,7 @@ export interface operations {
             };
         };
     };
-    update: {
+    deposits_update: {
         parameters: {
             query?: never;
             header?: never;
@@ -5178,7 +5178,7 @@ export interface operations {
             };
         };
     };
-    receive: {
+    deposits_receive: {
         parameters: {
             query?: never;
             header?: never;
@@ -5232,7 +5232,7 @@ export interface operations {
             };
         };
     };
-    list: {
+    dividends_list: {
         parameters: {
             query?: {
                 market?: string | null;
@@ -5261,7 +5261,7 @@ export interface operations {
             };
         };
     };
-    create: {
+    dividends_create: {
         parameters: {
             query?: never;
             header?: never;
@@ -5303,7 +5303,7 @@ export interface operations {
             };
         };
     };
-    summary: {
+    dividends_summary: {
         parameters: {
             query?: {
                 market?: string | null;
@@ -5332,7 +5332,7 @@ export interface operations {
             };
         };
     };
-    remove: {
+    dividends_remove: {
         parameters: {
             query?: never;
             header?: never;
@@ -5362,7 +5362,7 @@ export interface operations {
             };
         };
     };
-    update: {
+    dividends_update: {
         parameters: {
             query?: never;
             header?: never;
@@ -5407,7 +5407,7 @@ export interface operations {
             };
         };
     };
-    list: {
+    family_list: {
         parameters: {
             query?: {
                 /** @description `active` (not yet 收訖, even past end date) or `ended` (received). */
@@ -5436,7 +5436,7 @@ export interface operations {
             };
         };
     };
-    create: {
+    family_create: {
         parameters: {
             query?: never;
             header?: never;
@@ -5469,7 +5469,7 @@ export interface operations {
             };
         };
     };
-    summary: {
+    family_summary: {
         parameters: {
             query?: never;
             header?: never;
@@ -5489,7 +5489,7 @@ export interface operations {
             };
         };
     };
-    remove: {
+    family_remove: {
         parameters: {
             query?: never;
             header?: never;
@@ -5519,7 +5519,7 @@ export interface operations {
             };
         };
     };
-    update: {
+    family_update: {
         parameters: {
             query?: never;
             header?: never;
@@ -5564,7 +5564,7 @@ export interface operations {
             };
         };
     };
-    receive: {
+    family_receive: {
         parameters: {
             query?: never;
             header?: never;
@@ -5618,7 +5618,7 @@ export interface operations {
             };
         };
     };
-    update_note: {
+    family_update_note: {
         parameters: {
             query?: never;
             header?: never;
@@ -5645,7 +5645,7 @@ export interface operations {
             };
         };
     };
-    forecast: {
+    forecast_forecast: {
         parameters: {
             query?: never;
             header?: never;
@@ -5665,7 +5665,7 @@ export interface operations {
             };
         };
     };
-    remove_item: {
+    forecast_remove_item: {
         parameters: {
             query?: never;
             header?: never;
@@ -5695,7 +5695,7 @@ export interface operations {
             };
         };
     };
-    update_item: {
+    forecast_update_item: {
         parameters: {
             query?: never;
             header?: never;
@@ -5740,7 +5740,7 @@ export interface operations {
             };
         };
     };
-    convert: {
+    forecast_convert: {
         parameters: {
             query?: never;
             header?: never;
@@ -5794,7 +5794,7 @@ export interface operations {
             };
         };
     };
-    create_item: {
+    forecast_create_item: {
         parameters: {
             query?: never;
             header?: never;
@@ -5830,7 +5830,7 @@ export interface operations {
             };
         };
     };
-    list: {
+    fx_list: {
         parameters: {
             query?: never;
             header?: never;
@@ -5850,7 +5850,7 @@ export interface operations {
             };
         };
     };
-    update: {
+    fx_update: {
         parameters: {
             query?: never;
             header?: never;
@@ -5886,7 +5886,7 @@ export interface operations {
             };
         };
     };
-    ibkr: {
+    overview_ibkr: {
         parameters: {
             query?: never;
             header?: never;
@@ -5906,7 +5906,7 @@ export interface operations {
             };
         };
     };
-    update_ibkr: {
+    overview_update_ibkr: {
         parameters: {
             query?: never;
             header?: never;
@@ -5939,7 +5939,7 @@ export interface operations {
             };
         };
     };
-    list_ibkr_transfers: {
+    overview_list_ibkr_transfers: {
         parameters: {
             query?: never;
             header?: never;
@@ -5959,7 +5959,7 @@ export interface operations {
             };
         };
     };
-    create_ibkr_transfer: {
+    overview_create_ibkr_transfer: {
         parameters: {
             query?: never;
             header?: never;
@@ -6010,7 +6010,7 @@ export interface operations {
             };
         };
     };
-    delete_ibkr_transfer: {
+    overview_delete_ibkr_transfer: {
         parameters: {
             query?: never;
             header?: never;
@@ -6040,7 +6040,7 @@ export interface operations {
             };
         };
     };
-    list_assets: {
+    months_list_assets: {
         parameters: {
             query?: never;
             header?: never;
@@ -6060,7 +6060,7 @@ export interface operations {
             };
         };
     };
-    create_asset: {
+    months_create_asset: {
         parameters: {
             query?: never;
             header?: never;
@@ -6093,7 +6093,7 @@ export interface operations {
             };
         };
     };
-    remove_asset: {
+    months_remove_asset: {
         parameters: {
             query?: never;
             header?: never;
@@ -6123,7 +6123,7 @@ export interface operations {
             };
         };
     };
-    update_asset: {
+    months_update_asset: {
         parameters: {
             query?: never;
             header?: never;
@@ -6168,7 +6168,7 @@ export interface operations {
             };
         };
     };
-    remove_item: {
+    months_remove_item: {
         parameters: {
             query?: never;
             header?: never;
@@ -6198,7 +6198,7 @@ export interface operations {
             };
         };
     };
-    update_item: {
+    months_update_item: {
         parameters: {
             query?: never;
             header?: never;
@@ -6243,7 +6243,7 @@ export interface operations {
             };
         };
     };
-    list: {
+    months_list: {
         parameters: {
             query?: {
                 /** @description Restrict to rows of this year. */
@@ -6266,7 +6266,7 @@ export interface operations {
             };
         };
     };
-    summary: {
+    months_summary: {
         parameters: {
             query?: never;
             header?: never;
@@ -6286,7 +6286,7 @@ export interface operations {
             };
         };
     };
-    show: {
+    months_show: {
         parameters: {
             query?: never;
             header?: never;
@@ -6318,7 +6318,7 @@ export interface operations {
             };
         };
     };
-    remove: {
+    months_remove: {
         parameters: {
             query?: never;
             header?: never;
@@ -6357,7 +6357,7 @@ export interface operations {
             };
         };
     };
-    upsert: {
+    months_upsert: {
         parameters: {
             query?: never;
             header?: never;
@@ -6393,7 +6393,7 @@ export interface operations {
             };
         };
     };
-    create_item: {
+    months_create_item: {
         parameters: {
             query?: never;
             header?: never;
@@ -6447,7 +6447,7 @@ export interface operations {
             };
         };
     };
-    dismiss_item: {
+    months_dismiss_item: {
         parameters: {
             query?: never;
             header?: never;
@@ -6481,7 +6481,7 @@ export interface operations {
             };
         };
     };
-    overview: {
+    mpf_overview: {
         parameters: {
             query?: never;
             header?: never;
@@ -6501,7 +6501,7 @@ export interface operations {
             };
         };
     };
-    create: {
+    mpf_create: {
         parameters: {
             query?: never;
             header?: never;
@@ -6534,7 +6534,7 @@ export interface operations {
             };
         };
     };
-    remove: {
+    mpf_remove: {
         parameters: {
             query?: never;
             header?: never;
@@ -6564,7 +6564,7 @@ export interface operations {
             };
         };
     };
-    update: {
+    mpf_update: {
         parameters: {
             query?: never;
             header?: never;
@@ -6609,7 +6609,7 @@ export interface operations {
             };
         };
     };
-    remove_history: {
+    mpf_remove_history: {
         parameters: {
             query?: never;
             header?: never;
@@ -6639,7 +6639,7 @@ export interface operations {
             };
         };
     };
-    update_note: {
+    mpf_update_note: {
         parameters: {
             query?: never;
             header?: never;
@@ -6663,7 +6663,7 @@ export interface operations {
             };
         };
     };
-    overview: {
+    overview_overview: {
         parameters: {
             query?: never;
             header?: never;
@@ -6683,7 +6683,7 @@ export interface operations {
             };
         };
     };
-    get: {
+    settings_get: {
         parameters: {
             query?: never;
             header?: never;
@@ -6703,7 +6703,7 @@ export interface operations {
             };
         };
     };
-    update: {
+    settings_update: {
         parameters: {
             query?: never;
             header?: never;
@@ -6736,7 +6736,7 @@ export interface operations {
             };
         };
     };
-    list: {
+    stocks_list: {
         parameters: {
             query?: {
                 market?: string | null;
@@ -6767,7 +6767,7 @@ export interface operations {
             };
         };
     };
-    create: {
+    stocks_create: {
         parameters: {
             query?: never;
             header?: never;
@@ -6809,7 +6809,7 @@ export interface operations {
             };
         };
     };
-    reorder: {
+    stocks_reorder: {
         parameters: {
             query?: never;
             header?: never;
@@ -6842,7 +6842,7 @@ export interface operations {
             };
         };
     };
-    upload_prices: {
+    stocks_upload_prices: {
         parameters: {
             query?: never;
             header?: never;
@@ -6876,7 +6876,7 @@ export interface operations {
             };
         };
     };
-    remove: {
+    stocks_remove: {
         parameters: {
             query?: never;
             header?: never;
@@ -6915,7 +6915,7 @@ export interface operations {
             };
         };
     };
-    update: {
+    stocks_update: {
         parameters: {
             query?: never;
             header?: never;
@@ -6969,7 +6969,7 @@ export interface operations {
             };
         };
     };
-    show: {
+    summary_show: {
         parameters: {
             query: {
                 market: string;
@@ -7000,7 +7000,7 @@ export interface operations {
             };
         };
     };
-    list: {
+    yearly_list: {
         parameters: {
             query: {
                 market: string;
@@ -7031,7 +7031,7 @@ export interface operations {
             };
         };
     };
-    update: {
+    yearly_update: {
         parameters: {
             query?: never;
             header?: never;
@@ -7069,7 +7069,7 @@ export interface operations {
             };
         };
     };
-    freeze: {
+    yearly_freeze: {
         parameters: {
             query?: never;
             header?: never;
@@ -7103,7 +7103,7 @@ export interface operations {
             };
         };
     };
-    list: {
+    trades_list: {
         parameters: {
             query?: {
                 market?: string | null;
@@ -7142,7 +7142,7 @@ export interface operations {
             };
         };
     };
-    create: {
+    trades_create: {
         parameters: {
             query?: never;
             header?: never;
@@ -7184,7 +7184,7 @@ export interface operations {
             };
         };
     };
-    remove: {
+    trades_remove: {
         parameters: {
             query?: never;
             header?: never;
@@ -7214,7 +7214,7 @@ export interface operations {
             };
         };
     };
-    update: {
+    trades_update: {
         parameters: {
             query?: never;
             header?: never;
@@ -7259,7 +7259,7 @@ export interface operations {
             };
         };
     };
-    list: {
+    year_review_list: {
         parameters: {
             query?: never;
             header?: never;
@@ -7279,7 +7279,7 @@ export interface operations {
             };
         };
     };
-    update: {
+    year_review_update: {
         parameters: {
             query?: never;
             header?: never;

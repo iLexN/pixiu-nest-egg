@@ -21,6 +21,7 @@ fn parse_day(date: &str) -> Result<chrono::NaiveDate, ApiError> {
 }
 
 #[utoipa::path(
+    operation_id = "aia_list",
     get,
     path = "/api/aia/policies",
     tag = "aia",
@@ -36,6 +37,7 @@ pub async fn list(State(state): State<AppState>) -> Result<Json<Vec<AiaPolicy>>,
 }
 
 #[utoipa::path(
+    operation_id = "aia_create",
     post,
     path = "/api/aia/policies",
     tag = "aia",
@@ -73,6 +75,7 @@ pub async fn create(
 }
 
 #[utoipa::path(
+    operation_id = "aia_update",
     patch,
     path = "/api/aia/policies/{id}",
     tag = "aia",
@@ -133,6 +136,7 @@ pub async fn update(
 /// Deleting a policy removes its events: nothing outside them references a
 /// policy, so delete is always permitted.
 #[utoipa::path(
+    operation_id = "aia_remove",
     delete,
     path = "/api/aia/policies/{id}",
     tag = "aia",
@@ -175,6 +179,7 @@ pub struct AiaSummaryResponse {
 
 /// Every figure here is derived from the stored rows on each read.
 #[utoipa::path(
+    operation_id = "aia_summary",
     get,
     path = "/api/aia/summary",
     tag = "aia",
@@ -218,6 +223,7 @@ pub async fn summary(State(state): State<AppState>) -> Result<Json<AiaSummaryRes
 /// The section's free-text note, kept in `app_meta` under `aia.note` — the
 /// same facility as the MPF page note; an empty note deletes the key.
 #[utoipa::path(
+    operation_id = "aia_update_note",
     patch,
     path = "/api/aia/note",
     tag = "aia",
@@ -242,6 +248,7 @@ pub struct EventListQuery {
 }
 
 #[utoipa::path(
+    operation_id = "aia_list_events",
     get,
     path = "/api/aia/events",
     tag = "aia",
@@ -265,6 +272,7 @@ pub async fn list_events(
 /// grows the premium, counts down a remaining year and moves the next due
 /// date; a withdrawal grows the withdrew figure.
 #[utoipa::path(
+    operation_id = "aia_create_event",
     post,
     path = "/api/aia/events",
     tag = "aia",
@@ -304,6 +312,7 @@ pub async fn create_event(
 /// Deleting an event undoes it: the amount leaves its cumulative field and the
 /// policy fields the event recorded snap back.
 #[utoipa::path(
+    operation_id = "aia_remove_event",
     delete,
     path = "/api/aia/events/{id}",
     tag = "aia",

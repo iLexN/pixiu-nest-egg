@@ -13,6 +13,7 @@ pub struct SummaryQuery {
 }
 
 #[utoipa::path(
+    operation_id = "summary_show",
     get,
     path = "/api/summary",
     tag = "summary",

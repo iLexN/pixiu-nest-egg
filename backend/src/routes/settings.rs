@@ -6,6 +6,7 @@ use crate::error::{ApiError, ErrorBody};
 use crate::models::{AppSettings, AppSettingsPatch};
 
 #[utoipa::path(
+    operation_id = "settings_get",
     get,
     path = "/api/settings",
     tag = "settings",
@@ -18,6 +19,7 @@ pub async fn get(State(state): State<AppState>) -> Result<Json<AppSettings>, Api
 }
 
 #[utoipa::path(
+    operation_id = "settings_update",
     patch,
     path = "/api/settings",
     tag = "settings",

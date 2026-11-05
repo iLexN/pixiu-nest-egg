@@ -8,6 +8,7 @@ use crate::models::{Currency, FxRate, FxRateEntry, FxRatePatch};
 use crate::store::{fx, now_timestamp};
 
 #[utoipa::path(
+    operation_id = "fx_list",
     get,
     path = "/api/fx-rates",
     tag = "fx",
@@ -22,6 +23,7 @@ pub async fn list(State(state): State<AppState>) -> Result<Json<Vec<FxRate>>, Ap
 /// Only `USD` exists in `fx_rates`; a number stores the rate and `null`
 /// clears the row so every HKD-priced total drops out of the responses.
 #[utoipa::path(
+    operation_id = "fx_update",
     patch,
     path = "/api/fx-rates/{currency}",
     tag = "fx",

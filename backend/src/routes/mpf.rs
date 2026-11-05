@@ -21,6 +21,7 @@ pub struct MpfResponse {
 }
 
 #[utoipa::path(
+    operation_id = "mpf_overview",
     get,
     path = "/api/mpf",
     tag = "mpf",
@@ -53,6 +54,7 @@ pub async fn overview(State(state): State<AppState>) -> Result<Json<MpfResponse>
 }
 
 #[utoipa::path(
+    operation_id = "mpf_create",
     post,
     path = "/api/mpf/accounts",
     tag = "mpf",
@@ -96,6 +98,7 @@ pub async fn create(
 }
 
 #[utoipa::path(
+    operation_id = "mpf_update",
     patch,
     path = "/api/mpf/accounts/{id}",
     tag = "mpf",
@@ -119,6 +122,7 @@ pub async fn update(
 
 /// An account with history rows is refused so the record never loses its past.
 #[utoipa::path(
+    operation_id = "mpf_remove",
     delete,
     path = "/api/mpf/accounts/{id}",
     tag = "mpf",
@@ -149,6 +153,7 @@ pub struct NoteResponse {
 }
 
 #[utoipa::path(
+    operation_id = "mpf_update_note",
     patch,
     path = "/api/mpf/note",
     tag = "mpf",
@@ -169,6 +174,7 @@ pub async fn update_note(
 
 /// Deleting a stale row recomputes last-month/max without it on next read.
 #[utoipa::path(
+    operation_id = "mpf_remove_history",
     delete,
     path = "/api/mpf/history/{id}",
     tag = "mpf",

@@ -26,6 +26,7 @@ pub struct ListQuery {
 }
 
 #[utoipa::path(
+    operation_id = "deposits_list",
     get,
     path = "/api/deposits",
     tag = "deposits",
@@ -55,6 +56,7 @@ pub async fn list(
 }
 
 #[utoipa::path(
+    operation_id = "deposits_create",
     post,
     path = "/api/deposits",
     tag = "deposits",
@@ -87,6 +89,7 @@ pub async fn create(
 }
 
 #[utoipa::path(
+    operation_id = "deposits_update",
     patch,
     path = "/api/deposits/{id}",
     tag = "deposits",
@@ -140,6 +143,7 @@ pub async fn update(
 }
 
 #[utoipa::path(
+    operation_id = "deposits_remove",
     delete,
     path = "/api/deposits/{id}",
     tag = "deposits",
@@ -176,6 +180,7 @@ pub struct ReceiveDeposit {
 /// (corrected) interest to a cash manual asset, and record the month's
 /// `dep-end` adjustment item — the whole sheet "定期 end step" in one action.
 #[utoipa::path(
+    operation_id = "deposits_receive",
     post,
     path = "/api/deposits/{id}/receive",
     tag = "deposits",
@@ -241,6 +246,7 @@ pub struct DepositSummaryResponse {
 
 /// Every figure here is derived from the stored deposits on each read.
 #[utoipa::path(
+    operation_id = "deposits_summary",
     get,
     path = "/api/deposits/summary",
     tag = "deposits",

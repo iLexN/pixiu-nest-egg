@@ -28,6 +28,7 @@ pub struct ListQuery {
 }
 
 #[utoipa::path(
+    operation_id = "months_list",
     get,
     path = "/api/months",
     tag = "months",
@@ -87,6 +88,7 @@ pub struct MonthSummaryResponse {
 }
 
 #[utoipa::path(
+    operation_id = "months_summary",
     get,
     path = "/api/months/summary",
     tag = "months",
@@ -139,6 +141,7 @@ pub struct MonthDetailResponse {
 }
 
 #[utoipa::path(
+    operation_id = "months_show",
     get,
     path = "/api/months/{ym}",
     tag = "months",
@@ -211,6 +214,7 @@ fn validate_figures(patch: &MonthStatPatch) -> Result<(), ApiError> {
 /// salary; explicit `null` on a total keeps it live, `recapture` re-snapshots
 /// the totals plus 月初 (the live 活期 cash sum).
 #[utoipa::path(
+    operation_id = "months_upsert",
     patch,
     path = "/api/months/{ym}",
     tag = "months",
@@ -236,6 +240,7 @@ pub async fn upsert(
 /// Deleting a month removes its items via the FK cascade; dismissal tombstones
 /// stay (they are per-month keys, harmless without the row).
 #[utoipa::path(
+    operation_id = "months_remove",
     delete,
     path = "/api/months/{ym}",
     tag = "months",
@@ -258,6 +263,7 @@ pub async fn remove(
 }
 
 #[utoipa::path(
+    operation_id = "months_create_item",
     post,
     path = "/api/months/{ym}/items",
     tag = "months",
@@ -284,6 +290,7 @@ pub async fn create_item(
 }
 
 #[utoipa::path(
+    operation_id = "months_update_item",
     patch,
     path = "/api/month-items/{id}",
     tag = "months",
@@ -306,6 +313,7 @@ pub async fn update_item(
 }
 
 #[utoipa::path(
+    operation_id = "months_remove_item",
     delete,
     path = "/api/month-items/{id}",
     tag = "months",
@@ -332,6 +340,7 @@ pub struct DismissBody {
 
 /// Tombstone a suggestion key so it never reappears for the month.
 #[utoipa::path(
+    operation_id = "months_dismiss_item",
     post,
     path = "/api/months/{ym}/items/dismiss",
     tag = "months",
@@ -357,6 +366,7 @@ pub async fn dismiss_item(
 }
 
 #[utoipa::path(
+    operation_id = "months_list_assets",
     get,
     path = "/api/manual-assets",
     tag = "months",
@@ -385,6 +395,7 @@ fn validate_asset(label: &str, amount: f64) -> Result<String, ApiError> {
 }
 
 #[utoipa::path(
+    operation_id = "months_create_asset",
     post,
     path = "/api/manual-assets",
     tag = "months",
@@ -422,6 +433,7 @@ pub async fn create_asset(
 }
 
 #[utoipa::path(
+    operation_id = "months_update_asset",
     patch,
     path = "/api/manual-assets/{id}",
     tag = "months",
@@ -457,6 +469,7 @@ pub async fn update_asset(
 }
 
 #[utoipa::path(
+    operation_id = "months_remove_asset",
     delete,
     path = "/api/manual-assets/{id}",
     tag = "months",

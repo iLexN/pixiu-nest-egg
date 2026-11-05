@@ -268,6 +268,22 @@ export type FormulaGoal = S['FormulaGoal']
 export type OverviewGoals = S['OverviewGoals']
 export type OverviewResponse = S['OverviewResponse']
 
+export class ApiError extends Error {
+  status: number
+  fields: FieldError[]
+
+  constructor(status: number, message: string, fields: FieldError[]) {
+    super(message)
+    this.name = 'ApiError'
+    this.status = status
+    this.fields = fields
+  }
+
+  fieldMessage(field: string): string | undefined {
+    return this.fields.find((f) => f.field === field)?.message
+  }
+}
+
 async function request<T>(path: string, init?: RequestInit): Promise<T> {
   const response = await fetch(`/api${path}`, {
     headers: init?.body ? { 'content-type': 'application/json' } : undefined,

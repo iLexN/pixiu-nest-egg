@@ -16,6 +16,7 @@ pub struct YearlyQuery {
 }
 
 #[utoipa::path(
+    operation_id = "yearly_list",
     get,
     path = "/api/summary/yearly",
     tag = "summary",
@@ -54,6 +55,7 @@ fn validate_signed_figure(field: &str, value: Option<f64>) -> Result<Option<f64>
 }
 
 #[utoipa::path(
+    operation_id = "yearly_update",
     patch,
     path = "/api/summary/yearly/{market}/{year}",
     tag = "summary",
@@ -141,6 +143,7 @@ pub async fn update(
 /// Freeze the year: store the currently computed cumulative 成本 and the
 /// live 總市值 as the snapshot. `invested` is left untouched.
 #[utoipa::path(
+    operation_id = "yearly_freeze",
     post,
     path = "/api/summary/yearly/{market}/{year}/freeze",
     tag = "summary",

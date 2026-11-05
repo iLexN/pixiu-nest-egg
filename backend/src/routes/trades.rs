@@ -23,6 +23,7 @@ pub struct ListQuery {
 }
 
 #[utoipa::path(
+    operation_id = "trades_list",
     get,
     path = "/api/trades",
     tag = "trades",
@@ -54,6 +55,7 @@ pub async fn list(
 }
 
 #[utoipa::path(
+    operation_id = "trades_create",
     post,
     path = "/api/trades",
     tag = "trades",
@@ -105,6 +107,7 @@ pub async fn create(
 }
 
 #[utoipa::path(
+    operation_id = "trades_update",
     patch,
     path = "/api/trades/{id}",
     tag = "trades",
@@ -179,6 +182,7 @@ pub async fn update(
 }
 
 #[utoipa::path(
+    operation_id = "trades_remove",
     delete,
     path = "/api/trades/{id}",
     tag = "trades",

@@ -29,6 +29,7 @@ pub struct ListQuery {
 }
 
 #[utoipa::path(
+    operation_id = "dividends_list",
     get,
     path = "/api/dividends",
     tag = "dividends",
@@ -91,6 +92,7 @@ async fn derive_snapshots(
 }
 
 #[utoipa::path(
+    operation_id = "dividends_create",
     post,
     path = "/api/dividends",
     tag = "dividends",
@@ -148,6 +150,7 @@ pub async fn create(
 }
 
 #[utoipa::path(
+    operation_id = "dividends_update",
     patch,
     path = "/api/dividends/{id}",
     tag = "dividends",
@@ -243,6 +246,7 @@ pub async fn update(
 }
 
 #[utoipa::path(
+    operation_id = "dividends_remove",
     delete,
     path = "/api/dividends/{id}",
     tag = "dividends",
@@ -276,6 +280,7 @@ pub struct DividendSummaryResponse {
 
 /// Every figure here is derived from the stored dividends on each read.
 #[utoipa::path(
+    operation_id = "dividends_summary",
     get,
     path = "/api/dividends/summary",
     tag = "dividends",

@@ -63,6 +63,7 @@ fn validate_amount(amount: f64) -> Result<(), Vec<FieldError>> {
 
 /// The seven-month 預測 grid (`Overview!A20:H36`), fully derived on read.
 #[utoipa::path(
+    operation_id = "forecast_forecast",
     get,
     path = "/api/forecast",
     tag = "forecast",
@@ -228,6 +229,7 @@ pub async fn forecast(State(state): State<AppState>) -> Result<Json<ForecastResp
 }
 
 #[utoipa::path(
+    operation_id = "forecast_create_item",
     post,
     path = "/api/forecast/{ym}/items",
     tag = "forecast",
@@ -279,6 +281,7 @@ pub async fn create_item(
 }
 
 #[utoipa::path(
+    operation_id = "forecast_update_item",
     patch,
     path = "/api/forecast-items/{id}",
     tag = "forecast",
@@ -333,6 +336,7 @@ pub async fn update_item(
 }
 
 #[utoipa::path(
+    operation_id = "forecast_remove_item",
     delete,
     path = "/api/forecast-items/{id}",
     tag = "forecast",
@@ -357,6 +361,7 @@ pub async fn remove_item(
 /// item) — and delete the plan, in one transaction, so the plan's derived
 /// return/lock effects can never double-count against the deposit.
 #[utoipa::path(
+    operation_id = "forecast_convert",
     post,
     path = "/api/forecast-items/{id}/convert",
     tag = "forecast",

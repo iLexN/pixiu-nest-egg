@@ -21,6 +21,7 @@ pub struct ListQuery {
 }
 
 #[utoipa::path(
+    operation_id = "bonds_list",
     get,
     path = "/api/bonds",
     tag = "bonds",
@@ -55,6 +56,7 @@ pub async fn list(
 }
 
 #[utoipa::path(
+    operation_id = "bonds_create",
     post,
     path = "/api/bonds",
     tag = "bonds",
@@ -85,6 +87,7 @@ pub async fn create(
 }
 
 #[utoipa::path(
+    operation_id = "bonds_update",
     patch,
     path = "/api/bonds/{id}",
     tag = "bonds",
@@ -141,6 +144,7 @@ pub struct ReceiveBond {
 /// `bond-end` adjustment item. Coupons keep their own 收訖 — this is only
 /// about the principal.
 #[utoipa::path(
+    operation_id = "bonds_receive",
     post,
     path = "/api/bonds/{id}/receive",
     tag = "bonds",
@@ -190,6 +194,7 @@ pub async fn receive(
 /// Deleting a bond removes its coupons: nothing outside the bond references
 /// them, so delete is always permitted.
 #[utoipa::path(
+    operation_id = "bonds_remove",
     delete,
     path = "/api/bonds/{id}",
     tag = "bonds",
@@ -246,6 +251,7 @@ pub struct BondSummaryResponse {
 
 /// Every figure here is derived from the stored rows on each read.
 #[utoipa::path(
+    operation_id = "bonds_summary",
     get,
     path = "/api/bonds/summary",
     tag = "bonds",
@@ -308,6 +314,7 @@ pub struct CouponListQuery {
 }
 
 #[utoipa::path(
+    operation_id = "bonds_list_coupons",
     get,
     path = "/api/coupons",
     tag = "bonds",
@@ -327,6 +334,7 @@ pub async fn list_coupons(
 }
 
 #[utoipa::path(
+    operation_id = "bonds_create_coupon",
     post,
     path = "/api/coupons",
     tag = "bonds",
@@ -359,6 +367,7 @@ pub async fn create_coupon(
 }
 
 #[utoipa::path(
+    operation_id = "bonds_update_coupon",
     patch,
     path = "/api/coupons/{id}",
     tag = "bonds",
@@ -413,6 +422,7 @@ pub async fn update_coupon(
 }
 
 #[utoipa::path(
+    operation_id = "bonds_remove_coupon",
     delete,
     path = "/api/coupons/{id}",
     tag = "bonds",

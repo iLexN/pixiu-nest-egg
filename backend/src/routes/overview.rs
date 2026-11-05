@@ -7,6 +7,7 @@ use crate::error::{ApiError, ErrorBody};
 use crate::models::{IbkrBlock, IbkrPatch, IbkrTransfer, NewIbkrTransfer, OverviewResponse};
 
 #[utoipa::path(
+    operation_id = "overview_ibkr",
     get,
     path = "/api/ibkr",
     tag = "overview",
@@ -22,6 +23,7 @@ pub async fn ibkr(State(state): State<AppState>) -> Result<Json<IbkrBlock>, ApiE
 }
 
 #[utoipa::path(
+    operation_id = "overview_update_ibkr",
     patch,
     path = "/api/ibkr",
     tag = "overview",
@@ -44,6 +46,7 @@ pub async fn update_ibkr(
 /// Every `ibkr_transfers` row, newest `transfer_date` then newest id first,
 /// with the source account label joined in (NULL for log-only rows).
 #[utoipa::path(
+    operation_id = "overview_list_ibkr_transfers",
     get,
     path = "/api/ibkr/transfers",
     tag = "overview",
@@ -63,6 +66,7 @@ pub async fn list_ibkr_transfers(
 /// A bank→IBKR transfer as one atomic cash movement: log row, source debit,
 /// broker credit, and the month's `ibkr:<id>` adjustment item.
 #[utoipa::path(
+    operation_id = "overview_create_ibkr_transfer",
     post,
     path = "/api/ibkr/transfers",
     tag = "overview",
@@ -85,6 +89,7 @@ pub async fn create_ibkr_transfer(
 /// Undo a transfer exactly: reverse the recorded balance moves, drop its
 /// `ibkr:<id>` month item, then delete the row. Log-only rows move no cash.
 #[utoipa::path(
+    operation_id = "overview_delete_ibkr_transfer",
     delete,
     path = "/api/ibkr/transfers/{id}",
     tag = "overview",
@@ -104,6 +109,7 @@ pub async fn delete_ibkr_transfer(
 
 /// `Overview!A3:C18` plus the B1/H1/J1 headline, derived on read.
 #[utoipa::path(
+    operation_id = "overview_overview",
     get,
     path = "/api/overview",
     tag = "overview",

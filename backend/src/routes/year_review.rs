@@ -10,6 +10,7 @@ use crate::service::year_review::{YearReviewResponse, build};
 /// Every figure here derives from stored data on each read except the manual
 /// inputs and seeded overrides in `year_review`.
 #[utoipa::path(
+    operation_id = "year_review_list",
     get,
     path = "/api/year-review",
     tag = "year-review",
@@ -26,6 +27,7 @@ pub async fn list(State(state): State<AppState>) -> Result<Json<YearReviewRespon
 /// stays as-is; `null` clears it back to live derivation; clearing every
 /// stored value removes the row.
 #[utoipa::path(
+    operation_id = "year_review_update",
     patch,
     path = "/api/year-review/{year}",
     tag = "year-review",

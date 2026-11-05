@@ -9,6 +9,7 @@ use crate::service::cash_accounts;
 use crate::store::cash_accounts as store;
 
 #[utoipa::path(
+    operation_id = "cash_accounts_list",
     get,
     path = "/api/cash-accounts",
     tag = "cash-accounts",
@@ -21,6 +22,7 @@ pub async fn list(State(state): State<AppState>) -> Result<Json<Vec<CashAccount>
 }
 
 #[utoipa::path(
+    operation_id = "cash_accounts_create",
     post,
     path = "/api/cash-accounts",
     tag = "cash-accounts",
@@ -40,6 +42,7 @@ pub async fn create(
 }
 
 #[utoipa::path(
+    operation_id = "cash_accounts_update",
     patch,
     path = "/api/cash-accounts/{id}",
     tag = "cash-accounts",
@@ -61,6 +64,7 @@ pub async fn update(
 }
 
 #[utoipa::path(
+    operation_id = "cash_accounts_remove",
     delete,
     path = "/api/cash-accounts/{id}",
     tag = "cash-accounts",
