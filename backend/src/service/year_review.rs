@@ -16,11 +16,10 @@ pub struct YearReviewResponse {
 /// inputs and seeded overrides in `year_review`.
 pub async fn build(pool: &SqlitePool) -> Result<YearReviewResponse, StoreError> {
     let now = today();
-    let (stat_rows, live_tail) = super::months::load_stat_rows_live(pool).await?;
-    let items = crate::store::months::load_all_items(pool).await?;
+    let book = super::months::MonthBook::open(pool).await?;
     let rates = crate::store::months::pool_rates(pool).await?;
     let sold_pl = crate::store::yearly::hk_sold_pl(pool).await?;
-    let summaries = month_year_summaries(&stat_rows, &items, &rates, &sold_pl, live_tail);
+    let summaries = month_year_summaries(&book.stat_rows, &book.items, &rates, &sold_pl, book.tail);
     let hk_years = super::yearly::build(pool, Market::Hk).await?.years;
     let us_years = super::yearly::build(pool, Market::Us).await?.years;
     let usd_hkd_rate = crate::store::fx::usd_rate(pool).await?;

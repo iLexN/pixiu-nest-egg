@@ -334,9 +334,7 @@ mod tests {
         assert_eq!(response.upcoming.len(), 1);
 
         // Live totals count it too — liquid_assets includes the principal.
-        let input = crate::service::months::live_totals_input(&pool)
-            .await
-            .unwrap();
+        let input = crate::service::wealth::totals_input(&pool).await.unwrap();
         let liquid_before = crate::calc::live_totals(&input).liquid_assets;
 
         let _received = receive(
@@ -357,9 +355,7 @@ mod tests {
         assert!(response.upcoming.is_empty());
 
         // No 存入活期 was picked, so the principal leaves liquid_assets whole.
-        let input = crate::service::months::live_totals_input(&pool)
-            .await
-            .unwrap();
+        let input = crate::service::wealth::totals_input(&pool).await.unwrap();
         let liquid_after = crate::calc::live_totals(&input).liquid_assets;
         assert!((liquid_before - liquid_after - 110000.0).abs() < 1e-6);
     }

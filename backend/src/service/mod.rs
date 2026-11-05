@@ -34,5 +34,6 @@ pub mod receipts;
 pub mod settings;
 pub mod summary;
 pub mod trades;
+pub mod wealth;
 pub mod year_review;
 pub mod yearly;

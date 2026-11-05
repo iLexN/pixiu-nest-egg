@@ -4,9 +4,9 @@ use chrono::Datelike;
 use sqlx::SqlitePool;
 
 use crate::calc::{
-    LiveTotals, LiveTotalsInput, MonthDerived, MonthItemFacts, MonthItemSums, SuggestionAiaPayment,
-    SuggestionDeposit, SuggestionEvents, SuggestionReceipt, SuggestionTrade, active_totals,
-    aia_totals, auto_interest, live_totals, month_item_sums, mpf_totals, pool_balances,
+    LiveTotals, MonthDerived, MonthItemFacts, MonthItemSums, SuggestionAiaPayment,
+    SuggestionDeposit, SuggestionEvents, SuggestionReceipt, SuggestionTrade, auto_interest,
+    month_item_sums,
 };
 use crate::models::MonthStat;
 use crate::store::months::StoredMonth;
@@ -19,38 +19,110 @@ pub fn live_from() -> chrono::NaiveDate {
     chrono::NaiveDate::from_ymd_opt(today.year(), today.month(), 1).expect("valid first of month")
 }
 
-/// All stored months as stat rows, with NULL totals on current/future months
-/// filled from `live` when given.
-pub async fn load_stat_rows(
+/// The assembled 月結 ledger: every month-derived read opens the book rather
+/// than re-sequencing the load/live-gate/derive pipeline itself.
+pub struct MonthBook {
+    /// The stored `month_stats` rows, in `month` order.
+    pub stored: Vec<StoredMonth>,
+    /// One [`crate::calc::MonthStatRow`] per stored row, NULL totals on
+    /// current/future months filled from `live` when held.
+    pub stat_rows: Vec<crate::calc::MonthStatRow>,
+    /// All `month_items`, grouped by month.
+    pub items: HashMap<chrono::NaiveDate, Vec<MonthItemFacts>>,
+    /// The gated live totals — `Some` only when a stored NULL or the
+    /// current-month tail needs them.
+    pub live: Option<LiveTotals>,
+    /// The live totals the last row's Changed cells diff against — `Some`
+    /// only when the last stored month IS the current month.
+    pub tail: Option<LiveTotals>,
+}
+
+impl MonthBook {
+    /// Open the book, computing live totals only when `wants_live` — a
+    /// current/future NULL B/D to fill, or a current last row needing the tail.
+    pub async fn open(pool: &SqlitePool) -> Result<Self, StoreError> {
+        let stored = crate::store::months::load_all_months(pool).await?;
+        let items = crate::store::months::load_all_items(pool).await?;
+        let events = load_interest_events(pool).await?;
+        let live = if wants_live(&stored) {
+            Some(crate::service::wealth::live_totals(pool).await?)
+        } else {
+            None
+        };
+        Self::assemble(&stored, items, live, &events)
+    }
+
+    /// Open the book with live totals the caller already holds (overview,
+    /// forecast compute them for their own responses). `live` is applied
+    /// per-row at [`live_from`] and gated into `tail` as usual.
+    pub async fn open_with_live(pool: &SqlitePool, live: LiveTotals) -> Result<Self, StoreError> {
+        let stored = crate::store::months::load_all_months(pool).await?;
+        let items = crate::store::months::load_all_items(pool).await?;
+        let events = load_interest_events(pool).await?;
+        Self::assemble(&stored, items, Some(live), &events)
+    }
+
+    fn assemble(
+        stored: &[StoredMonth],
+        items: HashMap<chrono::NaiveDate, Vec<MonthItemFacts>>,
+        live: Option<LiveTotals>,
+        events: &SuggestionEvents,
+    ) -> Result<Self, StoreError> {
+        let stat_rows = to_stat_rows(stored, live.as_ref(), events, &items)?;
+        let tail = live_tail(&stat_rows, live);
+        Ok(Self {
+            stored: stored.to_vec(),
+            stat_rows,
+            items,
+            live,
+            tail,
+        })
+    }
+
+    /// One stored row with its derived columns and live-resolved totals.
+    /// `Err(NotFound)` while `stored.month` names no row in the book.
+    pub fn present_one(&self, stored: &StoredMonth) -> Result<MonthStat, StoreError> {
+        let derived = crate::calc::month_derived_with_tail(&self.stat_rows, &self.items, self.tail);
+        let index = self
+            .stored
+            .iter()
+            .position(|row| row.month == stored.month)
+            .ok_or_else(|| StoreError::NotFound(format!("month {} not found", stored.month)))?;
+        let sums = self
+            .items
+            .get(&self.stat_rows[index].month)
+            .map(|items| month_item_sums(items))
+            .unwrap_or_default();
+        Ok(present(
+            &self.stored[index],
+            &derived[index],
+            self.live.as_ref(),
+            &sums,
+            self.stat_rows[index].interest,
+        ))
+    }
+}
+
+/// Stat rows built from stored figures only — for the 開心Pool chain inside
+/// the live-totals aggregate, which must not pull in live (it is computing
+/// the live figures).
+pub(crate) async fn stat_rows_no_live(
     pool: &SqlitePool,
-    live: Option<&LiveTotals>,
-) -> Result<Vec<crate::calc::MonthStatRow>, StoreError> {
+) -> Result<
+    (
+        Vec<crate::calc::MonthStatRow>,
+        HashMap<chrono::NaiveDate, Vec<MonthItemFacts>>,
+    ),
+    StoreError,
+> {
     let stored = crate::store::months::load_all_months(pool).await?;
     let items = crate::store::months::load_all_items(pool).await?;
     let events = load_interest_events(pool).await?;
-    to_stat_rows(&stored, live, &events, &items)
+    let stat_rows = to_stat_rows(&stored, None, &events, &items)?;
+    Ok((stat_rows, items))
 }
 
-/// Stat rows for aggregate paths (yearly blocks, 回顧): live-fills NULL
-/// totals on current/future months and returns the gated live tail for
-/// `month_derived_with_tail`/`month_year_summaries`.
-pub async fn load_stat_rows_live(
-    pool: &SqlitePool,
-) -> Result<(Vec<crate::calc::MonthStatRow>, Option<LiveTotals>), StoreError> {
-    let stored = crate::store::months::load_all_months(pool).await?;
-    let items = crate::store::months::load_all_items(pool).await?;
-    let events = load_interest_events(pool).await?;
-    let live = if wants_live(&stored) {
-        Some(live_if_needed(pool).await?)
-    } else {
-        None
-    };
-    let stat_rows = to_stat_rows(&stored, live.as_ref(), &events, &items)?;
-    let tail = live_tail(&stat_rows, live);
-    Ok((stat_rows, tail))
-}
-
-pub fn to_stat_rows(
+fn to_stat_rows(
     stored: &[StoredMonth],
     live: Option<&LiveTotals>,
     events: &SuggestionEvents,
@@ -120,85 +192,9 @@ pub fn present(
     }
 }
 
-/// The components of `Overview!B1`/`H1`, resolved from the current DB — the
-/// same aggregation the later Overview endpoint reuses.
-pub async fn live_totals_input(pool: &SqlitePool) -> Result<LiveTotalsInput, StoreError> {
-    let today = today();
-    let hk = super::summary::market_value_only(pool, crate::models::Market::Hk)
-        .await?
-        .unwrap_or(0.0);
-    let us = super::summary::market_value_only(pool, crate::models::Market::Us)
-        .await?
-        .unwrap_or(0.0);
-    let rate = crate::store::fx::usd_rate(pool).await?;
-
-    let facts = crate::store::deposits::active_facts(pool).await?;
-    // 定期!B1 counts principal only; the interest lands in 活期 at maturity.
-    let deposits_active_principal = active_totals(&facts).principal;
-
-    let bonds_active_principal = super::bonds::active_principal(pool).await?;
-
-    let policies = crate::store::aia::load_all_policies(pool).await?;
-    let aia_facts: Vec<crate::calc::AiaPolicyFacts> =
-        policies.iter().map(crate::store::aia::facts_of).collect();
-    let aia_value_usd = aia_totals(&aia_facts, rate).value;
-
-    let accounts = crate::store::mpf::load_all_stored(pool).await?;
-    let history = crate::store::mpf::load_history(pool, None).await?;
-    let mpf_facts: Vec<crate::calc::MpfAccountFacts> = accounts
-        .iter()
-        .map(|account| crate::store::mpf::facts_of(account, &history))
-        .collect();
-    let mpf_balance = mpf_totals(&mpf_facts, today, None, None).now;
-
-    let manual_assets_sum = crate::store::months::manual_asset_sum(pool).await?;
-    let cash_sum = crate::store::cash_accounts::bank_sum(pool).await?;
-
-    let months = crate::store::months::load_all_months(pool).await?;
-    let items = crate::store::months::load_all_items(pool).await?;
-    let interest_events = load_interest_events(pool).await?;
-    let stat_rows = to_stat_rows(&months, None, &interest_events, &items)?;
-    let rates = crate::store::months::pool_rates(pool).await?;
-    let pool_balance = match stat_rows.last() {
-        Some(latest) => pool_balances(&stat_rows, &items, &rates)
-            .get(&latest.month.year())
-            .copied()
-            .unwrap_or(0.0),
-        None => 0.0,
-    };
-
-    Ok(LiveTotalsInput {
-        hk_market_value: hk,
-        us_market_value: us,
-        usd_hkd_rate: rate,
-        deposits_active_principal,
-        bonds_active_principal,
-        aia_value_usd,
-        mpf_balance,
-        manual_assets_sum,
-        cash_sum,
-        ibkr_hkd_cash: crate::store::cash_accounts::broker(pool, crate::models::Currency::Hkd)
-            .await?
-            .map(|account| account.amount)
-            .unwrap_or(0.0),
-        ibkr_usd_cash: crate::store::cash_accounts::broker(pool, crate::models::Currency::Usd)
-            .await?
-            .map(|account| account.amount)
-            .unwrap_or(0.0),
-        pool_balance,
-    })
-}
-
-/// Compute the live totals once; callers check `wants_live` first.
-pub async fn live_if_needed(pool: &SqlitePool) -> Result<LiveTotals, StoreError> {
-    let input = live_totals_input(pool).await?;
-    Ok(live_totals(&input))
-}
-
-/// `live_totals_input` computes live totals unconditionally — the
-/// `if needs_live { ... }` gate lives in `load_stat_rows_live` and the
-/// handlers that want them.
-pub fn needs_live(stored: &[StoredMonth]) -> bool {
+/// The `if needs_live { ... }` half of the gate: a NULL B/D at or after the
+/// current month fills live.
+fn needs_live(stored: &[StoredMonth]) -> bool {
     let live_from = live_from();
     stored.iter().any(|row| {
         (row.total_assets.is_none() || row.liquid_assets.is_none())
@@ -211,7 +207,7 @@ pub fn needs_live(stored: &[StoredMonth]) -> bool {
 /// Whether live totals are worth computing: a NULL B/D at or after the
 /// current month fills live, or the last stored month IS the current month
 /// and needs the live tail for its Changed cell.
-pub fn wants_live(stored: &[StoredMonth]) -> bool {
+fn wants_live(stored: &[StoredMonth]) -> bool {
     needs_live(stored)
         || stored.last().is_some_and(|row| {
             crate::store::months::parse_stored_month(&row.month).is_ok_and(|m| m == live_from())
@@ -223,10 +219,7 @@ pub fn wants_live(stored: &[StoredMonth]) -> bool {
 /// in-progress change. Gated to the current month: a future placeholder has
 /// no knowable change and a stale last row must not pull a live diff into
 /// an old year.
-pub fn live_tail(
-    rows: &[crate::calc::MonthStatRow],
-    live: Option<LiveTotals>,
-) -> Option<LiveTotals> {
+fn live_tail(rows: &[crate::calc::MonthStatRow], live: Option<LiveTotals>) -> Option<LiveTotals> {
     live.filter(|_| rows.last().is_some_and(|row| row.month == live_from()))
 }
 
@@ -305,39 +298,6 @@ pub async fn load_events(
     })
 }
 
-/// Load one row plus its derived columns and live-resolved totals.
-pub async fn present_month(
-    pool: &SqlitePool,
-    stored: &StoredMonth,
-) -> Result<MonthStat, StoreError> {
-    let all = crate::store::months::load_all_months(pool).await?;
-    let items = crate::store::months::load_all_items(pool).await?;
-    let interest_events = load_interest_events(pool).await?;
-    let live = if wants_live(&all) {
-        Some(live_if_needed(pool).await?)
-    } else {
-        None
-    };
-    let stat_rows = to_stat_rows(&all, live.as_ref(), &interest_events, &items)?;
-    let derived =
-        crate::calc::month_derived_with_tail(&stat_rows, &items, live_tail(&stat_rows, live));
-    let index = all
-        .iter()
-        .position(|row| row.month == stored.month)
-        .ok_or_else(|| StoreError::NotFound(format!("month {} not found", stored.month)))?;
-    let sums = items
-        .get(&stat_rows[index].month)
-        .map(|items| month_item_sums(items))
-        .unwrap_or_default();
-    Ok(present(
-        &all[index],
-        &derived[index],
-        live.as_ref(),
-        &sums,
-        stat_rows[index].interest,
-    ))
-}
-
 /// `goal3.inflation` / `goal3.years` / `final.replacement` — the sheet
 /// literals while no `app_meta` override exists.
 pub const DEFAULT_GOAL3_INFLATION: f64 = 1.07;
@@ -366,4 +326,130 @@ pub async fn semi_liquid_target(pool: &SqlitePool) -> Result<f64, StoreError> {
         .await?
         .semi_liquid_target
         .unwrap_or(DEFAULT_SEMI_LIQUID_TARGET))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn month_key(month: chrono::NaiveDate) -> String {
+        month.format("%Y-%m-01").to_string()
+    }
+
+    async fn insert(
+        pool: &SqlitePool,
+        month: chrono::NaiveDate,
+        total_assets: Option<f64>,
+        liquid_assets: Option<f64>,
+    ) {
+        let now = crate::store::now_timestamp();
+        crate::store::months::insert_month(
+            pool,
+            &month_key(month),
+            Some(1000.0),
+            Some(30000.0),
+            total_assets,
+            liquid_assets,
+            0.0,
+            None,
+            None,
+            &now,
+        )
+        .await
+        .expect("insert month");
+    }
+
+    fn past(months_ago: u32) -> chrono::NaiveDate {
+        live_from()
+            .checked_sub_months(chrono::Months::new(months_ago))
+            .expect("past month")
+    }
+
+    fn future(months_ahead: u32) -> chrono::NaiveDate {
+        live_from()
+            .checked_add_months(chrono::Months::new(months_ahead))
+            .expect("future month")
+    }
+
+    fn row(book: &MonthBook, month: chrono::NaiveDate) -> &crate::calc::MonthStatRow {
+        book.stat_rows
+            .iter()
+            .find(|row| row.month == month)
+            .expect("stat row")
+    }
+
+    #[tokio::test]
+    async fn open_fills_null_totals_live_only_at_and_after_the_current_month() {
+        let pool = crate::db::connect_memory().await.expect("memory db");
+        let first = live_from();
+        insert(&pool, past(2), None, None).await;
+        insert(&pool, first, None, None).await;
+        insert(&pool, future(2), None, None).await;
+
+        let book = MonthBook::open(&pool).await.expect("book");
+
+        assert!(row(&book, past(2)).total_assets.is_none());
+        assert!(row(&book, past(2)).liquid_assets.is_none());
+        assert!(row(&book, first).total_assets.is_some());
+        assert!(row(&book, first).liquid_assets.is_some());
+        assert!(row(&book, future(2)).total_assets.is_some());
+    }
+
+    #[tokio::test]
+    async fn open_gates_the_tail_to_a_current_last_row() {
+        let pool = crate::db::connect_memory().await.expect("memory db");
+        insert(&pool, past(2), None, None).await;
+        insert(&pool, live_from(), None, None).await;
+
+        let book = MonthBook::open(&pool).await.expect("book");
+
+        assert_eq!(book.tail, book.live);
+    }
+
+    #[tokio::test]
+    async fn open_leaves_the_tail_off_when_the_last_row_is_not_current() {
+        let pool = crate::db::connect_memory().await.expect("memory db");
+        insert(&pool, past(3), None, None).await;
+        insert(&pool, live_from(), None, None).await;
+        insert(&pool, future(2), None, None).await;
+
+        let book = MonthBook::open(&pool).await.expect("book");
+
+        assert!(book.tail.is_none());
+    }
+
+    #[tokio::test]
+    async fn open_pulls_live_for_the_tail_even_without_null_totals() {
+        let pool = crate::db::connect_memory().await.expect("memory db");
+        insert(&pool, past(2), Some(500.0), Some(200.0)).await;
+        insert(&pool, live_from(), Some(900.0), Some(300.0)).await;
+
+        let book = MonthBook::open(&pool).await.expect("book");
+
+        assert!(book.live.is_some());
+        assert_eq!(book.tail, book.live);
+        // Stored totals still win over the live fill.
+        assert_eq!(row(&book, live_from()).total_assets, Some(900.0));
+        assert_eq!(row(&book, live_from()).liquid_assets, Some(300.0));
+    }
+
+    #[tokio::test]
+    async fn open_with_live_applies_the_caller_supplied_totals() {
+        let pool = crate::db::connect_memory().await.expect("memory db");
+        insert(&pool, past(2), None, None).await;
+        insert(&pool, live_from(), None, None).await;
+
+        let totals = LiveTotals {
+            total_assets: 42.0,
+            liquid_assets: 7.0,
+        };
+        let book = MonthBook::open_with_live(&pool, totals)
+            .await
+            .expect("book");
+
+        assert_eq!(row(&book, live_from()).total_assets, Some(42.0));
+        assert_eq!(row(&book, live_from()).liquid_assets, Some(7.0));
+        assert!(row(&book, past(2)).total_assets.is_none());
+        assert_eq!(book.tail, Some(totals));
+    }
 }

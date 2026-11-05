@@ -72,7 +72,7 @@ fn validate_amount(amount: f64) -> Result<(), Vec<FieldError>> {
 )]
 pub async fn forecast(State(state): State<AppState>) -> Result<Json<ForecastResponse>, ApiError> {
     let pool = &state.pool;
-    let input = crate::service::months::live_totals_input(pool).await?;
+    let input = crate::service::wealth::totals_input(pool).await?;
     let totals = calc::live_totals(&input);
     let stored = crate::store::settings::Settings::load(pool).await?;
     let salary = stored.salary;
@@ -88,9 +88,8 @@ pub async fn forecast(State(state): State<AppState>) -> Result<Json<ForecastResp
         .and_then(|stored| stored.start_cash)
         .or(Some(input.cash_sum));
 
-    let stat_rows = crate::service::months::load_stat_rows(pool, Some(&totals)).await?;
-    let month_items = crate::store::months::load_all_items(pool).await?;
-    let trailing = calc::trailing_averages(&stat_rows, &month_items, first);
+    let book = crate::service::months::MonthBook::open_with_live(pool, totals).await?;
+    let trailing = calc::trailing_averages(&book.stat_rows, &book.items, first);
     let spend = trailing.living_budget.map(|budget| -budget);
     let events = crate::service::months::load_interest_events(pool).await?;
     // HK trades inside the window move 活期 in their month; US trades settle

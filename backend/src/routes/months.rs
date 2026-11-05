@@ -41,36 +41,25 @@ pub async fn list(
     State(state): State<AppState>,
     Query(query): Query<ListQuery>,
 ) -> Result<Json<Vec<MonthStat>>, ApiError> {
-    let stored = store::load_all_months(&state.pool).await?;
-    let items = store::load_all_items(&state.pool).await?;
-    let interest_events = crate::service::months::load_interest_events(&state.pool).await?;
-    let live = if crate::service::months::wants_live(&stored) {
-        Some(crate::service::months::live_if_needed(&state.pool).await?)
-    } else {
-        None
-    };
-    let stat_rows =
-        crate::service::months::to_stat_rows(&stored, live.as_ref(), &interest_events, &items)?;
-    let derived = month_derived_with_tail(
-        &stat_rows,
-        &items,
-        crate::service::months::live_tail(&stat_rows, live),
-    );
-    let months: Vec<MonthStat> = stored
+    let book = crate::service::months::MonthBook::open(&state.pool).await?;
+    let derived = month_derived_with_tail(&book.stat_rows, &book.items, book.tail);
+    let months: Vec<MonthStat> = book
+        .stored
         .iter()
         .zip(derived.iter())
         .enumerate()
         .map(|(index, (row, derived))| {
-            let sums = items
-                .get(&stat_rows[index].month)
+            let sums = book
+                .items
+                .get(&book.stat_rows[index].month)
                 .map(|items| month_item_sums(items))
                 .unwrap_or_default();
             crate::service::months::present(
                 row,
                 derived,
-                live.as_ref(),
+                book.live.as_ref(),
                 &sums,
-                stat_rows[index].interest,
+                book.stat_rows[index].interest,
             )
         })
         .filter(|month| {
@@ -109,27 +98,18 @@ pub struct MonthSummaryResponse {
 pub async fn summary(
     State(state): State<AppState>,
 ) -> Result<Json<MonthSummaryResponse>, ApiError> {
-    let stored = store::load_all_months(&state.pool).await?;
-    let items = store::load_all_items(&state.pool).await?;
-    let interest_events = crate::service::months::load_interest_events(&state.pool).await?;
+    let book = crate::service::months::MonthBook::open(&state.pool).await?;
     let rates = store::pool_rates(&state.pool).await?;
     // 投資純利 = Σ interest + the year's stored HK sold P/L (absent while a
     // year has none stored).
     let hk_sold_pl = crate::store::yearly::hk_sold_pl(&state.pool).await?;
-    let live = if crate::service::months::wants_live(&stored) {
-        Some(crate::service::months::live_if_needed(&state.pool).await?)
-    } else {
-        None
-    };
-    let stat_rows =
-        crate::service::months::to_stat_rows(&stored, live.as_ref(), &interest_events, &items)?;
-    let tail = crate::service::months::live_tail(&stat_rows, live);
-    let years = month_year_summaries(&stat_rows, &items, &rates, &hk_sold_pl, tail);
-    let running = month_running_averages(&stat_rows, &items, tail);
-    let pool_balance = stat_rows
+    let years = month_year_summaries(&book.stat_rows, &book.items, &rates, &hk_sold_pl, book.tail);
+    let running = month_running_averages(&book.stat_rows, &book.items, book.tail);
+    let pool_balance = book
+        .stat_rows
         .last()
         .and_then(|latest| {
-            pool_balances(&stat_rows, &items, &rates)
+            pool_balances(&book.stat_rows, &book.items, &rates)
                 .get(&latest.month.year())
                 .copied()
         })
@@ -193,7 +173,9 @@ pub async fn show(
     };
 
     Ok(Json(MonthDetailResponse {
-        month: crate::service::months::present_month(&state.pool, &stored).await?,
+        month: crate::service::months::MonthBook::open(&state.pool)
+            .await?
+            .present_one(&stored)?,
         items,
         suggestions,
         interest_auto: interest_components(&month_key, &events),
@@ -255,7 +237,7 @@ pub async fn upsert(
     match existing {
         None => {
             // Body-supplied totals win; otherwise snapshot the live values.
-            let live = live_totals(&crate::service::months::live_totals_input(&state.pool).await?);
+            let live = live_totals(&crate::service::wealth::totals_input(&state.pool).await?);
             let total_assets = patch.total_assets.unwrap_or(Some(live.total_assets));
             let liquid_assets = patch.liquid_assets.unwrap_or(Some(live.liquid_assets));
             let salary = match patch.salary {
@@ -284,7 +266,7 @@ pub async fn upsert(
             // A present field wins over recapture, recapture wins over the
             // stored value, and `null` stores NULL (live).
             let input = if patch.recapture == Some(true) {
-                Some(crate::service::months::live_totals_input(&state.pool).await?)
+                Some(crate::service::wealth::totals_input(&state.pool).await?)
             } else {
                 None
             };
@@ -325,7 +307,9 @@ pub async fn upsert(
         .await?
         .expect("just written");
     Ok(Json(
-        crate::service::months::present_month(&state.pool, &stored).await?,
+        crate::service::months::MonthBook::open(&state.pool)
+            .await?
+            .present_one(&stored)?,
     ))
 }
 

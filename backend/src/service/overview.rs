@@ -107,7 +107,7 @@ pub async fn update_ibkr(pool: &SqlitePool, patch: &IbkrPatch) -> Result<IbkrBlo
 
 /// `Overview!A3:C18` plus the B1/H1/J1 headline, derived on read.
 pub async fn build(pool: &SqlitePool) -> Result<OverviewResponse, StoreError> {
-    let input = super::months::live_totals_input(pool).await?;
+    let input = super::wealth::totals_input(pool).await?;
     let totals = live_totals(&input);
     let ibkr = ibkr_block(pool).await?;
     let stored = settings::Settings::load(pool).await?;
@@ -115,7 +115,6 @@ pub async fn build(pool: &SqlitePool) -> Result<OverviewResponse, StoreError> {
     let semi_target = super::months::semi_liquid_target(pool).await?;
     let manual = crate::store::months::load_assets(pool).await?;
     let bank_accounts = cash_accounts::load_all(pool).await?;
-    let items = crate::store::months::load_all_items(pool).await?;
 
     let aia_hkd = input.usd_hkd_rate.map(|rate| input.aia_value_usd * rate);
     let mut assets = vec![
@@ -173,8 +172,8 @@ pub async fn build(pool: &SqlitePool) -> Result<OverviewResponse, StoreError> {
 
     // F3:G10 + H6 — live-filled totals feed the window's edge (e.g. the last
     // completed month's Changed needs the live current row's 總數).
-    let stat_rows = super::months::load_stat_rows(pool, Some(&totals)).await?;
-    let trailing = trailing_averages(&stat_rows, &items, super::months::live_from());
+    let book = super::months::MonthBook::open_with_live(pool, totals).await?;
+    let trailing = trailing_averages(&book.stat_rows, &book.items, super::months::live_from());
     // The 預測 floor: budget is red below 流動資產 × 0.01% × 30 + 9000.
     let living_budget_floor = totals.liquid_assets * 0.0001 * 30.0 + 9000.0;
     let averages = TwelveMonthAverages {
@@ -216,11 +215,7 @@ pub async fn build(pool: &SqlitePool) -> Result<OverviewResponse, StoreError> {
     // J10:M20 + N13:P16 目標 — the milestone amounts are stored settings;
     // everything else derives. N4 = the latest completed year's
     // income_value_rate from the year-review rows.
-    let running = month_running_averages(
-        &stat_rows,
-        &items,
-        super::months::live_tail(&stat_rows, Some(totals)),
-    );
+    let running = month_running_averages(&book.stat_rows, &book.items, book.tail);
     let n4_year = today().year() - 1;
     let n4 = review
         .years
