@@ -27,6 +27,7 @@ pub mod bonds;
 pub mod cash_accounts;
 pub mod deposits;
 pub mod dividends;
+pub mod forecast;
 pub mod ibkr;
 pub mod months;
 pub mod mpf;

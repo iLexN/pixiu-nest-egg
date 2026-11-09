@@ -1988,6 +1988,31 @@ export interface components {
             message: string;
         };
         /**
+         * @description One (month, plan row) cell of the 預測 grid: the lines it lists and the
+         *     figure the grid shows for it.
+         */
+        ForecastCell: {
+            /**
+             * Format: double
+             * @description `bill` → the month's `bill`; `interest` → the month's `interest`;
+             *     every other row → Σ plan items + Σ −principal of placements + Σ trade
+             *     and IBKR line amounts, absent while the cell lists nothing.
+             */
+            figure: number | null;
+            /** @description IBKR transfers dated in the month — `stock` cell only. */
+            ibkr_lines: components["schemas"]["ForecastIbkrTransfer"][];
+            kind: components["schemas"]["ForecastItemKind"];
+            /**
+             * @description Real deposits placed in the month (`start_date` inside it), on the
+             *     `hs_deposit` cell for bank `HS` and the `sc_deposit` cell otherwise.
+             */
+            placements: components["schemas"]["ForecastPlacement"][];
+            /** @description The month's stored forecast items of this kind — the editable lines. */
+            plan_items: components["schemas"]["ForecastItem"][];
+            /** @description Real HK trades dated in the month — `stock` cell only. */
+            trade_lines: components["schemas"]["ForecastTrade"][];
+        };
+        /**
          * @description An IBKR transfer dated in the month — a read-only `已轉帳` line in the
          *     股票 row beside the trade lines. Log-only legacy rows appear too: they
          *     moved cash the same way.
@@ -2059,25 +2084,21 @@ export interface components {
              */
             cash: number | null;
             /**
+             * @description One cell per plan row in sheet order (`ForecastItemKind::ALL`): the
+             *     month's plan items, placements, trade and IBKR lines bucketed by row,
+             *     each with the figure the grid shows.
+             */
+            cells: components["schemas"]["ForecastCell"][];
+            /**
              * Format: double
              * @description Row 28 定期 finish: Σ principal of deposits ending in the month.
              */
             deposit_finish: number;
             /**
-             * @description The month's real deposit placements (`start_date` inside it), read-only
-             *     lines in the deposit rows.
-             */
-            deposit_placements: components["schemas"]["ForecastPlacement"][];
-            /**
              * Format: double
              * @description Row 35 TBC - 定期 end: Σ principal returning from earlier plans.
              */
             deposit_return: number;
-            /**
-             * @description The month's IBKR transfers (`transfer_date` inside it), read-only
-             *     `已轉帳` lines in the 股票 row.
-             */
-            ibkr_lines: components["schemas"]["ForecastIbkrTransfer"][];
             /**
              * Format: double
              * @description Row 31 利息: deposit interest ending + expected/received HK dividends
@@ -2098,8 +2119,6 @@ export interface components {
             locked: number | null;
             /** @description `YYYY-MM-01`, the first of the projected month. */
             month: string;
-            /** @description The month's stored forecast items — the sheet's editable cells. */
-            plan_items: components["schemas"]["ForecastItem"][];
             /**
              * Format: double
              * @description Row 20 = `semi_liquid` − 流動資產 ÷ 4; absent while either side is.
@@ -2126,11 +2145,6 @@ export interface components {
              *     `cash`.
              */
             start: number | null;
-            /**
-             * @description The month's real HK trades (`trade_date` inside it), read-only lines
-             *     in the 股票 row.
-             */
-            trade_lines: components["schemas"]["ForecastTrade"][];
         };
         /**
          * @description A real deposit placed in the month (`start_date` inside it) — shown

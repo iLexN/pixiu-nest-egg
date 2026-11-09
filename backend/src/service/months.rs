@@ -1,13 +1,13 @@
-use std::collections::HashMap;
+use std::collections::{BTreeMap, HashMap};
 
 use chrono::Datelike;
 use sqlx::SqlitePool;
 
 use crate::calc::FieldError;
 use crate::calc::{
-    LiveTotals, MonthDerived, MonthItemFacts, MonthItemSums, SuggestionAiaPayment,
-    SuggestionDeposit, SuggestionEvents, SuggestionReceipt, SuggestionTrade, auto_interest,
-    month_item_sums,
+    LiveTotals, MonthDerived, MonthItemFacts, MonthItemSums, MonthRunningAverages,
+    MonthYearSummary, SuggestionAiaPayment, SuggestionDeposit, SuggestionEvents, SuggestionReceipt,
+    SuggestionTrade, TrailingAverages, auto_interest, month_item_sums,
 };
 use crate::models::{
     MonthItem, MonthItemCategory, MonthItemPatch, MonthStat, MonthStatPatch, NewMonthItem,
@@ -27,18 +27,25 @@ pub fn live_from() -> chrono::NaiveDate {
 /// than re-sequencing the load/live-gate/derive pipeline itself.
 pub struct MonthBook {
     /// The stored `month_stats` rows, in `month` order.
-    pub stored: Vec<StoredMonth>,
+    stored: Vec<StoredMonth>,
     /// One [`crate::calc::MonthStatRow`] per stored row, NULL totals on
     /// current/future months filled from `live` when held.
-    pub stat_rows: Vec<crate::calc::MonthStatRow>,
+    stat_rows: Vec<crate::calc::MonthStatRow>,
     /// All `month_items`, grouped by month.
-    pub items: HashMap<chrono::NaiveDate, Vec<MonthItemFacts>>,
+    items: HashMap<chrono::NaiveDate, Vec<MonthItemFacts>>,
+    /// The derived columns per stored row, the last row diffing against
+    /// `tail`.
+    derived: Vec<MonthDerived>,
     /// The gated live totals — `Some` only when a stored NULL or the
     /// current-month tail needs them.
-    pub live: Option<LiveTotals>,
+    live: Option<LiveTotals>,
     /// The live totals the last row's Changed cells diff against — `Some`
     /// only when the last stored month IS the current month.
-    pub tail: Option<LiveTotals>,
+    tail: Option<LiveTotals>,
+    /// The per-year 開心Pool rates.
+    rates: BTreeMap<i32, f64>,
+    /// The stored HK sold P/L per year (投資純利's second term).
+    hk_sold_pl: BTreeMap<i32, f64>,
 }
 
 impl MonthBook {
@@ -46,14 +53,12 @@ impl MonthBook {
     /// current/future NULL B/D to fill, or a current last row needing the tail.
     pub async fn open(pool: &SqlitePool) -> Result<Self, StoreError> {
         let stored = crate::store::months::load_all_months(pool).await?;
-        let items = crate::store::months::load_all_items(pool).await?;
-        let events = load_interest_events(pool).await?;
         let live = if wants_live(&stored) {
             Some(crate::service::wealth::live_totals(pool).await?)
         } else {
             None
         };
-        Self::assemble(&stored, items, live, &events)
+        Self::assemble(pool, stored, live).await
     }
 
     /// Open the book with live totals the caller already holds (overview,
@@ -61,49 +66,103 @@ impl MonthBook {
     /// per-row at [`live_from`] and gated into `tail` as usual.
     pub async fn open_with_live(pool: &SqlitePool, live: LiveTotals) -> Result<Self, StoreError> {
         let stored = crate::store::months::load_all_months(pool).await?;
-        let items = crate::store::months::load_all_items(pool).await?;
-        let events = load_interest_events(pool).await?;
-        Self::assemble(&stored, items, Some(live), &events)
+        Self::assemble(pool, stored, Some(live)).await
     }
 
-    fn assemble(
-        stored: &[StoredMonth],
-        items: HashMap<chrono::NaiveDate, Vec<MonthItemFacts>>,
+    async fn assemble(
+        pool: &SqlitePool,
+        stored: Vec<StoredMonth>,
         live: Option<LiveTotals>,
-        events: &SuggestionEvents,
     ) -> Result<Self, StoreError> {
-        let stat_rows = to_stat_rows(stored, live.as_ref(), events, &items)?;
+        let items = crate::store::months::load_all_items(pool).await?;
+        let events = load_interest_events(pool).await?;
+        let rates = crate::store::months::pool_rates(pool).await?;
+        let hk_sold_pl = crate::store::yearly::hk_sold_pl(pool).await?;
+        let stat_rows = to_stat_rows(&stored, live.as_ref(), &events, &items)?;
         let tail = live_tail(&stat_rows, live);
+        let derived = crate::calc::month_derived_with_tail(&stat_rows, &items, tail);
         Ok(Self {
-            stored: stored.to_vec(),
+            stored,
             stat_rows,
             items,
+            derived,
             live,
             tail,
+            rates,
+            hk_sold_pl,
         })
     }
 
-    /// One stored row with its derived columns and live-resolved totals.
-    /// `Err(NotFound)` while `stored.month` names no row in the book.
-    pub fn present_one(&self, stored: &StoredMonth) -> Result<MonthStat, StoreError> {
-        let derived = crate::calc::month_derived_with_tail(&self.stat_rows, &self.items, self.tail);
-        let index = self
-            .stored
-            .iter()
-            .position(|row| row.month == stored.month)
-            .ok_or_else(|| StoreError::NotFound(format!("month {} not found", stored.month)))?;
+    fn present_at(&self, index: usize) -> MonthStat {
         let sums = self
             .items
             .get(&self.stat_rows[index].month)
             .map(|items| month_item_sums(items))
             .unwrap_or_default();
-        Ok(present(
+        present(
             &self.stored[index],
-            &derived[index],
+            &self.derived[index],
             self.live.as_ref(),
             &sums,
             self.stat_rows[index].interest,
-        ))
+        )
+    }
+
+    /// Every stored month with its derived columns and live-resolved totals,
+    /// in `month` order.
+    pub fn months(&self) -> Vec<MonthStat> {
+        (0..self.stored.len())
+            .map(|index| self.present_at(index))
+            .collect()
+    }
+
+    /// One presented month by its `YYYY-MM-01` key; `None` while the book
+    /// holds no such row.
+    pub fn month(&self, key: &str) -> Option<MonthStat> {
+        self.stored
+            .iter()
+            .position(|row| row.month == key)
+            .map(|index| self.present_at(index))
+    }
+
+    /// The sheet's per-year rows 2–4 (with the current-month tail).
+    pub fn year_summaries(&self) -> Vec<MonthYearSummary> {
+        crate::calc::month_year_summaries(
+            &self.stat_rows,
+            &self.items,
+            &self.rates,
+            &self.hk_sold_pl,
+            self.tail,
+        )
+    }
+
+    /// The sheet's row-8 running averages (with the current-month tail).
+    pub fn running_averages(&self) -> MonthRunningAverages {
+        crate::calc::month_running_averages(&self.stat_rows, &self.items, self.tail)
+    }
+
+    /// The 過去 12 個月 window ending before the current month (no tail).
+    pub fn trailing_averages(&self) -> TrailingAverages {
+        crate::calc::trailing_averages(&self.stat_rows, &self.items, live_from())
+    }
+
+    /// The 開心Pool closing balance of the latest stored month's year; `0`
+    /// while no month is stored.
+    pub fn pool_balance(&self) -> f64 {
+        self.stat_rows
+            .last()
+            .and_then(|latest| {
+                crate::calc::pool_balances(&self.stat_rows, &self.items, &self.rates)
+                    .get(&latest.month.year())
+                    .copied()
+            })
+            .unwrap_or(0.0)
+    }
+
+    /// The effective pool rate for `year`, falling back to the latest
+    /// earlier year's rate.
+    pub fn pool_rate(&self, year: i32) -> Option<f64> {
+        crate::calc::pool_rate_for_year(&self.rates, year)
     }
 }
 
@@ -156,7 +215,7 @@ fn to_stat_rows(
         .collect()
 }
 
-pub fn present(
+fn present(
     stored: &StoredMonth,
     derived: &MonthDerived,
     live: Option<&LiveTotals>,
@@ -391,10 +450,10 @@ pub async fn upsert(
         }
     }
 
-    let stored = crate::store::months::load_month(pool, &month_key)
+    MonthBook::open(pool)
         .await?
-        .expect("just written");
-    Ok(MonthBook::open(pool).await?.present_one(&stored)?)
+        .month(&month_key)
+        .ok_or_else(|| ServiceError::NotFound(format!("month {month_key} not found")))
 }
 
 /// Insert a month item: accepting a suggestion (any `auto_key`) clears its
@@ -735,5 +794,97 @@ mod tests {
         assert_eq!(row(&book, live_from()).liquid_assets, Some(7.0));
         assert!(row(&book, past(2)).total_assets.is_none());
         assert_eq!(book.tail, Some(totals));
+    }
+
+    #[tokio::test]
+    async fn months_and_month_present_the_same_rows() {
+        let pool = crate::db::connect_memory().await.expect("memory db");
+        insert(&pool, past(2), Some(500.0), Some(200.0)).await;
+        insert(&pool, past(1), Some(600.0), Some(250.0)).await;
+        insert(&pool, live_from(), None, None).await;
+
+        let book = MonthBook::open(&pool).await.expect("book");
+        let months = book.months();
+
+        assert_eq!(months.len(), 3);
+        for stat in &months {
+            let one = book.month(&stat.month).expect("present");
+            assert_eq!(
+                serde_json::to_value(&one).unwrap(),
+                serde_json::to_value(stat).unwrap()
+            );
+        }
+        assert_eq!(months[0].total_change, Some(100.0));
+        assert!(book.month(&month_key(future(5))).is_none());
+    }
+
+    /// The current month's Changed diffs against the live tail in the row,
+    /// the year summaries and the running averages; the trailing window ends
+    /// before the current month and never sees it.
+    #[tokio::test]
+    async fn tail_reaches_summaries_and_running_but_not_trailing() {
+        let pool = crate::db::connect_memory().await.expect("memory db");
+        insert(&pool, live_from(), Some(900.0), Some(300.0)).await;
+        let book = MonthBook::open_with_live(
+            &pool,
+            LiveTotals {
+                total_assets: 1000.0,
+                liquid_assets: 350.0,
+            },
+        )
+        .await
+        .expect("book");
+
+        assert_eq!(book.months()[0].total_change, Some(100.0));
+        let year = book
+            .year_summaries()
+            .into_iter()
+            .find(|summary| summary.year == live_from().year())
+            .expect("current year");
+        assert_eq!(year.total_change_sum, Some(100.0));
+        assert_eq!(book.running_averages().total_change_avg, Some(100.0));
+        assert_eq!(book.trailing_averages().total_change, None);
+    }
+
+    #[tokio::test]
+    async fn pool_balance_is_zero_without_months_and_pool_rate_falls_back() {
+        let pool = crate::db::connect_memory().await.expect("memory db");
+        sqlx::query("INSERT INTO pool_rates (year, rate) VALUES (3000, 0.25)")
+            .execute(&pool)
+            .await
+            .unwrap();
+
+        let book = MonthBook::open(&pool).await.expect("book");
+
+        assert_eq!(book.pool_balance(), 0.0);
+        assert_eq!(book.pool_rate(3000), Some(0.25));
+        assert_eq!(book.pool_rate(3005), Some(0.25));
+    }
+
+    #[tokio::test]
+    async fn pool_balance_reports_the_latest_years_closing() {
+        let pool = crate::db::connect_memory().await.expect("memory db");
+        insert(&pool, past(1), Some(500.0), Some(200.0)).await;
+        crate::store::months::insert_item(
+            &mut pool.acquire().await.unwrap(),
+            &month_key(past(1)),
+            "entertainment",
+            &None,
+            40.0,
+            false,
+            &None,
+            &None,
+        )
+        .await
+        .unwrap();
+
+        let book = MonthBook::open(&pool).await.expect("book");
+        let rows = crate::store::months::load_all_items(&pool).await.unwrap();
+        let (stat_rows, _) = stat_rows_no_live(&pool).await.unwrap();
+        let rates = crate::store::months::pool_rates(&pool).await.unwrap();
+        let expected = crate::calc::pool_balances(&stat_rows, &rows, &rates)[&past(1).year()];
+
+        assert_eq!(book.pool_balance(), expected);
+        assert_ne!(expected, 0.0);
     }
 }

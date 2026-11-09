@@ -10,8 +10,7 @@ use super::patch::merge_text;
 use super::{AppState, parse_ym};
 use crate::calc::{
     FieldError, MonthRunningAverages, MonthYearSummary, PoolTotals, build_suggestions,
-    interest_components, month_derived_with_tail, month_item_sums, month_running_averages,
-    month_year_summaries, pool_balances, pool_rate_for_year, pool_totals, suggestions_enabled,
+    interest_components, pool_totals, suggestions_enabled,
 };
 use crate::error::{ApiError, ErrorBody};
 use crate::models::{
@@ -42,26 +41,9 @@ pub async fn list(
     Query(query): Query<ListQuery>,
 ) -> Result<Json<Vec<MonthStat>>, ApiError> {
     let book = crate::service::months::MonthBook::open(&state.pool).await?;
-    let derived = month_derived_with_tail(&book.stat_rows, &book.items, book.tail);
     let months: Vec<MonthStat> = book
-        .stored
-        .iter()
-        .zip(derived.iter())
-        .enumerate()
-        .map(|(index, (row, derived))| {
-            let sums = book
-                .items
-                .get(&book.stat_rows[index].month)
-                .map(|items| month_item_sums(items))
-                .unwrap_or_default();
-            crate::service::months::present(
-                row,
-                derived,
-                book.live.as_ref(),
-                &sums,
-                book.stat_rows[index].interest,
-            )
-        })
+        .months()
+        .into_iter()
         .filter(|month| {
             query
                 .year
@@ -100,29 +82,17 @@ pub async fn summary(
     State(state): State<AppState>,
 ) -> Result<Json<MonthSummaryResponse>, ApiError> {
     let book = crate::service::months::MonthBook::open(&state.pool).await?;
-    let rates = store::pool_rates(&state.pool).await?;
     // 投資純利 = Σ interest + the year's stored HK sold P/L (absent while a
     // year has none stored).
-    let hk_sold_pl = crate::store::yearly::hk_sold_pl(&state.pool).await?;
-    let years = month_year_summaries(&book.stat_rows, &book.items, &rates, &hk_sold_pl, book.tail);
-    let running = month_running_averages(&book.stat_rows, &book.items, book.tail);
-    let pool_balance = book
-        .stat_rows
-        .last()
-        .and_then(|latest| {
-            pool_balances(&book.stat_rows, &book.items, &rates)
-                .get(&latest.month.year())
-                .copied()
-        })
-        .unwrap_or(0.0);
+    let years = book.year_summaries();
     let pool_rate_year = today().year();
     let pool_totals = pool_totals(&years);
     Ok(Json(MonthSummaryResponse {
         years,
-        running,
-        pool_balance,
+        running: book.running_averages(),
+        pool_balance: book.pool_balance(),
         pool_totals,
-        pool_rate: pool_rate_for_year(&rates, pool_rate_year),
+        pool_rate: book.pool_rate(pool_rate_year),
         pool_rate_year,
     }))
 }
@@ -157,12 +127,13 @@ pub async fn show(
 ) -> Result<Json<MonthDetailResponse>, ApiError> {
     let month = parse_ym(&ym)?;
     let month_key = month.to_string();
-    let stored = store::load_month(&state.pool, &month_key)
+    let stat = crate::service::months::MonthBook::open(&state.pool)
         .await?
+        .month(&month_key)
         .ok_or_else(|| ApiError::NotFound(format!("month {month_key} not found")))?;
 
     let items = store::load_items(&state.pool, &month_key).await?;
-    let events = crate::service::months::load_events(&state.pool, month, stored.pool_input).await?;
+    let events = crate::service::months::load_events(&state.pool, month, stat.pool_input).await?;
     let suggestions = if suggestions_enabled(&month_key, today()) {
         let stored_keys: HashSet<String> = items
             .iter()
@@ -175,9 +146,7 @@ pub async fn show(
     };
 
     Ok(Json(MonthDetailResponse {
-        month: crate::service::months::MonthBook::open(&state.pool)
-            .await?
-            .present_one(&stored)?,
+        month: stat,
         items,
         suggestions,
         interest_auto: interest_components(&month_key, &events),

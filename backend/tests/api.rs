@@ -2060,7 +2060,14 @@ async fn forecast_items_crud_and_validation() {
     let months = body["months"].as_array().expect("months");
     assert_eq!(months.len(), 7);
     assert_eq!(months[0]["month"].as_str().unwrap(), format!("{ym}-01"));
-    assert_eq!(months[1]["plan_items"].as_array().expect("items").len(), 2);
+    let hs_cell = months[1]["cells"]
+        .as_array()
+        .expect("cells")
+        .iter()
+        .find(|cell| cell["kind"] == "hs_deposit")
+        .expect("hs_deposit cell");
+    assert_eq!(hs_cell["plan_items"].as_array().expect("items").len(), 2);
+    approx(&hs_cell["figure"], -13_000.0);
     // Both placements lock: locked gains 13000, then returns at +3 months.
     approx(&months[1]["locked"], 13_000.0);
     approx(&months[4]["deposit_return"], 13_000.0);
@@ -2209,11 +2216,13 @@ async fn forecast_convert_turns_a_plan_into_a_deposit() {
     let (_, body) = send(&app, "GET", "/api/forecast", None).await;
     let months = body["months"].as_array().expect("months");
     assert!(months.iter().all(|m| {
-        m["plan_items"]
-            .as_array()
-            .unwrap()
-            .iter()
-            .all(|i| i["kind"] == "tax")
+        m["cells"].as_array().unwrap().iter().all(|cell| {
+            cell["plan_items"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .all(|i| i["kind"] == "tax")
+        })
     }));
     assert!(months.iter().all(|m| m["deposit_return"] == 0.0));
     // The deposit itself is the locked anchor now; it finishes at end month.

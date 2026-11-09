@@ -2,8 +2,7 @@ use serde::Serialize;
 use sqlx::SqlitePool;
 
 use crate::calc::{
-    FieldError, YearReviewInputs, YearReviewRecord, YearReviewRow, month_year_summaries,
-    year_review_rows,
+    FieldError, YearReviewInputs, YearReviewRecord, YearReviewRow, year_review_rows,
 };
 use crate::models::{Market, YearReviewPatch};
 use crate::service::ServiceError;
@@ -20,10 +19,7 @@ pub struct YearReviewResponse {
 /// inputs and seeded overrides in `year_review`.
 pub async fn build(pool: &SqlitePool) -> Result<YearReviewResponse, StoreError> {
     let now = today();
-    let book = super::months::MonthBook::open(pool).await?;
-    let rates = crate::store::months::pool_rates(pool).await?;
-    let sold_pl = crate::store::yearly::hk_sold_pl(pool).await?;
-    let summaries = month_year_summaries(&book.stat_rows, &book.items, &rates, &sold_pl, book.tail);
+    let summaries = super::months::MonthBook::open(pool).await?.year_summaries();
     let hk_years = super::yearly::build(pool, Market::Hk).await?.years;
     let us_years = super::yearly::build(pool, Market::Us).await?.years;
     let usd_hkd_rate = crate::store::fx::usd_rate(pool).await?;

@@ -1,9 +1,7 @@
 use chrono::Datelike;
 use sqlx::SqlitePool;
 
-use crate::calc::{
-    FieldError, liquidity_tiers, live_totals, month_running_averages, trailing_averages,
-};
+use crate::calc::{FieldError, liquidity_tiers, live_totals};
 use crate::models::{
     Currency, IbkrBlock, IbkrPatch, ManualAssetLiquidity, OverviewAssetRow, OverviewResponse,
     SemiLiquid, TwelveMonthAverages,
@@ -173,7 +171,7 @@ pub async fn build(pool: &SqlitePool) -> Result<OverviewResponse, StoreError> {
     // F3:G10 + H6 — live-filled totals feed the window's edge (e.g. the last
     // completed month's Changed needs the live current row's 總數).
     let book = super::months::MonthBook::open_with_live(pool, totals).await?;
-    let trailing = trailing_averages(&book.stat_rows, &book.items, super::months::live_from());
+    let trailing = book.trailing_averages();
     // The 預測 floor: budget is red below 流動資產 × 0.01% × 30 + 9000.
     let living_budget_floor = totals.liquid_assets * 0.0001 * 30.0 + 9000.0;
     let averages = TwelveMonthAverages {
@@ -215,7 +213,7 @@ pub async fn build(pool: &SqlitePool) -> Result<OverviewResponse, StoreError> {
     // J10:M20 + N13:P16 目標 — the milestone amounts are stored settings;
     // everything else derives. N4 = the latest completed year's
     // income_value_rate from the year-review rows.
-    let running = month_running_averages(&book.stat_rows, &book.items, book.tail);
+    let running = book.running_averages();
     let n4_year = today().year() - 1;
     let n4 = review
         .years

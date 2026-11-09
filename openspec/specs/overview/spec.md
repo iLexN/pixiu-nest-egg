@@ -641,7 +641,7 @@ The 總覽 page SHALL show a 策略 card listing the four tiers in sheet order �
 
 ### Requirement: Forecast projection block
 
-`GET /api/forecast` SHALL return a `months` array mirroring the sheet's `預測` grid `A20:H36`: seven entries for the current calendar month through current +6, each carrying `month` (`YYYY-MM-01`) and the sheet's rows as derived fields — `start`, `salary`, `spend`, `deposit_finish`, `interest`, `bill`, `plan_items`, `deposit_placements`, `deposit_return`, `cash`, `locked`, `semi_liquid`, and `ref_check`.
+`GET /api/forecast` SHALL return a `months` array mirroring the sheet's `預測` grid `A20:H36`: seven entries for the current calendar month through current +6, each carrying `month` (`YYYY-MM-01`) and the sheet's rows as derived fields — `start`, `salary`, `spend`, `deposit_finish`, `interest`, `interest_components`, `bill`, `cells`, `deposit_return`, `cash`, `locked`, `semi_liquid`, and `ref_check`.
 
 #### Scenario: First column anchors on 月初
 
@@ -666,12 +666,59 @@ The 總覽 page SHALL show a 策略 card listing the four tiers in sheet order �
 #### Scenario: Real deposit placed in the month
 
 - **WHEN** deposit `9077` with `principal` `55000`, bank `SC`, `start_date` `2026-09-30` exists and the window starts at `2026-09`
-- **THEN** `2026-09` lists it in `deposit_placements` and its `cash` is `55000` lower than it would be without the deposit
+- **THEN** the `2026-09` `sc_deposit` cell lists it in `placements` and its `cash` is `55000` lower than it would be without the deposit
 
 #### Scenario: Quarter month bill
 
 - **WHEN** `forecast.bill_amount` is `2158` and the window covers `2027-01`
 - **THEN** `2027-01` reports `bill` `-2158` and `2027-02` reports no `bill`
+
+### Requirement: Forecast grid cells
+
+Each forecast month SHALL carry `cells`, one per plan row in sheet order — `hs_deposit`, `sc_deposit`, `interest`, `tax`, `stock`, `bill`, `other` — each with `kind`, `figure`, `plan_items` (the month's items of that kind), `placements`, `trade_lines`, and `ibkr_lines`. Lists a row never carries SHALL be empty. The response SHALL NOT carry month-level `plan_items`, `deposit_placements`, `trade_lines`, or `ibkr_lines`.
+
+#### Scenario: Seven cells per month
+
+- **WHEN** the forecast returns a month with no plans, placements, trades or transfers
+- **THEN** that month's `cells` lists seven entries in the order `hs_deposit`, `sc_deposit`, `interest`, `tax`, `stock`, `bill`, `other`, each with empty lists
+
+#### Scenario: Items land in their kind's cell
+
+- **WHEN** `2026-10` holds a `tax` item of `-3000` and an `hs_deposit` item of `-70000`
+- **THEN** the `tax` cell's `plan_items` holds only the tax item and the `hs_deposit` cell's `plan_items` holds only the deposit plan
+
+### Requirement: Forecast cell placement routing
+
+A month's real deposit placements SHALL land in the `hs_deposit` cell's `placements` when the deposit's bank is `HS`, and in the `sc_deposit` cell's `placements` for any other bank, including an unset bank. Other cells SHALL carry no placements.
+
+#### Scenario: HS placement
+
+- **WHEN** a deposit with bank `HS` and `principal` `130000` has `start_date` in `2026-11`
+- **THEN** the `2026-11` `hs_deposit` cell lists it in `placements` and the `sc_deposit` cell does not
+
+#### Scenario: Unset bank goes to the SC row
+
+- **WHEN** a deposit with no bank has `start_date` in a window month
+- **THEN** it appears in that month's `sc_deposit` cell `placements`
+
+### Requirement: Forecast cell figure
+
+Each cell's `figure` SHALL be the value the grid shows for that row. For the `bill` cell it SHALL be the month's `bill`, and for the `interest` cell the month's `interest`. For every other cell it SHALL be Σ plan item amounts + Σ `−principal` of placements + Σ trade line amounts + Σ IBKR line amounts, absent while the cell has none of these.
+
+#### Scenario: Empty cell has no figure
+
+- **WHEN** a month's `tax` cell has no plan items
+- **THEN** its `figure` is absent
+
+#### Scenario: Bill cell mirrors the bill row
+
+- **WHEN** a quarter month reports `bill` `-2158` with no `bill` items
+- **THEN** its `bill` cell's `figure` is `-2158` and its `plan_items` is empty
+
+#### Scenario: Interest cell mirrors the interest row
+
+- **WHEN** a month reports `interest` `0` with no interest items or receipts
+- **THEN** its `interest` cell's `figure` is `0`
 
 ### Requirement: Forecast start, salary and spend rows
 
@@ -722,28 +769,28 @@ The month entry SHALL also carry `interest_components` listing the auto receipts
 
 For each forecast month `m`:
 
-- `plan_items` SHALL list the month's stored forecast items.
-- `deposit_placements` SHALL list the real deposits whose `start_date` falls in `m` — each with `deposit_id`, `label`, `bank`, `principal`, and `start_date` — empty when none. Deposits without a `start_date` are never placements.
+- Each cell's `plan_items` SHALL list the month's stored items of its kind.
+- A deposit cell's `placements` SHALL list the real deposits routed to it whose `start_date` falls in `m` — each with `deposit_id`, `label`, `bank`, `principal`, `start_date` — empty when none. Deposits without a `start_date` are never placements.
 - `deposit_return` SHALL be the sum described by the deposit-returns requirement, `0` when none.
 
 #### Scenario: Placement requires a start date
 
 - **WHEN** a deposit has no `start_date`
-- **THEN** it never appears in `deposit_placements`
+- **THEN** it never appears in any cell's `placements`
 
 ### Requirement: Forecast trade lines
 
-For each forecast month `m`, `trade_lines` SHALL list the real HK-market trades whose `trade_date` falls in `m` — each with `trade_id`, `code`, `trade_type`, `trade_date`, and a signed `amount` (`−total` for `BUY`, `+total` for `SELL`) — empty when none. US-market trades are never trade lines.
+For each forecast month `m`, the `stock` cell's `trade_lines` SHALL list the real HK-market trades whose `trade_date` falls in `m` — each with `trade_id`, `code`, `trade_type`, `trade_date`, and a signed `amount` (`−total` for `BUY`, `+total` for `SELL`), ordered by date then id — empty when none. Every other cell's `trade_lines` SHALL be empty. US-market trades are never trade lines.
 
 #### Scenario: HK buy becomes a negative trade line
 
 - **WHEN** an HK `BUY` of 匯豐 dated `2026-10-27` has `total` `54063.17` and `2026-10` is in the window
-- **THEN** the `2026-10` column's `trade_lines` holds that trade with `amount` `-54063.17`
+- **THEN** the `2026-10` `stock` cell's `trade_lines` holds that trade with `amount` `-54063.17`
 
 #### Scenario: HK sell becomes a positive trade line
 
 - **WHEN** an HK `SELL` dated in a window month has `total` `12000`
-- **THEN** that month's `trade_lines` holds it with `amount` `12000`
+- **THEN** that month's `stock` cell `trade_lines` holds it with `amount` `12000`
 
 #### Scenario: US trades are excluded
 
@@ -759,7 +806,7 @@ For each forecast month `m`, `trade_lines` SHALL list the real HK-market trades 
 
 For each forecast month `m`:
 
-- `cash` (活期) SHALL be `start + salary + spend + deposit_finish + interest + bill + deposit_return + Σ amounts of `tax`/`stock`/`other` items in `m` + Σ amounts of `hs_deposit`/`sc_deposit` items in `m` + Σ `amount` of `trade_lines` in `m` + Σ `amount` of `ibkr_lines` in `m` − Σ `principal` of `deposit_placements` in `m`, absent while `start` is absent; absent components count as `0`. (`interest`/`bill` items are already inside those figures.)
+- `cash` (活期) SHALL be `start + salary + spend + deposit_finish + interest + bill + deposit_return + Σ amounts of `tax`/`stock`/`other` items in `m` + Σ amounts of `hs_deposit`/`sc_deposit` items in `m` + Σ `amount` of the month's trade lines + Σ `amount` of the month's IBKR lines − Σ `principal` of the month's placements`, absent while `start` is absent; absent components count as `0`. (`interest`/`bill` items are already inside those figures.)
 
 #### Scenario: Cash chains the rows
 
@@ -778,7 +825,7 @@ For each forecast month `m`:
 
 ### Requirement: Trade lines in the 股票 row
 
-Each of the month's `trade_lines` SHALL appear as a read-only line (code, trade type, signed `amount`, `trade_date`, marked `已交易`) in the `股票` row. The `股票` cell's figure SHALL be Σ its `stock` plan amounts plus Σ its trade line amounts, `—` while it has neither, and trade lines SHALL offer no edit, delete, or copy action.
+Each of the `stock` cell's `trade_lines` SHALL appear as a read-only line (code, trade type, signed `amount`, `trade_date`, marked `已交易`) in the `股票` row. The `股票` cell SHALL show the cell's `figure`, `—` while it is absent, and trade lines SHALL offer no edit, delete, or copy action.
 
 #### Scenario: Trade shown beside a plan
 
@@ -825,7 +872,7 @@ Each forecast month SHALL derive `locked` (the sheet's `定期 + SC` row) from a
 
 ### Requirement: Locked chain and semi-liquid
 
-Each month `m` (the first included, chaining from the anchor) SHALL derive `locked(m) = locked(m−1) − deposit_finish(m) − Σ hs_deposit/sc_deposit plan amounts(m) + Σ principal of deposit_placements(m) − deposit_return(m)` — plan amounts are stored negative, so subtracting them adds to `locked`. `semi_liquid` SHALL be `cash + locked`, absent while either side is absent.
+Each month `m` (the first included, chaining from the anchor) SHALL derive `locked(m) = locked(m−1) − deposit_finish(m) − Σ hs_deposit/sc_deposit plan amounts(m) + Σ principal of the month's placements − deposit_return(m)` — plan amounts are stored negative, so subtracting them adds to `locked`. `semi_liquid` SHALL be `cash + locked`, absent while either side is absent.
 
 #### Scenario: Chain subtracts finishes
 
@@ -857,7 +904,7 @@ The system SHALL store forecast items — `id`, `month` (`YYYY-MM-01`), `kind`, 
 #### Scenario: Two placements in one cell's place
 
 - **WHEN** items `{month: 2026-10, kind: hs_deposit, amount: -70000}` and `{month: 2026-10, kind: hs_deposit, amount: -60000}` exist
-- **THEN** `2026-10` lists both in `plan_items`, `cash` drops by `130000`, and `locked` rises by `130000`
+- **THEN** the `2026-10` `hs_deposit` cell lists both in `plan_items`, `cash` drops by `130000`, and `locked` rises by `130000`
 
 #### Scenario: return_month rejected on wrong kind
 
@@ -912,7 +959,7 @@ Each in-window `hs_deposit` item SHALL schedule a `deposit_return` of `−amount
 #### Scenario: Conversion replaces the plan
 
 - **WHEN** `sc_deposit` item `-180000` in `2026-10` is converted with `start_date` `2026-10-12` and `end_date` `2027-02-10`
-- **THEN** a deposit row exists with `principal` `180000` and `bank` `SC`, the forecast item is gone, `2026-10` lists the deposit in `deposit_placements` in place of the plan, and `2027-02` gains the deposit's real `deposit_finish`/`interest` instead of the plan's derived return
+- **THEN** a deposit row exists with `principal` `180000` and bank `SC`, the forecast item is gone, the `2026-10` `sc_deposit` cell lists the deposit in `placements` in place of the plan, and `2027-02` gains the deposit's real `deposit_finish`/`interest` instead of the plan's derived return
 
 #### Scenario: Conversion keeps the grid totals
 
@@ -987,7 +1034,7 @@ Plan cells SHALL offer inline add/edit/delete per item and a `轉為定期` acti
 
 ### Requirement: Deposit placement lines
 
-Each of the month's `deposit_placements` SHALL appear as a read-only line (label, `−principal`, `start_date`, marked `已定期`) in the `定期 HS` row when its bank is `HS` and in the `SC高息馬拉松` row otherwise; the cell's figure SHALL be Σ its plan amounts plus Σ `−principal` of its placements, and placements SHALL offer no edit, delete, or convert action.
+Each of a deposit cell's `placements` SHALL appear as a read-only line (label, `−principal`, `start_date`, marked `已定期`) in that cell's row — `定期 HS` for the `hs_deposit` cell, `SC高息馬拉松` for the `sc_deposit` cell. The cell SHALL show the cell's `figure`, and placements SHALL offer no edit, delete, or convert action.
 
 #### Scenario: Placement routed by bank
 
@@ -1218,12 +1265,12 @@ The 股票 → 轉入記錄 page SHALL list `GET /api/ibkr/transfers` rows in it
 
 ### Requirement: Forecast IBKR transfer lines
 
-For each forecast month `m`, `ibkr_lines` SHALL list the `ibkr_transfers` rows whose `transfer_date` falls in `m`, each with `transfer_id`, `transfer_date`, and a signed `amount` of `−amount_hkd`, ordered by date then id; empty when none. Rows dated outside the window SHALL appear in no column.
+For each forecast month `m`, the `stock` cell's `ibkr_lines` SHALL list the `ibkr_transfers` rows whose `transfer_date` falls in `m`, each with `transfer_id`, `transfer_date`, and a signed `amount` of `−amount_hkd`, ordered by date then id; empty when none. Every other cell's `ibkr_lines` SHALL be empty. Rows dated outside the window SHALL appear in no column.
 
 #### Scenario: Transfer becomes a negative line
 
 - **WHEN** a `50000` transfer is dated `2026-11-03` and `2026-11` is in the window
-- **THEN** the `2026-11` column's `ibkr_lines` holds it with `amount` `-50000`
+- **THEN** the `2026-11` `stock` cell's `ibkr_lines` holds it with `amount` `-50000`
 
 #### Scenario: Transfers before the window fire nothing
 
@@ -1232,7 +1279,7 @@ For each forecast month `m`, `ibkr_lines` SHALL list the `ibkr_transfers` rows w
 
 ### Requirement: IBKR transfer lines in the 股票 row
 
-Each of the month's `ibkr_lines` SHALL appear as a read-only line (`IBKR 轉入`, signed `amount`, `transfer_date`, marked `已轉帳`) in the `股票` row beside its trade lines. The `股票` cell's figure SHALL also include Σ its `ibkr_lines` amounts, and these lines SHALL offer no edit, delete, or copy action.
+Each of the `stock` cell's `ibkr_lines` SHALL appear as a read-only line (`IBKR 轉入`, signed `amount`, `transfer_date`, marked `已轉帳`) in the `股票` row beside its trade lines. The `股票` cell's `figure` SHALL also include Σ its `ibkr_lines` amounts, and these lines SHALL offer no edit, delete, or copy action.
 
 #### Scenario: Transfer alone fills an empty cell
 
@@ -1243,3 +1290,4 @@ Each of the month's `ibkr_lines` SHALL appear as a read-only line (`IBKR 轉入`
 
 - **WHEN** a month holds a `stock` plan of `-50000` and an IBKR line of `-50000`
 - **THEN** the cell shows `-100000` until the user edits or deletes the plan — plans are never suppressed automatically
+

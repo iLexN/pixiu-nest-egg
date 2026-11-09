@@ -2,7 +2,10 @@ use super::*;
 
 use chrono::Datelike;
 
-use crate::models::{ForecastItemKind, TradeType};
+use crate::models::{
+    ForecastCell, ForecastIbkrTransfer, ForecastItem, ForecastItemKind, ForecastPlacement,
+    ForecastTrade, TradeType,
+};
 
 /// The forecast window: the current month plus six ahead (sheet columns B:H).
 pub const FORECAST_MONTHS: u32 = 7;
@@ -135,6 +138,69 @@ pub fn trade_amount(trade: &SuggestionTrade) -> f64 {
         TradeType::Buy => -trade.total,
         TradeType::Sell => trade.total,
     }
+}
+
+/// One column's lines bucketed into the seven plan-row cells, in
+/// [`ForecastItemKind::ALL`] order. `items`/`placements`/`trades`/`transfers`
+/// are the column's own lines (already filtered to its month and sorted);
+/// placements route by bank via [`ForecastItemKind::placement_row`], trade
+/// and IBKR lines land on the `stock` cell only.
+pub fn forecast_cells(
+    column: &ForecastMonthDerived,
+    items: &[ForecastItem],
+    placements: &[ForecastPlacement],
+    trades: &[ForecastTrade],
+    transfers: &[ForecastIbkrTransfer],
+) -> Vec<ForecastCell> {
+    ForecastItemKind::ALL
+        .iter()
+        .map(|&kind| {
+            let plan_items: Vec<ForecastItem> = items
+                .iter()
+                .filter(|item| item.kind == kind)
+                .cloned()
+                .collect();
+            let placements: Vec<ForecastPlacement> = placements
+                .iter()
+                .filter(|p| {
+                    kind.deposit_lag().is_some()
+                        && ForecastItemKind::placement_row(p.bank.as_deref()) == kind
+                })
+                .cloned()
+                .collect();
+            let (trade_lines, ibkr_lines) = if kind == ForecastItemKind::Stock {
+                (trades.to_vec(), transfers.to_vec())
+            } else {
+                (Vec::new(), Vec::new())
+            };
+            let figure = match kind {
+                ForecastItemKind::Bill => column.bill,
+                ForecastItemKind::Interest => Some(column.interest),
+                _ if plan_items.is_empty()
+                    && placements.is_empty()
+                    && trade_lines.is_empty()
+                    && ibkr_lines.is_empty() =>
+                {
+                    None
+                }
+                _ => Some(
+                    plan_items.iter().map(|item| item.amount).sum::<f64>()
+                        + placements.iter().map(|p| -p.principal).sum::<f64>()
+                        + trade_lines.iter().map(|t| t.amount).sum::<f64>()
+                        + ibkr_lines.iter().map(|t| t.amount).sum::<f64>()
+                        + 0.0,
+                ),
+            };
+            ForecastCell {
+                kind,
+                figure,
+                plan_items,
+                placements,
+                trade_lines,
+                ibkr_lines,
+            }
+        })
+        .collect()
 }
 
 /// The seven-month rolling 預測 grid. Every figure derives from the inputs;
@@ -799,4 +865,148 @@ mod tests {
     }
 
     // --- Money Master (Overview!J29:N35) ---
+
+    // --- forecast_cells ---
+
+    fn column(bill: Option<f64>, interest: f64) -> ForecastMonthDerived {
+        let events = SuggestionEvents::default();
+        let mut column = forecast_months(&forecast_input(&[], &events, &[])).remove(0);
+        column.bill = bill;
+        column.interest = interest;
+        column
+    }
+
+    fn stored_item(id: i64, kind: ForecastItemKind, amount: f64) -> ForecastItem {
+        ForecastItem {
+            id,
+            month: "2026-10-01".to_string(),
+            kind,
+            amount,
+            return_month: None,
+            note: None,
+            sort_order: id,
+            created_at: "2026-01-01T00:00:00+08:00".to_string(),
+        }
+    }
+
+    fn placement(id: i64, bank: Option<&str>, principal: f64) -> ForecastPlacement {
+        ForecastPlacement {
+            deposit_id: id,
+            label: None,
+            bank: bank.map(str::to_string),
+            principal,
+            start_date: "2026-10-12".to_string(),
+        }
+    }
+
+    fn cell(cells: &[ForecastCell], kind: ForecastItemKind) -> &ForecastCell {
+        cells.iter().find(|cell| cell.kind == kind).expect("cell")
+    }
+
+    #[test]
+    fn cells_are_seven_in_sheet_order_and_empty_without_lines() {
+        let cells = forecast_cells(&column(None, 0.0), &[], &[], &[], &[]);
+        let kinds: Vec<ForecastItemKind> = cells.iter().map(|cell| cell.kind).collect();
+        assert_eq!(kinds, ForecastItemKind::ALL.to_vec());
+        for cell in &cells {
+            assert!(cell.plan_items.is_empty());
+            assert!(cell.placements.is_empty());
+            assert!(cell.trade_lines.is_empty());
+            assert!(cell.ibkr_lines.is_empty());
+        }
+        assert_eq!(cell(&cells, ForecastItemKind::Tax).figure, None);
+        assert_eq!(cell(&cells, ForecastItemKind::Other).figure, None);
+    }
+
+    #[test]
+    fn cells_bucket_items_by_kind() {
+        let items = [
+            stored_item(1, ForecastItemKind::Tax, -3_000.0),
+            stored_item(2, ForecastItemKind::HsDeposit, -70_000.0),
+        ];
+        let cells = forecast_cells(&column(None, 0.0), &items, &[], &[], &[]);
+        let tax = cell(&cells, ForecastItemKind::Tax);
+        assert_eq!(tax.plan_items.len(), 1);
+        assert_eq!(tax.figure, Some(-3_000.0));
+        let hs = cell(&cells, ForecastItemKind::HsDeposit);
+        assert_eq!(hs.plan_items[0].id, 2);
+        assert_eq!(hs.figure, Some(-70_000.0));
+    }
+
+    #[test]
+    fn cells_route_placements_by_bank() {
+        let placements = [
+            placement(1, Some("HS"), 130_000.0),
+            placement(2, Some("SC"), 55_000.0),
+            placement(3, None, 20_000.0),
+        ];
+        let cells = forecast_cells(&column(None, 0.0), &[], &placements, &[], &[]);
+        let hs = cell(&cells, ForecastItemKind::HsDeposit);
+        assert_eq!(
+            hs.placements
+                .iter()
+                .map(|p| p.deposit_id)
+                .collect::<Vec<_>>(),
+            vec![1]
+        );
+        assert_eq!(hs.figure, Some(-130_000.0));
+        let sc = cell(&cells, ForecastItemKind::ScDeposit);
+        assert_eq!(
+            sc.placements
+                .iter()
+                .map(|p| p.deposit_id)
+                .collect::<Vec<_>>(),
+            vec![2, 3]
+        );
+        assert_eq!(sc.figure, Some(-75_000.0));
+        assert!(cell(&cells, ForecastItemKind::Stock).placements.is_empty());
+    }
+
+    #[test]
+    fn bill_and_interest_cells_mirror_their_rows() {
+        let cells = forecast_cells(&column(Some(-2_158.0), 0.0), &[], &[], &[], &[]);
+        let bill = cell(&cells, ForecastItemKind::Bill);
+        assert_eq!(bill.figure, Some(-2_158.0));
+        assert!(bill.plan_items.is_empty());
+        assert_eq!(cell(&cells, ForecastItemKind::Interest).figure, Some(0.0));
+
+        let cells = forecast_cells(&column(None, 1_423.0), &[], &[], &[], &[]);
+        assert_eq!(cell(&cells, ForecastItemKind::Bill).figure, None);
+        assert_eq!(
+            cell(&cells, ForecastItemKind::Interest).figure,
+            Some(1_423.0)
+        );
+    }
+
+    #[test]
+    fn stock_cell_sums_plans_trades_and_transfers() {
+        let items = [stored_item(1, ForecastItemKind::Stock, -50_000.0)];
+        let trades = [ForecastTrade {
+            trade_id: 7,
+            code: "匯豐".to_string(),
+            trade_type: TradeType::Buy,
+            trade_date: "2026-10-27".to_string(),
+            amount: -54_063.17,
+        }];
+        let transfers = [ForecastIbkrTransfer {
+            transfer_id: 3,
+            transfer_date: "2026-10-03".to_string(),
+            amount: -50_000.0,
+        }];
+        let cells = forecast_cells(&column(None, 0.0), &items, &[], &trades, &transfers);
+        let stock = cell(&cells, ForecastItemKind::Stock);
+        assert_eq!(stock.trade_lines.len(), 1);
+        assert_eq!(stock.ibkr_lines.len(), 1);
+        assert!(approx_eq(stock.figure.unwrap(), -154_063.17));
+        for other in cells.iter().filter(|c| c.kind != ForecastItemKind::Stock) {
+            assert!(other.trade_lines.is_empty());
+            assert!(other.ibkr_lines.is_empty());
+        }
+
+        let cells = forecast_cells(&column(None, 0.0), &[], &[], &[], &transfers);
+        assert_eq!(
+            cell(&cells, ForecastItemKind::Stock).figure,
+            Some(-50_000.0)
+        );
+    }
 }

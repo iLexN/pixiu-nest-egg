@@ -27,6 +27,18 @@ pub enum ForecastItemKind {
 }
 
 impl ForecastItemKind {
+    /// Every kind in the sheet's plan-row order — the order of a month's
+    /// `cells`.
+    pub const ALL: [ForecastItemKind; 7] = [
+        ForecastItemKind::HsDeposit,
+        ForecastItemKind::ScDeposit,
+        ForecastItemKind::Interest,
+        ForecastItemKind::Tax,
+        ForecastItemKind::Stock,
+        ForecastItemKind::Bill,
+        ForecastItemKind::Other,
+    ];
+
     pub fn as_str(self) -> &'static str {
         match self {
             ForecastItemKind::HsDeposit => "hs_deposit",
@@ -68,6 +80,16 @@ impl ForecastItemKind {
             ForecastItemKind::HsDeposit => Some("HS"),
             ForecastItemKind::ScDeposit => Some("SC"),
             _ => None,
+        }
+    }
+
+    /// The plan row a real deposit placement lands in: bank `HS` → 定期 HS,
+    /// any other bank (or none) → SC高息馬拉松 — the reverse of
+    /// [`Self::default_bank`].
+    pub fn placement_row(bank: Option<&str>) -> ForecastItemKind {
+        match bank {
+            Some("HS") => ForecastItemKind::HsDeposit,
+            _ => ForecastItemKind::ScDeposit,
         }
     }
 }
@@ -155,6 +177,26 @@ pub struct ForecastIbkrTransfer {
     pub amount: f64,
 }
 
+/// One (month, plan row) cell of the 預測 grid: the lines it lists and the
+/// figure the grid shows for it.
+#[derive(Debug, Clone, Serialize, ToSchema)]
+pub struct ForecastCell {
+    pub kind: ForecastItemKind,
+    /// `bill` → the month's `bill`; `interest` → the month's `interest`;
+    /// every other row → Σ plan items + Σ −principal of placements + Σ trade
+    /// and IBKR line amounts, absent while the cell lists nothing.
+    pub figure: Option<f64>,
+    /// The month's stored forecast items of this kind — the editable lines.
+    pub plan_items: Vec<ForecastItem>,
+    /// Real deposits placed in the month (`start_date` inside it), on the
+    /// `hs_deposit` cell for bank `HS` and the `sc_deposit` cell otherwise.
+    pub placements: Vec<ForecastPlacement>,
+    /// Real HK trades dated in the month — `stock` cell only.
+    pub trade_lines: Vec<ForecastTrade>,
+    /// IBKR transfers dated in the month — `stock` cell only.
+    pub ibkr_lines: Vec<ForecastIbkrTransfer>,
+}
+
 /// One month column of the Overview 預測 grid (sheet columns B:H).
 #[derive(Debug, Clone, Serialize, ToSchema)]
 pub struct ForecastMonth {
@@ -179,17 +221,10 @@ pub struct ForecastMonth {
     /// Row 34 繳費: −bill_amount on Jan/Apr/Jul/Oct, or Σ `bill` items when
     /// any exist; absent otherwise.
     pub bill: Option<f64>,
-    /// The month's stored forecast items — the sheet's editable cells.
-    pub plan_items: Vec<ForecastItem>,
-    /// The month's real deposit placements (`start_date` inside it), read-only
-    /// lines in the deposit rows.
-    pub deposit_placements: Vec<ForecastPlacement>,
-    /// The month's real HK trades (`trade_date` inside it), read-only lines
-    /// in the 股票 row.
-    pub trade_lines: Vec<ForecastTrade>,
-    /// The month's IBKR transfers (`transfer_date` inside it), read-only
-    /// `已轉帳` lines in the 股票 row.
-    pub ibkr_lines: Vec<ForecastIbkrTransfer>,
+    /// One cell per plan row in sheet order (`ForecastItemKind::ALL`): the
+    /// month's plan items, placements, trade and IBKR lines bucketed by row,
+    /// each with the figure the grid shows.
+    pub cells: Vec<ForecastCell>,
     /// Row 35 TBC - 定期 end: Σ principal returning from earlier plans.
     pub deposit_return: f64,
     /// Row 23 活期 = Σ(start..deposit_return) − deposit placements + trade

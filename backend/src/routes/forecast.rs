@@ -1,29 +1,19 @@
 use axum::Json;
 use axum::extract::{Path, State};
 use axum::http::StatusCode;
-use chrono::Datelike;
 use sqlx::SqlitePool;
 
 use super::{AppState, parse_ym};
-use crate::calc::{self, FieldError, ForecastItemFacts};
+use crate::calc::{self, FieldError};
 use crate::error::{ApiError, ErrorBody};
 use crate::models::{
-    Deposit, ForecastIbkrTransfer, ForecastItem, ForecastItemKind, ForecastItemPatch,
-    ForecastMonth, ForecastPlacement, ForecastResponse, ForecastTrade, NewDeposit, NewForecastItem,
+    Deposit, ForecastItem, ForecastItemKind, ForecastItemPatch, ForecastResponse, NewDeposit,
+    NewForecastItem,
 };
 use crate::store::forecast as store;
 
 async fn load_item(pool: &SqlitePool, id: i64) -> Result<ForecastItem, ApiError> {
     store::load_item(pool, id).await.map_err(ApiError::from)
-}
-
-async fn load_all_items(pool: &SqlitePool) -> Result<Vec<ForecastItem>, ApiError> {
-    store::load_all_items(pool).await.map_err(ApiError::from)
-}
-
-fn parse_stored_ym(value: &str, field: &str) -> Result<chrono::NaiveDate, ApiError> {
-    chrono::NaiveDate::parse_from_str(value, "%Y-%m-%d")
-        .map_err(|_| ApiError::Conflict(format!("stored {field} {value} is not valid")))
 }
 
 /// `YYYY-MM`/`YYYY-MM-01` → `YYYY-MM-01`, deposit kinds only.
@@ -72,160 +62,7 @@ fn validate_amount(amount: f64) -> Result<(), Vec<FieldError>> {
     )
 )]
 pub async fn forecast(State(state): State<AppState>) -> Result<Json<ForecastResponse>, ApiError> {
-    let pool = &state.pool;
-    let input = crate::service::wealth::totals_input(pool).await?;
-    let totals = calc::live_totals(&input);
-    let stored = crate::store::settings::Settings::load(pool).await?;
-    let salary = stored.salary;
-    let bill_amount = stored
-        .bill_amount
-        .unwrap_or(crate::store::months::DEFAULT_BILL_AMOUNT);
-    let semi_liquid_target = crate::service::settings::semi_liquid_target(pool).await?;
-    let first = crate::service::months::live_from();
-    // The first column anchors on the current month's 月初(出糧後); while it is
-    // unset the live 活期 sum stands in.
-    let start = crate::store::months::load_month(pool, &first.to_string())
-        .await?
-        .and_then(|stored| stored.start_cash)
-        .or(Some(input.cash_sum));
-
-    let book = crate::service::months::MonthBook::open_with_live(pool, totals).await?;
-    let trailing = calc::trailing_averages(&book.stat_rows, &book.items, first);
-    let spend = trailing.living_budget.map(|budget| -budget);
-    let events = crate::service::months::load_interest_events(pool).await?;
-    // HK trades inside the window move 活期 in their month; US trades settle
-    // inside IBKR and stay out (the 月結 `trade:` suggestion rule).
-    let window_end = first
-        .checked_add_months(chrono::Months::new(calc::FORECAST_MONTHS))
-        .expect("forecast window overflow")
-        .to_string();
-    let trades =
-        crate::store::trades::hk_suggestion_trades(pool, &first.to_string(), &window_end).await?;
-    // Every `ibkr_transfers` row in the window is a 活期 flow in its month —
-    // log-only legacy rows moved cash the same way.
-    let ibkr_transfers =
-        crate::store::ibkr::transfers_in_range(pool, &first.to_string(), &window_end, false)
-            .await?;
-
-    let items = load_all_items(pool).await?;
-    let mut facts = Vec::with_capacity(items.len());
-    for item in &items {
-        facts.push(ForecastItemFacts {
-            month: parse_stored_ym(&item.month, "month")?,
-            kind: item.kind,
-            amount: item.amount,
-            return_month: item
-                .return_month
-                .as_deref()
-                .map(|value| parse_stored_ym(value, "return_month"))
-                .transpose()?,
-        });
-    }
-
-    let derived = calc::forecast_months(&calc::ForecastInput {
-        first_month: first,
-        start,
-        salary,
-        spend,
-        liquid_assets: totals.liquid_assets,
-        semi_liquid_target,
-        locked_base: calc::forecast_locked_anchor(&events.deposits, first),
-        bill_amount,
-        deposits: &events.deposits,
-        events: &events,
-        items: &facts,
-        trades: &trades,
-        ibkr_transfers: &ibkr_transfers,
-    });
-    let months_out = derived
-        .iter()
-        .map(|column| {
-            let month = column.month.to_string();
-            ForecastMonth {
-                interest_components: calc::interest_components(&month, &events),
-                plan_items: items
-                    .iter()
-                    .filter(|item| item.month == month)
-                    .cloned()
-                    .collect(),
-                deposit_placements: events
-                    .deposits
-                    .iter()
-                    .filter(|deposit| {
-                        deposit.start_date.is_some_and(|start_date| {
-                            start_date.year() == column.month.year()
-                                && start_date.month() == column.month.month()
-                        })
-                    })
-                    .map(|deposit| ForecastPlacement {
-                        deposit_id: deposit.id,
-                        label: deposit.label.clone(),
-                        bank: deposit.bank.clone(),
-                        principal: deposit.principal,
-                        start_date: deposit.start_date.expect("filtered to Some").to_string(),
-                    })
-                    .collect(),
-                trade_lines: {
-                    let mut lines: Vec<ForecastTrade> = trades
-                        .iter()
-                        .filter(|trade| {
-                            trade.date.year() == column.month.year()
-                                && trade.date.month() == column.month.month()
-                        })
-                        .map(|trade| ForecastTrade {
-                            trade_id: trade.id,
-                            code: trade.code.clone(),
-                            trade_type: trade.kind,
-                            trade_date: trade.date.to_string(),
-                            amount: calc::trade_amount(trade),
-                        })
-                        .collect();
-                    lines.sort_by(|a, b| {
-                        a.trade_date
-                            .cmp(&b.trade_date)
-                            .then(a.trade_id.cmp(&b.trade_id))
-                    });
-                    lines
-                },
-                ibkr_lines: {
-                    let mut lines: Vec<ForecastIbkrTransfer> = ibkr_transfers
-                        .iter()
-                        .filter(|transfer| {
-                            transfer.date.year() == column.month.year()
-                                && transfer.date.month() == column.month.month()
-                        })
-                        .map(|transfer| ForecastIbkrTransfer {
-                            transfer_id: transfer.id,
-                            transfer_date: transfer.date.to_string(),
-                            amount: -transfer.amount,
-                        })
-                        .collect();
-                    lines.sort_by(|a, b| {
-                        a.transfer_date
-                            .cmp(&b.transfer_date)
-                            .then(a.transfer_id.cmp(&b.transfer_id))
-                    });
-                    lines
-                },
-                month,
-                start: column.start,
-                salary,
-                spend,
-                deposit_finish: column.deposit_finish,
-                interest: column.interest,
-                bill: column.bill,
-                deposit_return: column.deposit_return,
-                cash: column.cash,
-                locked: column.locked,
-                semi_liquid: column.semi_liquid,
-                ref_check: column.ref_check,
-            }
-        })
-        .collect();
-    Ok(Json(ForecastResponse {
-        bill_amount,
-        months: months_out,
-    }))
+    Ok(Json(crate::service::forecast::build(&state.pool).await?))
 }
 
 #[utoipa::path(
@@ -414,42 +251,6 @@ pub async fn convert(
 mod tests {
     use super::*;
     use crate::db::connect_memory;
-
-    /// An in-window transfer lands in its column's `ibkr_lines` with the
-    /// signed −amount; a pre-window one appears nowhere.
-    #[tokio::test]
-    async fn forecast_lists_the_windows_ibkr_transfers() {
-        let pool = connect_memory().await.expect("memory db");
-        let first = crate::service::months::live_from();
-        let in_window = format!("{}-05", &first.to_string()[..7]);
-        let pre_window = first
-            .checked_sub_months(chrono::Months::new(2))
-            .expect("pre-window month")
-            .to_string();
-        sqlx::query(
-            "INSERT INTO ibkr_transfers (transfer_date, amount_hkd, created_at) \
-             VALUES (?, 50000, '2026-01-01T00:00:00'), \
-                    (?, 90000, '2026-01-01T00:00:00')",
-        )
-        .bind(&in_window)
-        .bind(&pre_window)
-        .execute(&pool)
-        .await
-        .unwrap();
-
-        let response = forecast(State(AppState { pool }))
-            .await
-            .expect("forecast")
-            .0;
-        let lines: Vec<&ForecastIbkrTransfer> = response
-            .months
-            .iter()
-            .flat_map(|month| month.ibkr_lines.iter())
-            .collect();
-        assert_eq!(lines.len(), 1);
-        assert_eq!(lines[0].transfer_date, in_window);
-        assert_eq!(lines[0].amount, -50000.0);
-    }
 
     async fn seed_bank(pool: &SqlitePool, label: &str, amount: f64) -> i64 {
         sqlx::query_scalar(

@@ -41,10 +41,16 @@ The `Money Master` card mirrors `Overview!J29:N35` — the bank app's savings ch
 
 ```text
 OverviewView loads GET /api/forecast together with GET /api/overview
-  → routes/forecast.rs derives seven month columns (current .. +6) from the
-    stored rows (store/): nothing in the grid is persisted except
-    forecast_items
+  → routes/forecast.rs → service::forecast::build derives seven month
+    columns (current .. +6) from the stored rows (store/): nothing in the
+    grid is persisted except forecast_items
+  → calc::forecast_cells buckets each column's lines into seven cells, one
+    per plan row (hs_deposit, sc_deposit, interest, tax, stock, bill, other)
+  → OverviewView renders each plan-row cell's `figure` and lists its lines
+    in the editor — it never re-buckets or sums
 ```
+
+Each month's `cells` carry `plan_items` (the month's items of that kind), `placements`, `trade_lines`, `ibkr_lines`, and `figure`. The backend owns the routing and the figure: the `bill` cell's figure is the month's `bill`, the `interest` cell's is the month's `interest`, and every other cell's is Σ plan items + Σ −principal of placements + Σ trade and IBKR line amounts, absent (`—`) while the cell lists nothing.
 
 The card mirrors the sheet's row order — `ref check`, `半流動`, `活期`, `定期 + SC`, `start`, `salary`, `支出`, `定期 finish`, `定期 HS`, `SC高息馬拉松`, `利息`, `Tax/基金/醫療保險`, `股票`, `繳費`, `TBC - 定期 end`, `TBC` — with months as columns and `—` for absent figures. The sheet's monthly ritual (re-anchor `B22`/`B24`/`B25`, copy `C28:H36` left, fix `H`) disappears: the window rolls by itself and every line derives:
 
@@ -55,9 +61,9 @@ The card mirrors the sheet's row order — `ref check`, `半流動`, `活期`, `
 - `繳費` — −`forecast.bill_amount` (default `2158`, editable in 月結 settings) every Jan/Apr/Jul/Oct; a `bill` item in the month replaces the default
 - `TBC - 定期 end` — Σ `−amount` of deposit plans returning that month: `return_month` when set, else `hs_deposit` → +3 months, `sc_deposit` → +4 (the sheet's row-35 lags)
 - `定期 + SC` (`locked`) — anchors on the deposits held on the window's first day (`start_date` absent or before the 1st, `end_date` on or after it — not the live active (unreceived) total), then `locked(m) = locked(m−1) − finish − plan placements + real placements − returns`
-- real deposit placements — a deposit whose `start_date` falls in the month is a flow in it: 活期 −`principal`, 定期+SC +`principal`, and the deposit appears as a read-only `已定期` line in its bank's row (`bank` `HS` → 定期 HS, anything else → SC高息馬拉松). `start_date` means "the day the money left 活期" — money that left before the month's 月初 figure is dated in the prior month, so it sits in the anchor instead of subtracting twice
-- real HK trades — a trade whose `trade_date` falls in the month is a 活期 flow (BUY −`total`, SELL +`total`) and appears as a read-only `已交易` line in the 股票 row (`trade_lines`: code, trade type, signed `amount`, date); US trades stay out — they settle inside IBKR, matching the 月結 `trade:` suggestion rule. Stock plan items are never suppressed or auto-converted: a plan is an estimate that may cover several buys of unknown final amount, so the user trims or deletes it once the real trade lands — until then both count. Same 月初 caveat as placements: a trade dated before the month's 月初 figure was entered double-counts — money that already left is inside `start` *and* counted again as a flow
-- IBKR 轉入 — an `ibkr_transfers` row whose `transfer_date` falls in the month is a 活期 flow of −`amount_hkd` and appears as a read-only `已轉帳` line in the 股票 row beside the trades (`ibkr_lines`: date, signed `amount`; every log row counts, including log-only legacy rows — they moved cash the same way). The 股票 cell's figure is Σ `stock` plan items + Σ trade `amount` + Σ `ibkr_lines` `amount`, `—` while all are empty
+- real deposit placements — a deposit whose `start_date` falls in the month is a flow in it: 活期 −`principal`, 定期+SC +`principal`, and the deposit appears as a read-only `已定期` line in its bank's cell `placements` (`bank` `HS` → 定期 HS, anything else or unset → SC高息馬拉松; `ForecastItemKind::placement_row`). `start_date` means "the day the money left 活期" — money that left before the month's 月初 figure is dated in the prior month, so it sits in the anchor instead of subtracting twice
+- real HK trades — a trade whose `trade_date` falls in the month is a 活期 flow (BUY −`total`, SELL +`total`) and appears as a read-only `已交易` line in the 股票 row (the `stock` cell's `trade_lines`: code, trade type, signed `amount`, date); US trades stay out — they settle inside IBKR, matching the 月結 `trade:` suggestion rule. Stock plan items are never suppressed or auto-converted: a plan is an estimate that may cover several buys of unknown final amount, so the user trims or deletes it once the real trade lands — until then both count. Same 月初 caveat as placements: a trade dated before the month's 月初 figure was entered double-counts — money that already left is inside `start` *and* counted again as a flow
+- IBKR 轉入 — an `ibkr_transfers` row whose `transfer_date` falls in the month is a 活期 flow of −`amount_hkd` and appears as a read-only `已轉帳` line in the 股票 row beside the trades (the `stock` cell's `ibkr_lines`: date, signed `amount`; every log row counts, including log-only legacy rows — they moved cash the same way). The `stock` cell's `figure` is Σ `stock` plan items + Σ trade `amount` + Σ `ibkr_lines` `amount`, absent (`—`) while all are empty
 - `活期` (`cash`, rendered red while below `20000`) and `半流動` (`cash + locked`); `ref check` = `半流動 − semi_liquid_target × 流動資產` (the sheet's `H1 ÷ 4` literal, same `strategy.semi_liquid_target` setting as `C14`), rendered red while negative
 
 ```text

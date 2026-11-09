@@ -3,13 +3,11 @@ import { computed, onMounted, reactive, ref } from 'vue'
 import {
   api,
   ApiError,
-  type ForecastIbkrTransfer,
+  type ForecastCell,
   type ForecastItem,
   type ForecastItemKind,
   type ForecastMonth,
-  type ForecastPlacement,
   type ForecastResponse,
-  type ForecastTrade,
   type InterestComponent,
   type OverviewResponse,
 } from '../api'
@@ -61,48 +59,10 @@ const converting = ref<ForecastItem | null>(null)
 const drafts = ref<Record<number, { amount: string; note: string; return_month: string }>>({})
 const newItem = reactive({ amount: '', note: '', return_month: '' })
 
-function cellItems(month: ForecastMonth, kind: ForecastItemKind): ForecastItem[] {
-  return month.plan_items.filter((item) => item.kind === kind)
-}
-
-/** A real deposit placement lands in its bank's plan row: `HS` → 定期 HS,
- * every other bank → SC高息馬拉松. Other rows never carry placements. */
-function cellPlacements(month: ForecastMonth, kind: ForecastItemKind): ForecastPlacement[] {
-  if (kind === 'hs_deposit') {
-    return month.deposit_placements.filter((p) => p.bank === 'HS')
-  }
-  if (kind === 'sc_deposit') {
-    return month.deposit_placements.filter((p) => p.bank !== 'HS')
-  }
-  return []
-}
-
-/** Real HK trades dated in the month land in the 股票 row only — a plan is
- * an estimate the user trims by hand, so trades never suppress plan items. */
-function cellTradeLines(month: ForecastMonth, kind: ForecastItemKind): ForecastTrade[] {
-  return kind === 'stock' ? month.trade_lines : []
-}
-
-/** IBKR transfers dated in the month land in the 股票 row too — read-only
- * `已轉帳` lines beside the trades. */
-function cellIbkrLines(month: ForecastMonth, kind: ForecastItemKind): ForecastIbkrTransfer[] {
-  return kind === 'stock' ? month.ibkr_lines : []
-}
-
-/** Σ item amounts − placement principals + trade and IBKR transfer amounts;
- * null while the cell is empty (sheet: blank). */
-function cellSum(month: ForecastMonth, kind: ForecastItemKind): number | null {
-  const items = cellItems(month, kind)
-  const placements = cellPlacements(month, kind)
-  const tradeLines = cellTradeLines(month, kind)
-  const ibkrLines = cellIbkrLines(month, kind)
-  if (!items.length && !placements.length && !tradeLines.length && !ibkrLines.length) return null
-  return (
-    items.reduce((sum, item) => sum + item.amount, 0) +
-    placements.reduce((sum, p) => sum - p.principal, 0) +
-    tradeLines.reduce((sum, t) => sum + t.amount, 0) +
-    ibkrLines.reduce((sum, t) => sum + t.amount, 0)
-  )
+/** The month's backend-built cell for a plan row: its plan items, read-only
+ * placement/trade/IBKR lines, and the figure the grid shows. */
+function cellOf(month: ForecastMonth, kind: ForecastItemKind): ForecastCell | undefined {
+  return month.cells.find((cell) => cell.kind === kind)
 }
 
 const selectedKind = computed(() =>
@@ -120,26 +80,15 @@ function sourceLabel(component: InterestComponent): string {
 const selectedMonth = computed(() =>
   forecast.value?.months.find((month) => month.month === selected.value?.month),
 )
-const selectedItems = computed(() =>
+const selectedCell = computed(() =>
   selectedMonth.value && selected.value
-    ? cellItems(selectedMonth.value, selected.value.kind)
-    : [],
+    ? cellOf(selectedMonth.value, selected.value.kind)
+    : undefined,
 )
-const selectedPlacements = computed(() =>
-  selectedMonth.value && selected.value
-    ? cellPlacements(selectedMonth.value, selected.value.kind)
-    : [],
-)
-const selectedTrades = computed(() =>
-  selectedMonth.value && selected.value
-    ? cellTradeLines(selectedMonth.value, selected.value.kind)
-    : [],
-)
-const selectedIbkrLines = computed(() =>
-  selectedMonth.value && selected.value
-    ? cellIbkrLines(selectedMonth.value, selected.value.kind)
-    : [],
-)
+const selectedItems = computed(() => selectedCell.value?.plan_items ?? [])
+const selectedPlacements = computed(() => selectedCell.value?.placements ?? [])
+const selectedTrades = computed(() => selectedCell.value?.trade_lines ?? [])
+const selectedIbkrLines = computed(() => selectedCell.value?.ibkr_lines ?? [])
 
 function selectCell(month: string, kind: ForecastItemKind) {
   selected.value = { month, kind }
@@ -710,13 +659,7 @@ onMounted(load)
                 }"
                 @click="selectCell(month.month, row.kind)"
               >
-                {{
-                  row.kind === 'bill'
-                    ? fmtMoney(month.bill) || '—'
-                    : row.kind === 'interest'
-                      ? fmtMoney(month.interest)
-                      : fmtMoney(cellSum(month, row.kind)) || '—'
-                }}
+                {{ fmtMoney(cellOf(month, row.kind)?.figure) || '—' }}
               </td>
             </tr>
             <tr>
@@ -737,7 +680,7 @@ onMounted(load)
                 }"
                 @click="selectCell(month.month, 'other')"
               >
-                {{ fmtMoney(cellSum(month, 'other')) || '—' }}
+                {{ fmtMoney(cellOf(month, 'other')?.figure) || '—' }}
               </td>
             </tr>
           </tbody>

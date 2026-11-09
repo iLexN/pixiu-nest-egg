@@ -116,8 +116,11 @@ reappears. Suggested only for the current month and later.
 _Avoid_: suggestion, auto-item
 
 **Month book**: the assembled 月結 ledger for reads — all stored month rows,
-their items, the derived stat rows, live totals, and the live tail. Every
-month-derived read opens the book (`MonthBook::open`).
+their items, the derived stat rows, live totals, the live tail, pool rates,
+and HK sold P/L. Every month-derived read opens the book (`MonthBook::open`)
+and asks it questions — `months`, `month`, `year_summaries`,
+`running_averages`, `trailing_averages`, `pool_balance`, `pool_rate` — never
+its raw parts.
 _Avoid_: pipeline, month load
 
 **Live totals**: the 總資產/流動資產 aggregate computed from current data
@@ -231,6 +234,12 @@ _Avoid_: projection
 
 **Locked chain**: the forecast's committed 定期+SC anchor path — events that
 must happen, so later columns chain from them.
+
+**Forecast cell**: one (month, plan row) square of the 預測 grid as the
+backend returns it — the month's plan items of that kind, its read-only
+placement/trade/IBKR lines, and the `figure` the grid shows. Routing a line
+to its row and summing the figure happen in the backend only.
+_Avoid_: cell sum, bucket
 
 **Plan item**: a user-planned forecast cell (e.g. a deposit placement or
 轉為定期 conversion) that edits the projection without moving money yet.
