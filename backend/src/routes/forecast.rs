@@ -4,7 +4,7 @@ use axum::http::StatusCode;
 use sqlx::SqlitePool;
 
 use super::{AppState, parse_ym};
-use crate::calc::{self, FieldError};
+use crate::calc::FieldError;
 use crate::error::{ApiError, ErrorBody};
 use crate::models::{
     Deposit, ForecastItem, ForecastItemKind, ForecastItemPatch, ForecastResponse, NewDeposit,
@@ -214,33 +214,9 @@ pub async fn remove_item(
 pub async fn convert(
     State(state): State<AppState>,
     Path(id): Path<i64>,
-    Json(mut body): Json<NewDeposit>,
+    Json(body): Json<NewDeposit>,
 ) -> Result<(StatusCode, Json<Deposit>), ApiError> {
-    let item = load_item(&state.pool, id).await?;
-    if item.kind.deposit_lag().is_none() {
-        return Err(ApiError::Conflict(format!(
-            "forecast item {id} is not a deposit plan"
-        )));
-    }
-    if body.bank.is_none() {
-        body.bank = item.kind.default_bank().map(str::to_string);
-    }
-    if body.principal.is_none() {
-        body.principal = Some(-item.amount);
-    }
-    let validated = calc::validate_deposit(calc::DepositInput {
-        label: body.label.as_deref(),
-        bank: body.bank.as_deref(),
-        principal: body.principal,
-        rate: body.rate,
-        interest: body.interest,
-        start_date: body.start_date.as_deref(),
-        end_date: &body.end_date,
-    })
-    .map_err(ApiError::Validation)?;
-
-    let deposit_id =
-        crate::service::deposits::convert_plan(&state.pool, id, &validated, &body).await?;
+    let deposit_id = crate::service::deposits::convert_plan(&state.pool, id, body).await?;
     Ok((
         StatusCode::CREATED,
         Json(crate::store::deposits::load_one(&state.pool, deposit_id).await?),

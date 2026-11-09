@@ -516,7 +516,7 @@ pub fn year_review_rows(
 /// `avg_invested` is the sheet's J22: the mean of `invested` over the last
 /// three completed years.
 pub fn invest_targets(rows: &[YearReviewRow], current_year: i32) -> crate::models::InvestTargets {
-    use crate::models::{InvestTargetRow, InvestTargets};
+    use crate::models::{InvestTargetRow, InvestTargetTerms, InvestTargets};
     use std::collections::HashMap;
 
     let by_year: HashMap<i32, &YearReviewRow> = rows.iter().map(|row| (row.year, row)).collect();
@@ -526,13 +526,19 @@ pub fn invest_targets(rows: &[YearReviewRow], current_year: i32) -> crate::model
         let prior_invested = prior.and_then(|prior| prior.investment.invested);
         // The prior row's interest/pool_spend are already f64s (0 when the
         // year has no months); an absent raise counts as 0.
-        let target = prior_invested.map(|prior_invested| {
-            prior_invested
-                - prior.map(|prior| prior.investment.interest).unwrap_or(0.0)
-                - prior.map(|prior| prior.ledger.pool_spend).unwrap_or(0.0) * 0.7
-                + row.investment.raise.unwrap_or(0.0) * 0.5 * 12.0
-                + row.investment.interest
-                + row.ledger.pool_spend * 0.7
+        let terms = InvestTargetTerms {
+            prior_invested,
+            prior_interest: prior.map(|prior| prior.investment.interest),
+            prior_pool: prior.map(|prior| prior.ledger.pool_spend * 0.7),
+            raise_term: row.investment.raise.unwrap_or(0.0) * 0.5 * 12.0,
+            interest: row.investment.interest,
+            pool: row.ledger.pool_spend * 0.7,
+        };
+        let target = terms.prior_invested.map(|prior_invested| {
+            prior_invested - terms.prior_interest.unwrap_or(0.0) - terms.prior_pool.unwrap_or(0.0)
+                + terms.raise_term
+                + terms.interest
+                + terms.pool
         });
         let invested = row.investment.invested;
         let remain = if row.year == current_year {
@@ -556,6 +562,7 @@ pub fn invest_targets(rows: &[YearReviewRow], current_year: i32) -> crate::model
             target,
             remain,
             growth,
+            terms,
         });
     }
 
@@ -1042,6 +1049,56 @@ mod tests {
             (206523.15 + 345365.11) / 2.0
         ));
         assert_eq!(invest_targets(&rows[..1], 2023).avg_invested, None);
+    }
+
+    /// Each row carries the six terms its target sums; the earliest row has
+    /// no prior terms and an absent raise counts as 0.
+    #[test]
+    fn invest_targets_expose_the_formula_terms() {
+        let row = |year, invested, interest, pool_spend, raise| YearReviewRow {
+            year,
+            ledger: YearReviewLedger {
+                pool_spend,
+                ..Default::default()
+            },
+            investment: YearReviewInvestment {
+                invested,
+                interest,
+                raise,
+                ..Default::default()
+            },
+            ..Default::default()
+        };
+        let rows = vec![
+            row(2023, Some(206523.15), 0.0, 0.0, None),
+            row(2025, Some(428635.41), 51900.65, 38729.5, Some(2960.0)),
+            row(2026, Some(182935.39), 62753.15, 9593.0, Some(1890.0)),
+        ];
+        let targets = invest_targets(&rows, 2026);
+
+        let y2026 = &targets.rows[2];
+        let terms = &y2026.terms;
+        assert_eq!(terms.prior_invested, Some(428635.41));
+        assert_eq!(terms.prior_interest, Some(51900.65));
+        assert!(approx_eq(terms.prior_pool.unwrap(), 27110.65));
+        assert_eq!(terms.raise_term, 11340.0);
+        assert_eq!(terms.interest, 62753.15);
+        assert!(approx_eq(terms.pool, 6715.1));
+        let sum = terms.prior_invested.unwrap()
+            - terms.prior_interest.unwrap()
+            - terms.prior_pool.unwrap()
+            + terms.raise_term
+            + terms.interest
+            + terms.pool;
+        assert_eq!(y2026.target, Some(sum));
+        assert!(approx_eq(sum, 430432.36));
+
+        let first = &targets.rows[0];
+        assert_eq!(first.terms.prior_invested, None);
+        assert_eq!(first.terms.prior_interest, None);
+        assert_eq!(first.terms.prior_pool, None);
+        assert_eq!(first.terms.raise_term, 0.0);
+        assert_eq!(first.target, None);
     }
 
     #[test]

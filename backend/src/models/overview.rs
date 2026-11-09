@@ -164,6 +164,27 @@ pub struct InvestTargetRow {
     /// N column: invested YoY for completed years; target vs last invested
     /// for the current year.
     pub growth: Option<f64>,
+    /// The six contributions `target` sums — the footnote's terms.
+    pub terms: InvestTargetTerms,
+}
+
+/// The 投資目標 formula's terms for one row: `target = prior_invested −
+/// prior_interest − prior_pool + raise_term + interest + pool` whenever
+/// `prior_invested` is present.
+#[derive(Debug, Clone, Serialize, ToSchema)]
+pub struct InvestTargetTerms {
+    /// The prior year's `invested`; absent while it is.
+    pub prior_invested: Option<f64>,
+    /// The prior year's 利息回報; absent while no prior-year row exists.
+    pub prior_interest: Option<f64>,
+    /// The prior year's 開心Pool支出 × 0.7; absent while no prior-year row.
+    pub prior_pool: Option<f64>,
+    /// 月薪增幅 × 0.5 × 12; an absent raise counts as 0.
+    pub raise_term: f64,
+    /// This year's 利息回報.
+    pub interest: f64,
+    /// This year's 開心Pool支出 × 0.7.
+    pub pool: f64,
 }
 
 /// The Overview `J3:K7` 策略 block: 總數 re-partitioned into liquidity tiers.
@@ -240,9 +261,28 @@ pub struct FormulaGoal {
     pub remain: Option<f64>,
     /// O16/P16 = remain ÷ the goal's yearly pace; absent once `remain ≤ 0`.
     pub years: Option<f64>,
+    /// The yearly pace `years` divides by — 3rd: `(saved_avg + interest_avg)
+    /// × 12`; Final: `total_change_avg × 12`. Absent while its inputs are.
+    pub pace: Option<f64>,
     /// today + round(365 × years) days, `YYYY-MM-DD` — absent while `years`
     /// is absent, including once the goal is reached.
     pub eta: Option<String>,
+}
+
+/// The five yearly 存/年 (L12) terms — each absent while its inputs are;
+/// `saving_year` is the mean of the present ones.
+#[derive(Debug, Clone, Default, Serialize, ToSchema)]
+pub struct SavingYearTerms {
+    /// G7 × 12: the trailing 12-month saved average, annualized.
+    pub saved_year: Option<f64>,
+    /// J22: the 3-year invested average.
+    pub avg_invested: Option<f64>,
+    /// M31 × 12: the Money Master monthly average, annualized.
+    pub mm_year: Option<f64>,
+    /// L8 × 12: the running saved average, annualized.
+    pub running_saved_year: Option<f64>,
+    /// (L8 + N8) × 12: running saved + interest averages, annualized.
+    pub running_combined_year: Option<f64>,
 }
 
 /// The `Overview!J10:M20` + `N13:P16` 目標 block: the shared saving/return
@@ -259,6 +299,8 @@ pub struct OverviewGoals {
     /// skipped; M12 = L12 ÷ 12.
     pub saving_year: Option<f64>,
     pub saving_month: Option<f64>,
+    /// The five yearly L12 terms `saving_year` averages.
+    pub saving_terms: SavingYearTerms,
     /// L13 = K13 × N4; M13 = L13 ÷ 12.
     pub passive_return_year: Option<f64>,
     pub passive_return_month: Option<f64>,

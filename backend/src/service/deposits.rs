@@ -1,5 +1,5 @@
 //! Deposit flows that span tables: placement (create and the 轉為定期
-//! conversion) inserts the row, optionally debits the principal from a
+//! conversion) validates the body, inserts the row, optionally debits the principal from a
 //! chosen 活期 account, and records the start month's `dep-start` item;
 //! 收訖 is one transaction — the row update, the cash-account credit, and
 //! the `dep-end` month item — and delete reverses the debit and removes
@@ -7,7 +7,7 @@
 
 use sqlx::SqlitePool;
 
-use crate::calc::{FieldError, ValidatedDeposit};
+use crate::calc::{DepositInput, FieldError, ValidatedDeposit, validate_deposit};
 use crate::models::{CashRole, Currency, NewDeposit};
 use crate::service::{ServiceError, receipts};
 use crate::store::{StoreError, cash_accounts, deposits, forecast, months, now_timestamp};
@@ -72,29 +72,56 @@ async fn place(
     Ok(id)
 }
 
-/// Create a deposit: one transaction — [`place`].
-pub async fn create(
-    pool: &SqlitePool,
-    deposit: &ValidatedDeposit,
-    body: &NewDeposit,
-) -> Result<i64, ServiceError> {
+/// The placement's domain validation — `Err(Validation)` with the field
+/// errors, before any transaction opens.
+fn validate(body: &NewDeposit) -> Result<ValidatedDeposit, ServiceError> {
+    validate_deposit(DepositInput {
+        label: body.label.as_deref(),
+        bank: body.bank.as_deref(),
+        principal: body.principal,
+        rate: body.rate,
+        interest: body.interest,
+        start_date: body.start_date.as_deref(),
+        end_date: &body.end_date,
+    })
+    .map_err(ServiceError::Validation)
+}
+
+/// Create a deposit: validate, then one transaction — [`place`].
+pub async fn create(pool: &SqlitePool, body: &NewDeposit) -> Result<i64, ServiceError> {
+    let deposit = validate(body)?;
     let mut tx = pool.begin().await.map_err(StoreError::from)?;
-    let id = place(&mut tx, deposit, body).await?;
+    let id = place(&mut tx, &deposit, body).await?;
     tx.commit().await?;
     Ok(id)
 }
 
-/// 轉為定期: [`place`] the deposit and delete the forecast item, in one
-/// transaction — a failed placement leaves the plan in place, and a failed
-/// delete can never leave both (which would double-count in the forecast).
+/// 轉為定期: load the plan (`Err(NotFound)` while missing; `Err(Conflict)`
+/// unless it is a deposit plan), default the unset `bank` from its kind and
+/// `principal` from −amount, validate, then [`place`] the deposit and delete
+/// the plan in one transaction — a failed placement leaves the plan in
+/// place, and a failed delete can never leave both (which would
+/// double-count in the forecast).
 pub async fn convert_plan(
     pool: &SqlitePool,
     item_id: i64,
-    deposit: &ValidatedDeposit,
-    body: &NewDeposit,
+    mut body: NewDeposit,
 ) -> Result<i64, ServiceError> {
+    let item = forecast::load_item(pool, item_id).await?;
+    if item.kind.deposit_lag().is_none() {
+        return Err(ServiceError::Conflict(format!(
+            "forecast item {item_id} is not a deposit plan"
+        )));
+    }
+    if body.bank.is_none() {
+        body.bank = item.kind.default_bank().map(str::to_string);
+    }
+    if body.principal.is_none() {
+        body.principal = Some(-item.amount);
+    }
+    let deposit = validate(&body)?;
     let mut tx = pool.begin().await.map_err(StoreError::from)?;
-    let id = place(&mut tx, deposit, body).await?;
+    let id = place(&mut tx, &deposit, &body).await?;
     forecast::delete_item_in_tx(&mut tx, item_id).await?;
     tx.commit().await?;
     Ok(id)
@@ -178,12 +205,6 @@ pub async fn delete(pool: &SqlitePool, id: i64) -> Result<(), ServiceError> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::calc::{DepositInput, validate_deposit};
-
-    fn validated(input: DepositInput<'_>) -> ValidatedDeposit {
-        validate_deposit(input).expect("valid deposit")
-    }
-
     fn body() -> NewDeposit {
         NewDeposit {
             label: Some("SC-1".to_string()),
@@ -196,20 +217,6 @@ mod tests {
             note1: None,
             note2: None,
             debit_account_id: None,
-        }
-    }
-
-    /// The same deposit as `body()`, as calc input — start month 2099-10,
-    /// end month 2100-02.
-    fn input() -> DepositInput<'static> {
-        DepositInput {
-            label: Some("SC-1"),
-            bank: Some("SC"),
-            principal: Some(140000.0),
-            rate: None,
-            interest: Some(1279.0),
-            start_date: Some("2099-10-13"),
-            end_date: "2100-02-02",
         }
     }
 
@@ -256,41 +263,13 @@ mod tests {
         .await
         .unwrap();
 
-        let id = create(
-            &pool,
-            &validated(DepositInput {
-                label: Some("SC-1"),
-                bank: Some("SC"),
-                principal: Some(140000.0),
-                rate: None,
-                interest: Some(1279.0),
-                start_date: Some("2099-10-13"),
-                end_date: "2100-02-02",
-            }),
-            &body(),
-        )
-        .await
-        .unwrap();
+        let id = create(&pool, &body()).await.unwrap();
         assert_eq!(dep_start_amount(&pool, id).await, Some(-140000.0));
 
         // Monthless start month: the item is skipped, the suggestion remains.
         let mut monthless = body();
         monthless.start_date = Some("2099-11-13".to_string());
-        let id = create(
-            &pool,
-            &validated(DepositInput {
-                label: Some("SC-1"),
-                bank: Some("SC"),
-                principal: Some(140000.0),
-                rate: None,
-                interest: Some(1279.0),
-                start_date: Some("2099-11-13"),
-                end_date: "2100-02-02",
-            }),
-            &monthless,
-        )
-        .await
-        .unwrap();
+        let id = create(&pool, &monthless).await.unwrap();
         let count: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM month_items WHERE auto_key = ?")
             .bind(format!("dep-start:{id}"))
             .fetch_one(&pool)
@@ -301,21 +280,7 @@ mod tests {
         // No start_date: no item at all.
         let mut no_start = body();
         no_start.start_date = None;
-        let id = create(
-            &pool,
-            &validated(DepositInput {
-                label: Some("SC-1"),
-                bank: Some("SC"),
-                principal: Some(140000.0),
-                rate: None,
-                interest: Some(1279.0),
-                start_date: None,
-                end_date: "2100-02-02",
-            }),
-            &no_start,
-        )
-        .await
-        .unwrap();
+        let id = create(&pool, &no_start).await.unwrap();
         assert_eq!(dep_start_amount(&pool, id).await, None);
     }
 
@@ -380,7 +345,7 @@ mod tests {
     async fn delete_removes_the_dep_start_item_and_dismissals() {
         let pool = crate::db::connect_memory().await.expect("memory db");
         seed_months(&pool, &["2099-10-01"]).await;
-        let id = create(&pool, &validated(input()), &body()).await.unwrap();
+        let id = create(&pool, &body()).await.unwrap();
         assert_eq!(dep_start_amount(&pool, id).await, Some(-140000.0));
 
         sqlx::query(
@@ -428,7 +393,7 @@ mod tests {
     async fn delete_removes_the_item_after_the_start_date_moved() {
         let pool = crate::db::connect_memory().await.expect("memory db");
         seed_months(&pool, &["2099-10-01"]).await;
-        let id = create(&pool, &validated(input()), &body()).await.unwrap();
+        let id = create(&pool, &body()).await.unwrap();
         sqlx::query("UPDATE deposits SET start_date = '2099-12-01' WHERE id = ?")
             .bind(id)
             .execute(&pool)
@@ -450,7 +415,7 @@ mod tests {
     async fn delete_a_received_deposit_conflicts() {
         let pool = crate::db::connect_memory().await.expect("memory db");
         seed_months(&pool, &["2099-10-01", "2100-02-01"]).await;
-        let id = create(&pool, &validated(input()), &body()).await.unwrap();
+        let id = create(&pool, &body()).await.unwrap();
         receive(
             &pool,
             id,
@@ -533,15 +498,13 @@ mod tests {
 
         let mut debit_body = body();
         debit_body.debit_account_id = Some(hs);
-        let id = create(&pool, &validated(input()), &debit_body)
-            .await
-            .unwrap();
+        let id = create(&pool, &debit_body).await.unwrap();
         assert_eq!(account_amount(&pool, hs).await, 60000.0);
         assert_eq!(account_amount(&pool, sc).await, 800.0);
         assert_eq!(stored_debit(&pool, id).await, (Some(hs), Some(140000.0)));
         assert_eq!(dep_start_amount(&pool, id).await, Some(-140000.0));
 
-        let id = create(&pool, &validated(input()), &body()).await.unwrap();
+        let id = create(&pool, &body()).await.unwrap();
         assert_eq!(stored_debit(&pool, id).await, (None, None));
         assert_eq!(account_amount(&pool, hs).await, 60000.0);
     }
@@ -557,9 +520,7 @@ mod tests {
 
         let mut body = body();
         body.debit_account_id = Some(hs);
-        let err = create(&pool, &validated(input()), &body)
-            .await
-            .expect_err("overdraft");
+        let err = create(&pool, &body).await.expect_err("overdraft");
         let ServiceError::Validation(fields) = err else {
             panic!("expected validation");
         };
@@ -579,9 +540,7 @@ mod tests {
         assert_eq!(items, 0);
 
         body.debit_account_id = Some(9999);
-        let err = create(&pool, &validated(input()), &body)
-            .await
-            .expect_err("unknown account");
+        let err = create(&pool, &body).await.expect_err("unknown account");
         assert!(matches!(err, ServiceError::Store(StoreError::NotFound(_))));
     }
 
@@ -607,9 +566,7 @@ mod tests {
         for account in [broker, usd] {
             let mut body = body();
             body.debit_account_id = Some(account);
-            let err = create(&pool, &validated(input()), &body)
-                .await
-                .expect_err("non-HKD-bank debit");
+            let err = create(&pool, &body).await.expect_err("non-HKD-bank debit");
             let ServiceError::Validation(fields) = err else {
                 panic!("expected validation");
             };
@@ -633,21 +590,7 @@ mod tests {
         body.start_date = Some("2019-10-13".to_string());
         body.end_date = "2020-02-02".to_string();
         body.debit_account_id = Some(hs);
-        let id = create(
-            &pool,
-            &validated(DepositInput {
-                label: Some("SC-1"),
-                bank: Some("SC"),
-                principal: Some(140000.0),
-                rate: None,
-                interest: Some(1279.0),
-                start_date: Some("2019-10-13"),
-                end_date: "2020-02-02",
-            }),
-            &body,
-        )
-        .await
-        .unwrap();
+        let id = create(&pool, &body).await.unwrap();
 
         let stored = deposits::load_one(&pool, id).await.unwrap();
         assert!(stored.received_at.is_some());
@@ -666,7 +609,7 @@ mod tests {
 
         let mut body = body();
         body.debit_account_id = Some(hs);
-        let id = create(&pool, &validated(input()), &body).await.unwrap();
+        let id = create(&pool, &body).await.unwrap();
         assert_eq!(account_amount(&pool, hs).await, 60000.0);
 
         sqlx::query("UPDATE cash_accounts SET is_default_receipt = 0 WHERE id = ?")
@@ -685,6 +628,87 @@ mod tests {
         assert_eq!(account_amount(&pool, sc).await, 800.0);
     }
 
+    async fn deposit_count(pool: &SqlitePool) -> i64 {
+        sqlx::query_scalar("SELECT COUNT(*) FROM deposits")
+            .fetch_one(pool)
+            .await
+            .unwrap()
+    }
+
+    async fn seed_plan(pool: &SqlitePool, kind: &str, amount: f64) -> i64 {
+        forecast::insert_item(pool, "2099-10-01", kind, amount, &None, &None, 1)
+            .await
+            .unwrap()
+    }
+
+    /// A body failing domain validation is rejected before anything is
+    /// written.
+    #[tokio::test]
+    async fn create_rejects_an_invalid_body_and_writes_nothing() {
+        let pool = crate::db::connect_memory().await.expect("memory db");
+        let mut bad = body();
+        bad.end_date = "2100-13-40".to_string();
+
+        let err = create(&pool, &bad).await.expect_err("invalid end_date");
+        let ServiceError::Validation(fields) = err else {
+            panic!("expected validation");
+        };
+        assert_eq!(fields[0].field, "end_date");
+        assert_eq!(deposit_count(&pool).await, 0);
+    }
+
+    /// An unset bank/principal defaults from the plan: `sc_deposit` → `SC`,
+    /// principal = −amount; the plan is consumed.
+    #[tokio::test]
+    async fn convert_plan_defaults_bank_and_principal_from_the_plan() {
+        let pool = crate::db::connect_memory().await.expect("memory db");
+        let plan = seed_plan(&pool, "sc_deposit", -180000.0).await;
+        let mut bare = body();
+        bare.bank = None;
+        bare.principal = None;
+
+        let id = convert_plan(&pool, plan, bare).await.unwrap();
+
+        let stored = deposits::load_one(&pool, id).await.unwrap();
+        assert_eq!(stored.bank.as_deref(), Some("SC"));
+        assert_eq!(stored.principal, Some(180000.0));
+        assert!(matches!(
+            forecast::load_item(&pool, plan).await,
+            Err(StoreError::NotFound(_))
+        ));
+    }
+
+    /// A non-deposit plan is a conflict and stays; a missing plan is not
+    /// found; an invalid body is a validation error that keeps the plan.
+    #[tokio::test]
+    async fn convert_plan_error_precedence_keeps_the_plan() {
+        let pool = crate::db::connect_memory().await.expect("memory db");
+        let tax = seed_plan(&pool, "tax", -3000.0).await;
+        let mut bad = body();
+        bad.end_date = "not-a-date".to_string();
+
+        // The kind check wins over the invalid body.
+        let err = convert_plan(&pool, tax, bad.clone())
+            .await
+            .expect_err("tax");
+        assert!(matches!(err, ServiceError::Conflict(_)));
+        assert!(forecast::load_item(&pool, tax).await.is_ok());
+
+        let err = convert_plan(&pool, 999_999, body())
+            .await
+            .expect_err("missing");
+        assert!(matches!(err, ServiceError::Store(StoreError::NotFound(_))));
+
+        let hs = seed_plan(&pool, "hs_deposit", -130000.0).await;
+        let err = convert_plan(&pool, hs, bad).await.expect_err("invalid");
+        let ServiceError::Validation(fields) = err else {
+            panic!("expected validation");
+        };
+        assert_eq!(fields[0].field, "end_date");
+        assert!(forecast::load_item(&pool, hs).await.is_ok());
+        assert_eq!(deposit_count(&pool).await, 0);
+    }
+
     /// The debited account deleted in between: the deposit still deletes
     /// and no remaining account changes.
     #[tokio::test]
@@ -696,7 +720,7 @@ mod tests {
 
         let mut body = body();
         body.debit_account_id = Some(sc);
-        let id = create(&pool, &validated(input()), &body).await.unwrap();
+        let id = create(&pool, &body).await.unwrap();
         cash_accounts::delete(&pool, sc).await.unwrap();
 
         delete(&pool, id).await.unwrap();

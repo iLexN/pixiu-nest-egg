@@ -70,18 +70,7 @@ pub async fn create(
     State(state): State<AppState>,
     Json(body): Json<NewDeposit>,
 ) -> Result<(StatusCode, Json<Deposit>), ApiError> {
-    let validated = validate_deposit(DepositInput {
-        label: body.label.as_deref(),
-        bank: body.bank.as_deref(),
-        principal: body.principal,
-        rate: body.rate,
-        interest: body.interest,
-        start_date: body.start_date.as_deref(),
-        end_date: &body.end_date,
-    })
-    .map_err(ApiError::Validation)?;
-
-    let id = crate::service::deposits::create(&state.pool, &validated, &body).await?;
+    let id = crate::service::deposits::create(&state.pool, &body).await?;
     Ok((
         StatusCode::CREATED,
         Json(store::load_one(&state.pool, id).await?),

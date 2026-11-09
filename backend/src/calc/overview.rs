@@ -250,6 +250,7 @@ fn formula_goal(
         target,
         remain,
         years,
+        pace,
         eta: goal_eta(today, years),
     }
 }
@@ -264,19 +265,26 @@ fn formula_goal(
 /// `(L8 + N8) × 12`. Final `P14` = `salary × replacement × 12 ÷ N4`, remain
 /// vs 總數, paced by `C8 × 12`.
 pub fn overview_goals(input: &OverviewGoalsInput) -> crate::models::OverviewGoals {
-    use crate::models::{GoalMilestone, OverviewGoals};
+    use crate::models::{GoalMilestone, OverviewGoals, SavingYearTerms};
 
     // L12: the sheet's AVERAGE skips absent terms.
     let combined_running = match (input.saved_avg, input.interest_avg) {
         (Some(saved), Some(interest)) => Some((saved + interest) * 12.0),
         _ => None,
     };
+    let saving_terms = SavingYearTerms {
+        saved_year: input.avg_saved.map(|avg| avg * 12.0),
+        avg_invested: input.avg_invested,
+        mm_year: input.mm_avg_per_month.map(|avg| avg * 12.0),
+        running_saved_year: input.saved_avg.map(|avg| avg * 12.0),
+        running_combined_year: combined_running,
+    };
     let terms: Vec<f64> = [
-        input.avg_saved.map(|avg| avg * 12.0),
-        input.avg_invested,
-        input.mm_avg_per_month.map(|avg| avg * 12.0),
-        input.saved_avg.map(|avg| avg * 12.0),
-        combined_running,
+        saving_terms.saved_year,
+        saving_terms.avg_invested,
+        saving_terms.mm_year,
+        saving_terms.running_saved_year,
+        saving_terms.running_combined_year,
     ]
     .into_iter()
     .flatten()
@@ -339,6 +347,7 @@ pub fn overview_goals(input: &OverviewGoalsInput) -> crate::models::OverviewGoal
         current_invest: input.current_invest,
         saving_year,
         saving_month: saving_year.map(|year| year / 12.0),
+        saving_terms,
         passive_return_year,
         passive_return_month: passive_return_year.map(|year| year / 12.0),
         milestones: vec![milestone(input.goal1_amount), milestone(input.goal2_amount)],
@@ -633,6 +642,38 @@ mod tests {
         assert!(approx_eq(goals.final_goal.remain.unwrap(), 7912995.166));
         assert!(approx_eq(goals.final_goal.years.unwrap(), 11.00528324));
         assert_eq!(goals.final_goal.eta, expected_eta(11.00528324));
+    }
+
+    /// The five 存/年 terms and both formula paces ride on the block, and
+    /// `saving_year` is the mean of the present terms.
+    #[test]
+    fn overview_goals_expose_saving_terms_and_paces() {
+        let mut input = goals_input();
+        let goals = overview_goals(&input);
+        let terms = &goals.saving_terms;
+        let values = [
+            terms.saved_year.unwrap(),
+            terms.avg_invested.unwrap(),
+            terms.mm_year.unwrap(),
+            terms.running_saved_year.unwrap(),
+            terms.running_combined_year.unwrap(),
+        ];
+        for (value, expected) in
+            values
+                .iter()
+                .zip([360159.24, 326841.2233, 364801.69, 316354.11, 370124.90])
+        {
+            assert!(approx_eq(*value, expected), "{value} vs {expected}");
+        }
+        assert_eq!(goals.saving_year, Some(values.iter().sum::<f64>() / 5.0));
+        assert_eq!(goals.third.pace, terms.running_combined_year);
+        assert!(approx_eq(goals.final_goal.pace.unwrap(), 719017.86));
+
+        input.mm_avg_per_month = None;
+        let goals = overview_goals(&input);
+        assert_eq!(goals.saving_terms.mm_year, None);
+        let present = [values[0], values[1], values[3], values[4]];
+        assert_eq!(goals.saving_year, Some(present.iter().sum::<f64>() / 4.0));
     }
 
     #[test]

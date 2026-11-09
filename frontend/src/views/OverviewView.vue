@@ -267,48 +267,39 @@ const targetNoteRow = computed(() => {
   return data.value?.invest_targets.rows.find((row) => row.year === year) ?? null
 })
 
-const targetNotePrior = computed(() => {
-  const year = targetNoteRow.value?.year
-  if (year === undefined) return null
-  return data.value?.invest_targets.rows.find((row) => row.year === year - 1) ?? null
-})
-
-/** The six formula terms with their contributions; null without a current-year row. */
+/** The six formula terms with their contributions (backend-computed);
+ *  null without a current-year row. */
 const targetNoteTerms = computed(() => {
-  const row = targetNoteRow.value
-  const prior = targetNotePrior.value
-  if (!row) return null
+  const terms = targetNoteRow.value?.terms
+  if (!terms) return null
   return {
-    priorInvested: prior?.invested ?? null,
-    priorInterest: prior?.interest ?? null,
-    priorPool: prior === null ? null : prior.pool_spend * 0.7,
-    raiseTerm: (row.raise ?? 0) * 6,
-    interest: row.interest,
-    pool: row.pool_spend * 0.7,
+    priorInvested: terms.prior_invested,
+    priorInterest: terms.prior_interest,
+    priorPool: terms.prior_pool,
+    raiseTerm: terms.raise_term,
+    interest: terms.interest,
+    pool: terms.pool,
   }
 })
 
 // ----- 目標 存/年 footnote -----
 
 /** The five L12 yearly terms: raw monthly inputs plus their yearly
- *  contributions (null while absent). */
+ *  contributions from `goals.saving_terms` (null while absent). */
 const savingYearTerms = computed(() => {
   const d = data.value
   if (!d) return null
-  const { saved_avg, interest_avg } = d.goals
-  const saved = d.averages.saved
-  const mm = d.money_master.avg_per_month
+  const terms = d.goals.saving_terms
   return {
-    saved,
-    saved12: saved === null ? null : saved * 12,
-    avgInvested: d.invest_targets.avg_invested,
-    mm,
-    mm12: mm === null ? null : mm * 12,
-    savedAvg: saved_avg,
-    running12: saved_avg === null ? null : saved_avg * 12,
-    interestAvg: interest_avg,
-    combined12:
-      saved_avg === null || interest_avg === null ? null : (saved_avg + interest_avg) * 12,
+    saved: d.averages.saved,
+    saved12: terms.saved_year,
+    avgInvested: terms.avg_invested,
+    mm: d.money_master.avg_per_month,
+    mm12: terms.mm_year,
+    savedAvg: d.goals.saved_avg,
+    running12: terms.running_saved_year,
+    interestAvg: d.goals.interest_avg,
+    combined12: terms.running_combined_year,
   }
 })
 
@@ -317,19 +308,18 @@ const savingYearTerms = computed(() => {
 const formulaGoalRows = computed(() => {
   const d = data.value
   if (!d) return []
-  const tc = d.goals.total_change_avg
   return [
     {
       name: '3rd',
       goal: d.goals.third,
       base: { label: '流動資產', value: d.liquid_assets },
-      pace: { label: '(歷年存+息)×12', value: savingYearTerms.value?.combined12 ?? null },
+      pace: { label: '(歷年存+息)×12', value: d.goals.third.pace },
     },
     {
       name: 'Final',
       goal: d.goals.final_goal,
       base: { label: '總數', value: d.total_assets },
-      pace: { label: '歷年總變化×12', value: tc === null ? null : tc * 12 },
+      pace: { label: '歷年總變化×12', value: d.goals.final_goal.pace },
     },
   ]
 })

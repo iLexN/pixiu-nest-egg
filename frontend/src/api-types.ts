@@ -2211,6 +2211,12 @@ export interface components {
             eta: string | null;
             /**
              * Format: double
+             * @description The yearly pace `years` divides by — 3rd: `(saved_avg + interest_avg)
+             *     × 12`; Final: `total_change_avg × 12`. Absent while its inputs are.
+             */
+            pace: number | null;
+            /**
+             * Format: double
              * @description O15/P15 = target − 流動資產 (3rd) / 總數 (final).
              */
             remain: number | null;
@@ -2441,8 +2447,47 @@ export interface components {
              * @description L column: the year's target; absent without a prior-year `invested`.
              */
             target: number | null;
+            /** @description The six contributions `target` sums — the footnote's terms. */
+            terms: components["schemas"]["InvestTargetTerms"];
             /** Format: int32 */
             year: number;
+        };
+        /**
+         * @description The 投資目標 formula's terms for one row: `target = prior_invested −
+         *     prior_interest − prior_pool + raise_term + interest + pool` whenever
+         *     `prior_invested` is present.
+         */
+        InvestTargetTerms: {
+            /**
+             * Format: double
+             * @description This year's 利息回報.
+             */
+            interest: number;
+            /**
+             * Format: double
+             * @description This year's 開心Pool支出 × 0.7.
+             */
+            pool: number;
+            /**
+             * Format: double
+             * @description The prior year's 利息回報; absent while no prior-year row exists.
+             */
+            prior_interest: number | null;
+            /**
+             * Format: double
+             * @description The prior year's `invested`; absent while it is.
+             */
+            prior_invested: number | null;
+            /**
+             * Format: double
+             * @description The prior year's 開心Pool支出 × 0.7; absent while no prior-year row.
+             */
+            prior_pool: number | null;
+            /**
+             * Format: double
+             * @description 月薪增幅 × 0.5 × 12; an absent raise counts as 0.
+             */
+            raise_term: number;
         };
         /**
          * @description The 投資目標 block (Overview!J22:N27): the J22 three-year invested average
@@ -3349,6 +3394,8 @@ export interface components {
             saved_avg: number | null;
             /** Format: double */
             saving_month: number | null;
+            /** @description The five yearly L12 terms `saving_year` averages. */
+            saving_terms: components["schemas"]["SavingYearTerms"];
             /**
              * Format: double
              * @description L12 = the sheet's AVERAGE over the five saving sources, absent terms
@@ -3508,6 +3555,37 @@ export interface components {
         ReorderRequest: {
             market: string;
             stock_ids: number[];
+        };
+        /**
+         * @description The five yearly 存/年 (L12) terms — each absent while its inputs are;
+         *     `saving_year` is the mean of the present ones.
+         */
+        SavingYearTerms: {
+            /**
+             * Format: double
+             * @description J22: the 3-year invested average.
+             */
+            avg_invested: number | null;
+            /**
+             * Format: double
+             * @description M31 × 12: the Money Master monthly average, annualized.
+             */
+            mm_year: number | null;
+            /**
+             * Format: double
+             * @description (L8 + N8) × 12: running saved + interest averages, annualized.
+             */
+            running_combined_year: number | null;
+            /**
+             * Format: double
+             * @description L8 × 12: the running saved average, annualized.
+             */
+            running_saved_year: number | null;
+            /**
+             * Format: double
+             * @description G7 × 12: the trailing 12-month saved average, annualized.
+             */
+            saved_year: number | null;
         };
         SectorRollup: {
             /**
