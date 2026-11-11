@@ -1294,6 +1294,12 @@ export interface components {
              */
             bill_amount: number;
             /**
+             * @description `calendar.private_id` — the Private Google calendar the 加到日曆
+             *     links pre-select; `null` while unset (events open on the default
+             *     calendar).
+             */
+            calendar_private_id: string | null;
+            /**
              * Format: double
              * @description `overview.final_replacement` — the Final Target's salary-replacement
              *     ratio (the sheet's `0.7`); the effective value.
@@ -1366,6 +1372,8 @@ export interface components {
         AppSettingsPatch: {
             /** Format: double */
             bill_amount?: number | null;
+            /** @description `null` or a blank string clears the Private calendar ID. */
+            calendar_private_id?: string | null;
             /** Format: double */
             final_replacement?: number | null;
             /**

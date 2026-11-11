@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import type { Deposit } from '../api'
-import { fmtBank, fmtMoney, fmtPercent } from '../format'
+import { fmtBank, fmtBankName, fmtMoney, fmtPercent, googleCalendarUrl } from '../format'
 import RowActions from './RowActions.vue'
 
 const props = defineProps<{
@@ -9,6 +9,10 @@ const props = defineProps<{
   showStatus?: boolean
   /** YYYY-MM-DD; an unreceived deposit at/past it is 已到期未收. */
   today?: string
+  /** Show a 加到日曆 action in the row menu. */
+  calendar?: boolean
+  /** Google calendar ID the 加到日曆 link pre-selects (`src`); default calendar while unset. */
+  calendarSrc?: string | null
   emptyText?: string
 }>()
 
@@ -22,6 +26,27 @@ const columns = 10 + (props.showStatus ? 1 : 0)
 
 function overdue(deposit: Deposit): boolean {
   return deposit.received_at === null && !!props.today && deposit.end_date <= props.today
+}
+
+function openCalendar(deposit: Deposit) {
+  const parts = [deposit.label ?? '', fmtBankName(deposit.bank)].filter(Boolean).join(' - ')
+  const title = parts ? `定期: ${parts}` : '定期'
+  const url = googleCalendarUrl({
+    title,
+    date: deposit.end_date,
+    lines: [
+      ['到期日', deposit.end_date],
+      ['編號', deposit.label ?? ''],
+      ['銀行', fmtBank(deposit.bank)],
+      ['本金', fmtMoney(deposit.principal)],
+      ['利率', fmtPercent(deposit.rate)],
+      ['利息', fmtMoney(deposit.interest)],
+      ['合計', fmtMoney(deposit.total)],
+      ['開始日', deposit.start_date ?? ''],
+    ],
+    src: props.calendarSrc,
+  })
+  window.open(url, '_blank', 'noopener')
 }
 </script>
 
@@ -72,6 +97,8 @@ function overdue(deposit: Deposit): boolean {
           </button>
           <RowActions
             :removable="!deposit.received_at"
+            :calendar="props.calendar"
+            @calendar="openCalendar(deposit)"
             @edit="emit('edit', deposit)"
             @remove="emit('remove', deposit)"
           />

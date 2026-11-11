@@ -40,6 +40,10 @@ pub struct AppSettings {
     /// `overview.final_replacement` — the Final Target's salary-replacement
     /// ratio (the sheet's `0.7`); the effective value.
     pub final_replacement: f64,
+    /// `calendar.private_id` — the Private Google calendar the 加到日曆
+    /// links pre-select; `null` while unset (events open on the default
+    /// calendar).
+    pub calendar_private_id: Option<String>,
 }
 
 /// Absent fields are left untouched; `null` clears `salary`/`pool_rate`/
@@ -85,4 +89,7 @@ pub struct AppSettingsPatch {
     pub goal3_years: Option<Option<f64>>,
     #[serde(default, deserialize_with = "nullable")]
     pub final_replacement: Option<Option<f64>>,
+    /// `null` or a blank string clears the Private calendar ID.
+    #[serde(default, deserialize_with = "nullable")]
+    pub calendar_private_id: Option<Option<String>>,
 }

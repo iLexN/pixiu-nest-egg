@@ -57,7 +57,8 @@
       "Exec(read)",
       "Exec(exit)",
       "Exec(disown)",
-      "Exec(set)"
+      "Exec(set)",
+      "Exec(perl)"
     ]
   }
 }

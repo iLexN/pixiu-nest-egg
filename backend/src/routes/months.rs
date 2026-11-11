@@ -661,6 +661,77 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn update_settings_round_trips_the_calendar_private_id() {
+        let pool = connect_memory().await.expect("memory db");
+        let state = AppState { pool };
+
+        // Unset reads as `null`.
+        let current = settings::get(State(state.clone()))
+            .await
+            .expect("settings")
+            .0;
+        assert_eq!(current.calendar_private_id, None);
+
+        // The stored ID is trimmed.
+        let updated = settings::update(
+            State(state.clone()),
+            Json(AppSettingsPatch {
+                calendar_private_id: Some(Some(
+                    " 7a2rh1um3kbuelitfesq7aggko@group.calendar.google.com ".to_string(),
+                )),
+                ..Default::default()
+            }),
+        )
+        .await
+        .expect("patched")
+        .0;
+        assert_eq!(
+            updated.calendar_private_id.as_deref(),
+            Some("7a2rh1um3kbuelitfesq7aggko@group.calendar.google.com")
+        );
+
+        // A blank string clears it.
+        let blanked = settings::update(
+            State(state.clone()),
+            Json(AppSettingsPatch {
+                calendar_private_id: Some(Some("".to_string())),
+                ..Default::default()
+            }),
+        )
+        .await
+        .expect("blanked")
+        .0;
+        assert_eq!(blanked.calendar_private_id, None);
+
+        // So does `null`.
+        let set = settings::update(
+            State(state.clone()),
+            Json(AppSettingsPatch {
+                calendar_private_id: Some(Some("id@group.calendar.google.com".to_string())),
+                ..Default::default()
+            }),
+        )
+        .await
+        .expect("patched")
+        .0;
+        assert_eq!(
+            set.calendar_private_id.as_deref(),
+            Some("id@group.calendar.google.com")
+        );
+        let cleared = settings::update(
+            State(state),
+            Json(AppSettingsPatch {
+                calendar_private_id: Some(None),
+                ..Default::default()
+            }),
+        )
+        .await
+        .expect("cleared")
+        .0;
+        assert_eq!(cleared.calendar_private_id, None);
+    }
+
+    #[tokio::test]
     async fn update_settings_round_trips_the_goal_settings() {
         let pool = connect_memory().await.expect("memory db");
         let state = AppState { pool };

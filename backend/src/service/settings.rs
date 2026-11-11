@@ -36,6 +36,7 @@ pub async fn get(pool: &SqlitePool) -> Result<AppSettings, StoreError> {
         final_replacement: stored
             .final_replacement
             .unwrap_or(DEFAULT_FINAL_REPLACEMENT),
+        calendar_private_id: stored.calendar_private_id,
     })
 }
 
@@ -156,6 +157,13 @@ pub async fn update(
         money_master_target_amount: patch.money_master_target_amount,
         money_master_month_now: patch.money_master_month_now,
         money_master_coming_save: patch.money_master_coming_save,
+        // The ID is stored trimmed; a blank patch clears the key.
+        calendar_private_id: patch.calendar_private_id.clone().map(|id| {
+            id.and_then(|id| {
+                let id = id.trim();
+                (!id.is_empty()).then(|| id.to_string())
+            })
+        }),
         ..Default::default()
     };
     let mut conn = pool.acquire().await?;

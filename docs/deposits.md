@@ -50,6 +50,8 @@ select; the placement debit is never re-synced)
 
 Derived fields (`total`, `status`, end month/year) change automatically on the next read.
 
+A 未到期定期 row's ⋯ menu also lists 加到日曆 before 編輯: it opens Google Calendar's new-event editor in a new tab, pre-filled as an all-day event on the 到期日 with the row's figures in the details — no API call, nothing stored. History rows don't offer it. The link pre-selects the Private calendar named by the `calendar_private_id` setting (edited in 月結 設定); while it's empty the event opens on the default calendar.
+
 ## Load the 定期 views
 
 ```text
@@ -115,6 +117,8 @@ FamilyDepositsView (家人 → 定期)
 
 刪除 → DELETE /api/family/deposits/:id
 ```
+
+The 未到期定期 rows' ⋯ menu has the same 加到日曆 action — a pre-filled Google Calendar all-day event on the 到期日 in a new tab, with a 持有人 line added to the details; the 定期記錄 rows don't offer it. Holder `Irene`'s events open on the default calendar; every other holder pre-selects the Private calendar from `calendar_private_id` (月結 設定), falling back to the default calendar while it's empty.
 
 ```text
 編輯 on a holder's note block

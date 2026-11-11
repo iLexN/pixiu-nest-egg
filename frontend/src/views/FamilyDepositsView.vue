@@ -9,9 +9,10 @@ import {
   type FamilyDepositSummary,
   type FamilyHolderSummary,
 } from '../api'
-import { fmtBank, fmtMoney, todayIso } from '../format'
+import { fmtBank, fmtBankName, fmtMoney, googleCalendarUrl, todayIso } from '../format'
 
 const summary = ref<FamilyDepositSummary | null>(null)
+const privateCalendarId = ref<string | null>(null)
 const message = ref('')
 const error = ref('')
 
@@ -41,7 +42,12 @@ const upcoming = computed<FamilyDeposit[]>(() =>
 async function load() {
   error.value = ''
   try {
-    summary.value = await api.familyDepositSummary()
+    const [summaryData, settingsData] = await Promise.all([
+      api.familyDepositSummary(),
+      api.getSettings(),
+    ])
+    summary.value = summaryData
+    privateCalendarId.value = settingsData.calendar_private_id
     if (
       selectedHolder.value !== null &&
       !summary.value.holders.some((h) => h.holder === selectedHolder.value)
@@ -56,6 +62,29 @@ async function load() {
 
 function overdue(deposit: FamilyDeposit): boolean {
   return deposit.received_at === null && deposit.end_date <= (summary.value?.today ?? '')
+}
+
+function openCalendar(deposit: FamilyDeposit) {
+  const parts = [deposit.holder, deposit.label ?? '', fmtBankName(deposit.bank)]
+    .filter(Boolean)
+    .join(' - ')
+  const title = parts ? `定期: ${parts}` : '定期'
+  const url = googleCalendarUrl({
+    title,
+    date: deposit.end_date,
+    lines: [
+      ['持有人', deposit.holder],
+      ['到期日', deposit.end_date],
+      ['編號', deposit.label ?? ''],
+      ['銀行', fmtBank(deposit.bank)],
+      ['本金', fmtMoney(deposit.principal)],
+      ['利息', fmtMoney(deposit.interest)],
+      ['合計', fmtMoney(deposit.total)],
+      ['開始日', deposit.start_date ?? ''],
+    ],
+    src: deposit.holder === 'Irene' ? null : privateCalendarId.value,
+  })
+  window.open(url, '_blank', 'noopener')
 }
 
 function numOrNull(raw: string | number): number | null {
@@ -406,7 +435,12 @@ onMounted(load)
             <td class="note">{{ deposit.note ?? '' }}</td>
             <td class="row-actions">
               <button type="button" class="link" @click="startReceive(deposit)">收訖</button>
-              <RowActions @edit="startEdit(deposit)" @remove="remove(deposit)" />
+              <RowActions
+                calendar
+                @calendar="openCalendar(deposit)"
+                @edit="startEdit(deposit)"
+                @remove="remove(deposit)"
+              />
             </td>
           </tr>
           <tr v-if="upcoming.length === 0">

@@ -14,6 +14,7 @@ import { fmtBank, fmtMoney } from '../format'
 
 const summary = ref<DepositSummary | null>(null)
 const accounts = ref<CashAccount[]>([])
+const privateCalendarId = ref<string | null>(null)
 const message = ref('')
 const error = ref('')
 const editing = ref<Deposit | null>(null)
@@ -21,12 +22,14 @@ const editing = ref<Deposit | null>(null)
 async function load() {
   error.value = ''
   try {
-    const [summaryData, accountsData] = await Promise.all([
+    const [summaryData, accountsData, settingsData] = await Promise.all([
       api.depositSummary(),
       api.listCashAccounts(),
+      api.getSettings(),
     ])
     summary.value = summaryData
     accounts.value = accountsData
+    privateCalendarId.value = settingsData.calendar_private_id
   } catch (err) {
     error.value = err instanceof ApiError ? err.message : String(err)
   }
@@ -102,6 +105,8 @@ onMounted(load)
       <DepositTable
         :deposits="summary.upcoming"
         :today="summary.today"
+        calendar
+        :calendar-src="privateCalendarId"
         empty-text="沒有未到期的定期"
         @edit="editing = $event"
         @remove="remove"

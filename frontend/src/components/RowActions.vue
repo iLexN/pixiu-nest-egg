@@ -9,6 +9,8 @@ const props = withDefaults(defineProps<{
   hidden?: boolean
   /** Show a 複製 action before 編輯. */
   copyable?: boolean
+  /** Show a 加到日曆 action before 編輯. */
+  calendar?: boolean
   /** Show the 刪除 action (default true). */
   removable?: boolean
 }>(), { removable: true })
@@ -17,6 +19,7 @@ const emit = defineEmits<{
   receive: []
   hide: []
   copy: []
+  calendar: []
   edit: []
   remove: []
 }>()
@@ -41,11 +44,12 @@ function close() {
   document.removeEventListener('keydown', onKeydown)
 }
 
-function pick(action: 'receive' | 'hide' | 'copy' | 'edit' | 'remove') {
+function pick(action: 'receive' | 'hide' | 'copy' | 'calendar' | 'edit' | 'remove') {
   close()
   if (action === 'receive') emit('receive')
   else if (action === 'hide') emit('hide')
   else if (action === 'copy') emit('copy')
+  else if (action === 'calendar') emit('calendar')
   else if (action === 'edit') emit('edit')
   else emit('remove')
 }
@@ -67,6 +71,9 @@ onBeforeUnmount(() => document.removeEventListener('keydown', onKeydown))
         </button>
         <button v-if="props.copyable" type="button" class="link" @click="pick('copy')">
           複製
+        </button>
+        <button v-if="props.calendar" type="button" class="link" @click="pick('calendar')">
+          加到日曆
         </button>
         <button type="button" class="link" @click="pick('edit')">編輯</button>
         <button

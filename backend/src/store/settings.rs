@@ -22,6 +22,7 @@ const MM_TARGET_AMOUNT_KEY: &str = "money_master.target_amount";
 const MM_MONTH_NOW_KEY: &str = "money_master.month_now";
 const MM_COMING_SAVE_KEY: &str = "money_master.coming_save";
 const IBKR_REPORTED_VALUE_KEY: &str = "ibkr.reported_value";
+const CALENDAR_PRIVATE_ID_KEY: &str = "calendar.private_id";
 const AIA_NOTE_KEY: &str = "aia.note";
 const MPF_NOTE_KEY: &str = "mpf.note";
 const MPF_SEED_MAX_RATE_KEY: &str = "mpf.seed_max_rate";
@@ -55,6 +56,7 @@ pub struct Settings {
     pub money_master_month_now: Option<f64>,
     pub money_master_coming_save: Option<f64>,
     pub ibkr_reported_value: Option<f64>,
+    pub calendar_private_id: Option<String>,
 }
 
 impl Settings {
@@ -75,6 +77,7 @@ impl Settings {
             money_master_month_now: meta_f64(pool, MM_MONTH_NOW_KEY).await?,
             money_master_coming_save: meta_f64(pool, MM_COMING_SAVE_KEY).await?,
             ibkr_reported_value: meta_f64(pool, IBKR_REPORTED_VALUE_KEY).await?,
+            calendar_private_id: meta_get(pool, CALENDAR_PRIVATE_ID_KEY).await?,
         })
     }
 }
@@ -98,6 +101,7 @@ pub struct SettingsPatch {
     pub money_master_month_now: Option<Option<f64>>,
     pub money_master_coming_save: Option<Option<f64>>,
     pub ibkr_reported_value: Option<Option<f64>>,
+    pub calendar_private_id: Option<Option<String>>,
 }
 
 impl SettingsPatch {
@@ -126,6 +130,9 @@ impl SettingsPatch {
         }
         if let Some(date) = &self.money_master_start_date {
             meta_put(&mut *conn, MM_START_DATE_KEY, date.as_deref()).await?;
+        }
+        if let Some(id) = &self.calendar_private_id {
+            meta_put(&mut *conn, CALENDAR_PRIVATE_ID_KEY, id.as_deref()).await?;
         }
         Ok(())
     }

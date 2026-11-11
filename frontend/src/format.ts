@@ -105,6 +105,34 @@ export function fmtBank(code: string | null | undefined): string {
   return name ? `${name} (${code})` : code
 }
 
+export function fmtBankName(code: string | null | undefined): string {
+  if (!code) return ''
+  return BANK_NAMES[code] ?? code
+}
+
+export function googleCalendarUrl(event: {
+  title: string
+  date: string
+  lines: [string, string][]
+  src?: string | null
+}): string {
+  const [year, month, day] = event.date.split('-').map(Number)
+  const next = new Date(Date.UTC(year, month - 1, day + 1))
+  const end = `${next.getUTCFullYear()}${`${next.getUTCMonth() + 1}`.padStart(2, '0')}${`${next.getUTCDate()}`.padStart(2, '0')}`
+  const details = event.lines
+    .filter(([, value]) => value !== '')
+    .map(([label, value]) => `${label}: ${value}`)
+    .join('\n')
+  const params = new URLSearchParams({
+    action: 'TEMPLATE',
+    text: event.title,
+    dates: `${event.date.replaceAll('-', '')}/${end}`,
+    details,
+  })
+  if (event.src) params.append('src', event.src)
+  return `https://calendar.google.com/calendar/render?${params}`
+}
+
 export function todayIso(): string {
   const now = new Date()
   const month = `${now.getMonth() + 1}`.padStart(2, '0')

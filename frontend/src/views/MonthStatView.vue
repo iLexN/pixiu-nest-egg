@@ -431,6 +431,7 @@ const goal2Draft = ref<string | number>('')
 const goal3InflationDraft = ref<string | number>('')
 const goal3YearsDraft = ref<string | number>('')
 const finalReplacementDraft = ref<string | number>('')
+const privateCalendarDraft = ref('')
 const editingSettings = ref(false)
 
 function startSettingsEdit() {
@@ -452,6 +453,7 @@ function startSettingsEdit() {
   goal3InflationDraft.value = settings.value?.goal3_inflation ?? ''
   goal3YearsDraft.value = settings.value?.goal3_years ?? ''
   finalReplacementDraft.value = settings.value?.final_replacement ?? ''
+  privateCalendarDraft.value = settings.value?.calendar_private_id ?? ''
   editingSettings.value = true
 }
 
@@ -526,6 +528,7 @@ async function saveSettings() {
       goal3_inflation: goal3Inflation,
       goal3_years: goal3Years,
       final_replacement: finalReplacement,
+      calendar_private_id: privateCalendarDraft.value.trim() || null,
     })
     editingSettings.value = false
     message.value = '已儲存設定'
@@ -1202,6 +1205,9 @@ onMounted(load)
           }}/{{ settings?.goal3_years ?? '—' }}年 · Final
           {{ fmtPercentShort(settings?.final_replacement) || '—' }}
         </p>
+        <p class="muted settings-line">
+          日曆 Private {{ settings?.calendar_private_id || '—' }}
+        </p>
         <form v-if="editingSettings" class="inline-form" @submit.prevent="saveSettings">
           <h4>設定</h4>
           <label>
@@ -1269,6 +1275,15 @@ onMounted(load)
               type="number"
               step="any"
               inputmode="decimal"
+            />
+          </label>
+          <h4>日曆</h4>
+          <label>
+            Private 日曆 ID
+            <input
+              v-model="privateCalendarDraft"
+              type="text"
+              placeholder="…@group.calendar.google.com"
             />
           </label>
           <div class="form-actions">
