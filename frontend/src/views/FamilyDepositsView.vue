@@ -377,25 +377,30 @@ onMounted(load)
         </div>
 
         <div class="note-block">
-          <button type="button" class="link" @click="toggleNote(holder.holder)">
-            {{
-              shownNotes.has(holder.holder) ? '隱藏備註' : holder.note ? '顯示備註' : '備註'
-            }}
-          </button>
+          <div class="note-actions">
+            <button type="button" class="link" @click="toggleNote(holder.holder)">
+              {{
+                shownNotes.has(holder.holder) ? '隱藏備註' : holder.note ? '顯示備註' : '備註'
+              }}
+            </button>
+            <button
+              v-if="shownNotes.has(holder.holder) && editingNote !== holder.holder"
+              type="button"
+              class="link"
+              @click="startNote(holder)"
+            >
+              {{ holder.note ? '編輯備註' : '新增備註' }}
+            </button>
+          </div>
           <template v-if="shownNotes.has(holder.holder)">
             <template v-if="editingNote === holder.holder">
               <textarea v-model="noteDraft" rows="3"></textarea>
-              <div>
+              <div class="note-actions">
                 <button type="button" @click="saveNote(holder.holder)">儲存</button>
                 <button type="button" class="link" @click="editingNote = null">取消</button>
               </div>
             </template>
-            <template v-else>
-              <p v-if="holder.note" class="note-text">{{ holder.note }}</p>
-              <button type="button" class="link" @click="startNote(holder)">
-                {{ holder.note ? '編輯備註' : '新增備註' }}
-              </button>
-            </template>
+            <p v-else-if="holder.note" class="note-text">{{ holder.note }}</p>
           </template>
         </div>
 
@@ -598,6 +603,11 @@ onMounted(load)
 }
 .note-block {
   margin: 0.5rem 0 0;
+}
+.note-actions {
+  display: flex;
+  align-items: baseline;
+  gap: 0.5rem;
 }
 .note-text {
   white-space: pre-wrap;
