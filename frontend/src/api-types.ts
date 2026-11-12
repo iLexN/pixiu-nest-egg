@@ -1459,14 +1459,14 @@ export interface components {
             principal: number;
             /**
              * @description 收訖日: when the user confirmed the principal came back; NULL while
-             *     matured-but-unreceived (the coupon lifecycle is separate).
+             *     the bond is still on the books (the coupon lifecycle is separate).
              */
             received_at: string | null;
             /** Format: int64 */
             sort_order: number;
             /**
-             * @description `MATURED` once `maturity_date` is reached (sectioning only — receipt is
-             *     tracked by `received_at`).
+             * @description `MATURED` once the principal is 收訖'd (`received_at` set), whatever
+             *     `maturity_date` is.
              */
             status: components["schemas"]["BondStatus"];
         };
@@ -1562,7 +1562,8 @@ export interface components {
             principal?: number | null;
         };
         /**
-         * @description Derived from `maturity_date`: `Matured` once maturity is today or past.
+         * @description Derived from `received_at` (the receipt rule, same as deposits):
+         *     `Matured` once the principal is 收訖'd — `maturity_date` plays no part.
          * @enum {string}
          */
         BondStatus: "ACTIVE" | "MATURED";
@@ -1571,7 +1572,10 @@ export interface components {
             active: components["schemas"]["BondWithCoupons"][];
             /** @description Matured bonds with their coupons, latest maturity first. */
             matured: components["schemas"]["BondWithCoupons"][];
-            /** @description The date `status` was derived against. */
+            /**
+             * @description The date the summary derived against; an active bond matured on or
+             *     before it is 已到期未收.
+             */
             today: string;
             totals: components["schemas"]["BondTotals"];
             /** @description Non-received coupons across active bonds, earliest pay_date first. */
@@ -4616,7 +4620,7 @@ export interface operations {
     bonds_list: {
         parameters: {
             query?: {
-                /** @description `active` (maturity in the future) or `matured`. */
+                /** @description `active` (principal unreceived) or `matured` (principal 收訖'd). */
                 status?: string | null;
                 /** @description `asc` (default) or `desc`, by maturity date. */
                 order?: string | null;

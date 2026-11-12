@@ -2,7 +2,8 @@ use super::nullable;
 use serde::{Deserialize, Serialize};
 use utoipa::ToSchema;
 
-/// Derived from `maturity_date`: `Matured` once maturity is today or past.
+/// Derived from `received_at` (the receipt rule, same as deposits):
+/// `Matured` once the principal is 收訖'd — `maturity_date` plays no part.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, ToSchema)]
 #[serde(rename_all = "UPPERCASE")]
 pub enum BondStatus {
@@ -32,7 +33,7 @@ pub struct Bond {
     /// The sheet's `end` column.
     pub maturity_date: String,
     /// 收訖日: when the user confirmed the principal came back; NULL while
-    /// matured-but-unreceived (the coupon lifecycle is separate).
+    /// the bond is still on the books (the coupon lifecycle is separate).
     pub received_at: Option<String>,
     /// The cash account the principal banked into; NULL when nothing was banked.
     pub credited_account_id: Option<i64>,
@@ -40,8 +41,8 @@ pub struct Bond {
     pub credited_amount: Option<f64>,
     pub note: Option<String>,
     pub sort_order: i64,
-    /// `MATURED` once `maturity_date` is reached (sectioning only — receipt is
-    /// tracked by `received_at`).
+    /// `MATURED` once the principal is 收訖'd (`received_at` set), whatever
+    /// `maturity_date` is.
     pub status: BondStatus,
     /// Earliest pay_date among this bond's non-received coupons.
     pub next_pay_date: Option<String>,

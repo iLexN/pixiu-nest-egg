@@ -361,10 +361,11 @@ onMounted(load)
           </h3>
           <span class="muted">
             本金 {{ fmtMoney(bond.principal) }} · 到期 {{ bond.maturity_date }}
-            <template v-if="bond.received_at"> · 收訖 {{ bond.received_at }}</template>
+          </span>
+          <span v-if="bond.maturity_date <= summary.today" class="unreceived">
+            已到期未收
           </span>
           <button
-            v-if="!bond.received_at"
             type="button"
             class="link"
             @click="startBondReceive(bond)"
@@ -601,16 +602,7 @@ onMounted(load)
           <span class="muted">
             本金 {{ fmtMoney(bond.principal) }} · 到期 {{ bond.maturity_date }}
             <template v-if="bond.received_at"> · 收訖 {{ bond.received_at }}</template>
-            <template v-else> · <span class="unreceived">本金未收</span></template>
           </span>
-          <button
-            v-if="!bond.received_at"
-            type="button"
-            class="link"
-            @click="startBondReceive(bond)"
-          >
-            收訖
-          </button>
           <RowActions @edit="startBondEdit(bond)" @remove="removeBond(bond)" />
         </div>
         <table v-if="bond.coupons.length">

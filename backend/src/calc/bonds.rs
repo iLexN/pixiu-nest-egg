@@ -135,10 +135,11 @@ pub fn validate_coupon(input: CouponInput<'_>) -> Result<ValidatedCoupon, Vec<Fi
     })
 }
 
-/// The sheet's maturity rule: the bond is active while its `end` date is in
-/// the future — the same `TODAY()` predicate the deposits use.
-pub fn bond_active(maturity_date: chrono::NaiveDate, today: chrono::NaiveDate) -> bool {
-    maturity_date > today
+/// The receipt rule, same as deposits (ADR 0008): a bond counts until its
+/// principal is 收訖 (`received_at` set), whatever its `maturity_date` —
+/// an early receipt ends activity and an overdue unreceived bond stays active.
+pub fn bond_active(received_at: Option<&str>) -> bool {
+    received_at.is_none()
 }
 
 /// A coupon's lifecycle: received once an amount is recorded; 待定
@@ -173,15 +174,14 @@ pub fn coupon_variance(received_amount: Option<f64>, expected: Option<f64>) -> O
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::calc::test_helpers::*;
 
     #[test]
-    fn bond_active_until_maturity_date() {
-        let maturity = day("2027-10-23");
-        assert!(bond_active(maturity, day("2027-10-22")));
-        // The deposit rule: maturity day itself already counts as ended.
-        assert!(!bond_active(maturity, maturity));
-        assert!(!bond_active(maturity, day("2027-10-24")));
+    fn bond_active_until_principal_received() {
+        // Receipt rules, not the date: an unreceived bond stays active past
+        // maturity as well as before it; a receipt ends it at any date.
+        assert!(bond_active(None));
+        assert!(!bond_active(Some("2027-10-23")));
+        assert!(!bond_active(Some("2020-01-01")));
     }
 
     #[test]

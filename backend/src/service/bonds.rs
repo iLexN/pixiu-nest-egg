@@ -21,15 +21,16 @@ pub async fn active_principal(pool: &SqlitePool) -> Result<f64, StoreError> {
     ))
 }
 
-/// What a `POST /api/bonds/{id}/receive` body resolves to.
+/// What a `POST /api/bonds/{id}/receive` body resolves to once the route
+/// maps it.
 pub struct ReceiveInput {
     pub received_at: String,
     /// Whether the principal banks into a cash account.
     pub bank_in: bool,
     /// The chosen account; `None` falls back to the currency default.
     pub account_id: Option<i64>,
-    /// The credited amount; defaults to the principal.
-    pub credit_amount: Option<f64>,
+    /// The credited amount; the route defaults it to the principal.
+    pub credit_amount: f64,
 }
 
 /// 收訖 the bond's principal return — one transaction: mark received,
@@ -42,7 +43,6 @@ pub async fn receive(pool: &SqlitePool, id: i64, input: &ReceiveInput) -> Result
             "bond {id} is already received"
         )));
     }
-    let credit_amount = input.credit_amount.unwrap_or(bond.principal);
     // The bond-end item lands in the maturity month and carries the
     // principal, as the suggestion would have.
     let month = format!("{}-01", &bond.maturity_date[..7]);
@@ -51,7 +51,7 @@ pub async fn receive(pool: &SqlitePool, id: i64, input: &ReceiveInput) -> Result
     let credit = receipts::credit(
         &mut tx,
         Currency::Hkd,
-        credit_amount,
+        input.credit_amount,
         input.bank_in,
         input.account_id,
         &now,

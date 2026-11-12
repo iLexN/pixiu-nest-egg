@@ -44,7 +44,7 @@ BondsView (債券 → 總覽)
   → GET /api/bonds/summary
       → Σ active principal, active bonds with their coupon schedules,
         matured bonds for history, and the unpaid coupons ordered by pay date
-  → 收訖 on an unreceived matured bond → POST /api/bonds/:id/receive
+  → 收訖 on an active bond's principal → POST /api/bonds/:id/receive
       → UPDATE bonds SET received_at (+ credited_account_id/credited_amount
         when 存入活期 is picked)
       → UPDATE cash_accounts amount += credited — the chosen account_id or
@@ -54,7 +54,7 @@ BondsView (債券 → 總覽)
         amount; skipped when the month has no row)
 ```
 
-Coupon receipt is per-coupon (each 付息日's `received_amount`); bond 收訖 covers only the principal return. The Active/已到期 split stays maturity-date based — an unreceived matured bond sits in 已到期 flagged 本金未收 until confirmed.
+Coupon receipt is per-coupon (each 付息日's `received_amount`); bond 收訖 covers only the principal return. The Active/已到期 split follows 收訖 — an unreceived bond stays in Active (flagged 已到期未收 once past maturity) until its principal is confirmed.
 
 ## Add or edit a bond or coupon
 

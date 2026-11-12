@@ -15,27 +15,29 @@ pub const BOND_SELECT: &str = "SELECT b.id, b.label, b.issue_no, b.principal, b.
      (SELECT MIN(c.pay_date) FROM bond_coupons c \
      WHERE c.bond_id = b.id AND c.received_amount IS NULL) AS next_pay_date FROM bonds b";
 
-pub fn row_to_bond(row: &SqliteRow, today: chrono::NaiveDate) -> Result<Bond, StoreError> {
+pub fn row_to_bond(row: &SqliteRow) -> Result<Bond, StoreError> {
     let maturity_date: String = row.try_get("maturity_date")?;
-    let parsed = chrono::NaiveDate::parse_from_str(&maturity_date, "%Y-%m-%d").map_err(|_| {
+    chrono::NaiveDate::parse_from_str(&maturity_date, "%Y-%m-%d").map_err(|_| {
         StoreError::Corrupt(format!("stored maturity_date {maturity_date} is not valid"))
     })?;
+    let received_at: Option<String> = row.try_get("received_at")?;
+    let status = if bond_active(received_at.as_deref()) {
+        BondStatus::Active
+    } else {
+        BondStatus::Matured
+    };
     Ok(Bond {
         id: row.try_get("id")?,
         label: row.try_get("label")?,
         issue_no: row.try_get("issue_no")?,
         principal: row.try_get("principal")?,
         maturity_date,
-        received_at: row.try_get("received_at")?,
+        received_at,
         credited_account_id: row.try_get("credited_account_id")?,
         credited_amount: row.try_get("credited_amount")?,
         note: row.try_get("note")?,
         sort_order: row.try_get("sort_order")?,
-        status: if bond_active(parsed, today) {
-            BondStatus::Active
-        } else {
-            BondStatus::Matured
-        },
+        status,
         next_pay_date: row.try_get("next_pay_date")?,
     })
 }
@@ -69,25 +71,21 @@ pub fn row_to_coupon(row: &SqliteRow) -> Result<BondCoupon, StoreError> {
     })
 }
 
-/// `matured`: Some(false) lists only bonds still active today
-/// (maturity_date > today), Some(true) only matured.
+/// `matured`: Some(false) lists only bonds still on the books
+/// (`received_at IS NULL`), Some(true) only 收訖'd ones — the receipt rule,
+/// not the maturity date.
 pub async fn list(
     pool: &SqlitePool,
     matured: Option<bool>,
     descending: bool,
 ) -> Result<Vec<Bond>, StoreError> {
     let mut sql = BOND_SELECT.to_string();
-    let mut conditions: Vec<&str> = Vec::new();
     if let Some(matured) = matured {
-        if matured {
-            conditions.push("b.maturity_date <= ?");
+        sql.push_str(if matured {
+            " WHERE b.received_at IS NOT NULL"
         } else {
-            conditions.push("b.maturity_date > ?");
-        }
-    }
-    if !conditions.is_empty() {
-        sql.push_str(" WHERE ");
-        sql.push_str(&conditions.join(" AND "));
+            " WHERE b.received_at IS NULL"
+        });
     }
     sql.push_str(if descending {
         " ORDER BY b.maturity_date DESC, b.sort_order DESC, b.id DESC"
@@ -95,16 +93,11 @@ pub async fn list(
         " ORDER BY b.maturity_date ASC, b.sort_order ASC, b.id ASC"
     });
 
-    let mut statement = sqlx::query(sqlx::AssertSqlSafe(sql));
-    if matured.is_some() {
-        statement = statement.bind(today().to_string());
-    }
-    let today = today();
-    statement
+    sqlx::query(sqlx::AssertSqlSafe(sql))
         .fetch_all(pool)
         .await?
         .iter()
-        .map(|row| row_to_bond(row, today))
+        .map(row_to_bond)
         .collect::<Result<Vec<_>, _>>()
 }
 
@@ -125,8 +118,8 @@ pub async fn insert_bond(
     let now = now_timestamp();
     // A bond entered already past maturity is recorded as received — its
     // principal already came back. 收訖 only applies to live bonds.
-    let received_at = (bond.maturity_date.as_str() <= today().to_string().as_str())
-        .then(|| bond.maturity_date.clone());
+    let received_at =
+        (bond.maturity_date <= today().to_string()).then(|| bond.maturity_date.clone());
     let id: i64 = sqlx::query_scalar(
         "INSERT INTO bonds (label, issue_no, principal, maturity_date, received_at, note, \
          sort_order, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?) RETURNING id",
@@ -328,7 +321,7 @@ pub async fn load_bond(pool: &SqlitePool, id: i64) -> Result<Bond, StoreError> {
         .fetch_optional(pool)
         .await?
         .ok_or_else(|| StoreError::NotFound(format!("bond {id} not found")))?;
-    row_to_bond(&row, today())
+    row_to_bond(&row)
 }
 
 pub async fn load_all_bonds(pool: &SqlitePool) -> Result<Vec<Bond>, StoreError> {
@@ -337,10 +330,7 @@ pub async fn load_all_bonds(pool: &SqlitePool) -> Result<Vec<Bond>, StoreError> 
     )))
     .fetch_all(pool)
     .await?;
-    let today = today();
-    rows.iter()
-        .map(|row| row_to_bond(row, today))
-        .collect::<Result<Vec<_>, _>>()
+    rows.iter().map(row_to_bond).collect::<Result<Vec<_>, _>>()
 }
 
 pub async fn load_bond_coupons(

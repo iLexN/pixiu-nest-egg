@@ -50,8 +50,9 @@ still counted in totals and sector rollups (display-only).
 **派息**: a dividend record — `estimated_amount` while pending,
 `received_amount` once paid.
 
-**收訖 (received)**: the user-confirmed receipt mark on a deposit, coupon,
-dividend, or family deposit (`received_at`/`received_amount`). It is the
+**收訖 (received)**: the user-confirmed receipt mark on a deposit, bond
+principal, coupon, dividend, or family deposit
+(`received_at`/`received_amount`). It is the
 single point of truth that flips activity, credits cash, and feeds month 利息.
 _Avoid_: confirmed, collected, completed
 
@@ -154,8 +155,8 @@ keep the split even; may be negative.
 **定期**: a time deposit — label, bank, principal, rate, interest, start/end
 dates; active until 收訖.
 
-**已到期未收**: an unreceived deposit past its `end_date` — still active in
-aggregates; activity is `!received`, not the date.
+**已到期未收**: an unreceived 定期 or 債券 past its end or maturity date —
+still active in aggregates; activity is `!received`, not the date.
 _Avoid_: matured, overdue
 
 **End**: a deposit's terminal state — set by 收訖, never by the end date alone.
@@ -164,7 +165,8 @@ _Avoid_: matured, overdue
 `interest ÷ principal × 365 ÷ days` — only when no rate is stored; flagged
 as derived, never persisted.
 
-**債券**: a bond — principal, coupons, maturity.
+**債券**: a bond — principal, coupons, maturity; active until its principal
+收訖, not until its maturity date.
 
 **Coupon (票面息)**: a bond's scheduled interest payment with `pay_date`;
 待定 until its rate is fixed.
@@ -189,12 +191,13 @@ month-item side effects.
 
 ## Cash & accounts
 
-**活期**: demand-account money — the `bank` cash accounts behind 月初
-(HKD-only).
+**活期**: demand-account money — only the `bank` cash accounts (HS, 渣打)
+behind 月初 (HKD-only); IBKR broker cash is not 活期.
 _Avoid_: checking, savings
 
 **Cash account**: a stored money balance — role `bank` (HKD, e.g. HS/渣打) or
-`broker` (IBKR HKD/USD).
+`broker` (IBKR HKD/USD); the umbrella term covering 活期 and IBKR broker
+cash.
 
 **IBKR**: the Interactive Brokers account — US stock value + HKD/USD broker
 cash + the 轉入 log.

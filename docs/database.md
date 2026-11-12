@@ -56,6 +56,7 @@ One row per 定期 deposit (from 定期Info's 表_定期List). Nullable columns 
 | `principal` | The sheet's `input` column |
 | `rate` | Annual rate as a fraction (0.03 = 3%) |
 | `interest` | 利息 (expected; the 收訖 form can correct it to the amount actually received) |
+| `start_date` | `YYYY-MM-DD` text date, optional — the placement date; a create with it debits `debited_account_id` |
 | `end_date` | `YYYY-MM-DD` text date, required |
 | `received_at` | 收訖日 (`YYYY-MM-DD`); NULL while the deposit is still on the books — it stays in 未到期定期 until 收訖 and its interest counts in Month Stat 利息 only once received |
 | `credited_account_id`, `credited_amount` | The `cash_accounts` row and amount the 收訖 action credited (optional); records where the bank-in went |
@@ -190,7 +191,7 @@ One row per 債券 (from the `債券` sheet's registry table). The sheet only ev
 | `issue_no` | 發行編號, e.g. `03GB2710R` |
 | `principal` | Face value, e.g. 50000 |
 | `maturity_date` | `YYYY-MM-DD` text date (the sheet's `end` column) |
-| `received_at` | 本金收訖日 (`YYYY-MM-DD`); NULL while the matured bond's principal return is unconfirmed |
+| `received_at` | 本金收訖日 (`YYYY-MM-DD`); NULL while the principal is still on the books |
 | `credited_account_id`, `credited_amount` | The `cash_accounts` row and amount the 收訖 action credited (optional); records where the bank-in went |
 | `note` | Optional free-text note |
 | `sort_order` | Display order; new entries append |
@@ -255,7 +256,7 @@ The manual 資產 Overview cells as rows: `label`, `liquidity` (`short`/`long`, 
 
 ### `cash_accounts`
 
-One row per 活期 cash account: the bank rows (HS, 渣打) plus the IBKR broker cash in each currency.
+One row per cash account: the 活期 bank rows (HS, 渣打) plus the IBKR broker cash in each currency.
 
 | Column | Meaning |
 |---|---|
@@ -310,7 +311,7 @@ These are calculated by the backend when needed:
 - Market totals
 - Market 上月/最高 figures (derived from `market_history` plus current values)
 - Deposit `total` (principal + interest)
-- Deposit status (`End` once end_date is today or past)
+- Deposit status (active until 收訖, whatever end_date)
 - Deposit end month/year
 - Active/history/month/year/bank rollups
 - Dividend status (`received` once `received_amount` is set)
@@ -325,7 +326,7 @@ These are calculated by the backend when needed:
 - MPF `max` rate and `max` gain, each independently the largest of the seed, every history row, and the current values
 - The whole forecast grid: per-month `cash`/`locked`/`semi_liquid`/`ref_check`, deposit finish/interest sums, plan `deposit_return`s, and the quarter-month `bill` line
 - MPF portfolio totals/last-month/max, via the as-of merge described in [investments.md](investments.md)
-- Bond status (`matured` once maturity_date is today or past)
+- Bond status (`matured` once its principal is 收訖, whatever maturity_date)
 - Bond `next_pay_date` (earliest unreceived coupon pay date)
 - Coupon expected amount = `per_10k × principal ÷ 10000`
 - Coupon status (`PENDING_FIX` while rate/per_10k are unset, `PENDING` once fixed, `RECEIVED` once `received_amount` is set)

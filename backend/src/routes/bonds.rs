@@ -14,7 +14,7 @@ use serde::{Deserialize, Serialize};
 
 #[derive(Debug, Deserialize, utoipa::ToSchema, utoipa::IntoParams)]
 pub struct ListQuery {
-    /// `active` (maturity in the future) or `matured`.
+    /// `active` (principal unreceived) or `matured` (principal 收訖'd).
     pub status: Option<String>,
     /// `asc` (default) or `desc`, by maturity date.
     pub order: Option<String>,
@@ -169,13 +169,16 @@ pub async fn receive(
             .to_string(),
         None => today().to_string(),
     };
-    let credit_amount = body.credit_amount.unwrap_or(existing.principal);
-    if !credit_amount.is_finite() {
-        return Err(ApiError::field(
-            "credit_amount",
-            "credit_amount must be a number",
-        ));
-    }
+    let credit_amount = match body.credit_amount {
+        Some(value) if !value.is_finite() => {
+            return Err(ApiError::field(
+                "credit_amount",
+                "credit_amount must be a number",
+            ));
+        }
+        Some(value) => value,
+        None => existing.principal,
+    };
     crate::service::bonds::receive(
         &state.pool,
         id,
@@ -183,7 +186,7 @@ pub async fn receive(
             received_at,
             bank_in: body.bank_in.unwrap_or(true),
             account_id: body.account_id,
-            credit_amount: body.credit_amount,
+            credit_amount,
         },
     )
     .await?;
@@ -238,7 +241,8 @@ pub struct UpcomingCoupon {
 
 #[derive(Debug, Serialize, utoipa::ToSchema)]
 pub struct BondSummaryResponse {
-    /// The date `status` was derived against.
+    /// The date the summary derived against; an active bond matured on or
+    /// before it is 已到期未收.
     pub today: String,
     pub totals: BondTotals,
     /// Active bonds with their coupons, earliest maturity first.
@@ -440,4 +444,213 @@ pub async fn remove_coupon(
         return Err(ApiError::NotFound(format!("coupon {id} not found")));
     }
     Ok(StatusCode::NO_CONTENT)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::db::connect_memory;
+    use sqlx::SqlitePool;
+
+    /// A matured bond inserted straight into the table stays unreceived —
+    /// `insert_bond` would auto-receive the past maturity_date.
+    async fn seed_matured_unreceived(pool: &SqlitePool) -> i64 {
+        sqlx::query_scalar(
+            "INSERT INTO bonds (label, issue_no, principal, maturity_date, sort_order, \
+             created_at, updated_at) \
+             VALUES ('silver bond', '03GB2710R', 50000, '2020-01-01', 1, \
+             '2026-01-01T00:00:00', '2026-01-01T00:00:00') RETURNING id",
+        )
+        .fetch_one(pool)
+        .await
+        .unwrap()
+    }
+
+    /// One unpaid coupon on the bond — it stays in upcoming_coupons while the
+    /// bond is active.
+    async fn seed_unpaid_coupon(pool: &SqlitePool, bond_id: i64) {
+        sqlx::query(
+            "INSERT INTO bond_coupons (bond_id, pay_date, annual_rate, per_10k, \
+             created_at, updated_at) \
+             VALUES (?, '2020-06-01', 0.04, 200.0, \
+             '2026-01-01T00:00:00', '2026-01-01T00:00:00')",
+        )
+        .bind(bond_id)
+        .execute(pool)
+        .await
+        .unwrap();
+    }
+
+    fn receive_body() -> ReceiveBond {
+        ReceiveBond {
+            received_at: None,
+            bank_in: None,
+            account_id: None,
+            credit_amount: None,
+        }
+    }
+
+    #[tokio::test]
+    async fn matured_unreceived_bond_counts_until_received() {
+        let pool = connect_memory().await.expect("memory db");
+        let id = seed_matured_unreceived(&pool).await;
+        seed_unpaid_coupon(&pool, id).await;
+        let state = AppState { pool: pool.clone() };
+
+        // Past maturity but unreceived: still active everywhere.
+        let response = summary(State(state.clone())).await.expect("summary").0;
+        assert_eq!(response.totals.active_principal, 50000.0);
+        assert_eq!(response.active.len(), 1);
+        assert_eq!(response.active[0].bond.id, id);
+        assert!(response.matured.is_empty());
+        assert_eq!(response.upcoming_coupons.len(), 1);
+        assert_eq!(response.upcoming_coupons[0].coupon.pay_date, "2020-06-01");
+
+        let listed = list(
+            State(state.clone()),
+            Query(ListQuery {
+                status: Some("active".to_string()),
+                order: None,
+            }),
+        )
+        .await
+        .expect("active list")
+        .0;
+        assert_eq!(listed.len(), 1);
+        assert_eq!(listed[0].id, id);
+
+        let _received = receive(State(state.clone()), Path(id), Json(receive_body()))
+            .await
+            .expect("received");
+
+        let response = summary(State(state.clone())).await.expect("summary").0;
+        assert_eq!(response.totals.active_principal, 0.0);
+        assert!(response.active.is_empty());
+        assert_eq!(response.matured.len(), 1);
+        assert!(response.upcoming_coupons.is_empty());
+
+        let listed = list(
+            State(state.clone()),
+            Query(ListQuery {
+                status: Some("matured".to_string()),
+                order: None,
+            }),
+        )
+        .await
+        .expect("matured list")
+        .0;
+        assert_eq!(listed.len(), 1);
+
+        // Receipt is final: a second 收訖 conflicts.
+        let err = receive(State(state), Path(id), Json(receive_body()))
+            .await
+            .expect_err("second receive");
+        assert!(matches!(err, ApiError::Conflict(_)));
+    }
+
+    #[tokio::test]
+    async fn early_received_bond_is_matured() {
+        let pool = connect_memory().await.expect("memory db");
+        // Future maturity, already 收訖 — receipt, not the date, ends it.
+        let id: i64 = sqlx::query_scalar(
+            "INSERT INTO bonds (label, principal, maturity_date, received_at, sort_order, \
+             created_at, updated_at) \
+             VALUES ('silver bond', 50000, '2999-01-01', '2026-11-12', 1, \
+             '2026-01-01T00:00:00', '2026-01-01T00:00:00') RETURNING id",
+        )
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+
+        let bond = store::load_bond(&pool, id).await.expect("bond");
+        assert_eq!(bond.status, BondStatus::Matured);
+    }
+
+    #[tokio::test]
+    async fn unreceived_matured_bond_counts_in_live_totals() {
+        let pool = connect_memory().await.expect("memory db");
+        let id = seed_matured_unreceived(&pool).await;
+
+        // The live totals read active bond principal — it counts until 收訖.
+        assert_eq!(
+            crate::service::bonds::active_principal(&pool)
+                .await
+                .unwrap(),
+            50000.0
+        );
+        let input = crate::service::wealth::totals_input(&pool).await.unwrap();
+        let liquid_before = crate::calc::live_totals(&input).liquid_assets;
+
+        crate::service::bonds::receive(
+            &pool,
+            id,
+            &crate::service::bonds::ReceiveInput {
+                received_at: "2026-11-12".to_string(),
+                bank_in: false,
+                account_id: None,
+                credit_amount: 50000.0,
+            },
+        )
+        .await
+        .expect("received");
+
+        assert_eq!(
+            crate::service::bonds::active_principal(&pool)
+                .await
+                .unwrap(),
+            0.0
+        );
+        // 不存入 was picked, so the principal leaves liquid_assets whole.
+        let input = crate::service::wealth::totals_input(&pool).await.unwrap();
+        let liquid_after = crate::calc::live_totals(&input).liquid_assets;
+        assert!((liquid_before - liquid_after - 50000.0).abs() < 1e-6);
+    }
+
+    #[tokio::test]
+    async fn received_bond_banked_into_hs_leaves_liquid_unchanged() {
+        let pool = connect_memory().await.expect("memory db");
+        let id = seed_matured_unreceived(&pool).await;
+        let hs_id: i64 = sqlx::query_scalar(
+            "INSERT INTO cash_accounts (label, currency, role, amount, is_default_receipt, \
+             sort_order, updated_at) \
+             VALUES ('HS', 'HKD', 'bank', 0, 1, 1, '2026-01-01T00:00:00') RETURNING id",
+        )
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+
+        let input = crate::service::wealth::totals_input(&pool).await.unwrap();
+        let liquid_before = crate::calc::live_totals(&input).liquid_assets;
+
+        crate::service::bonds::receive(
+            &pool,
+            id,
+            &crate::service::bonds::ReceiveInput {
+                received_at: "2026-11-12".to_string(),
+                bank_in: true,
+                account_id: Some(hs_id),
+                credit_amount: 50000.0,
+            },
+        )
+        .await
+        .expect("received");
+
+        assert_eq!(
+            crate::service::bonds::active_principal(&pool)
+                .await
+                .unwrap(),
+            0.0
+        );
+        let hs_amount: f64 = sqlx::query_scalar("SELECT amount FROM cash_accounts WHERE id = ?")
+            .bind(hs_id)
+            .fetch_one(&pool)
+            .await
+            .unwrap();
+        assert_eq!(hs_amount, 50000.0);
+
+        // 收訖 moves the principal from the bond to HS — 流動資產 unchanged.
+        let input = crate::service::wealth::totals_input(&pool).await.unwrap();
+        let liquid_after = crate::calc::live_totals(&input).liquid_assets;
+        assert!((liquid_after - liquid_before).abs() < 1e-6);
+    }
 }
