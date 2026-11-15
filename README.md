@@ -48,6 +48,24 @@ cd frontend && pnpm dev     # http://127.0.0.1:5173, /api proxied to :8787
 | `WEALTH_ADDR` | `127.0.0.1:8787` | Bind address (keep it loopback) |
 | `WEALTH_FRONTEND_DIST` | `frontend/dist` | Static frontend directory served by the backend |
 
+### Accessing from another device
+
+The default `127.0.0.1` bind means other machines get connection refused — loopback only accepts connections from this Mac. To open it to your LAN:
+
+```sh
+lsof -ti :8787 | xargs kill
+WEALTH_ADDR=0.0.0.0:8787 cargo run -p wealth-backend --bin wealth-backend
+```
+
+Then browse `http://<this-mac's-LAN-IP>:8787` from the other device (`ipconfig getifaddr en0` gives the IP). **The app has no authentication** — anyone on the network can read and edit your data while it's bound this way. macOS may prompt to allow inbound connections; approve it if asked.
+
+For untrusted networks, keep the loopback bind and tunnel instead. From the other device:
+
+```sh
+ssh -L 8787:127.0.0.1:8787 <you>@<this-mac's-LAN-IP>
+# then browse http://localhost:8787 (requires Remote Login in System Settings → Sharing)
+```
+
 ## Command-line tools
 
 ```sh
