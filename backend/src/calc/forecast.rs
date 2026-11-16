@@ -3,8 +3,8 @@ use super::*;
 use chrono::Datelike;
 
 use crate::models::{
-    ForecastCell, ForecastIbkrTransfer, ForecastItem, ForecastItemKind, ForecastPlacement,
-    ForecastTrade, TradeType,
+    ForecastCell, ForecastIbkrTransfer, ForecastItem, ForecastItemKind, ForecastMonth,
+    ForecastPlacement, ForecastTrade, TradeType,
 };
 
 /// The forecast window: the current month plus six ahead (sheet columns B:H).
@@ -13,14 +13,15 @@ pub const FORECAST_MONTHS: u32 = 7;
 /// The sheet's 差餉 quarter months — the 繳費 row's auto line.
 pub const BILL_QUARTER_MONTHS: [u32; 4] = [1, 4, 7, 10];
 
-/// A stored `forecast_items` row reduced to what the derivation needs.
+/// A stored `forecast_items` row reduced to what the derivation needs —
+/// kind and amount are read through the borrowed row so a cell's line and
+/// the chain can't disagree.
 #[derive(Debug, Clone, Copy)]
-pub struct ForecastItemFacts {
+pub struct ForecastItemFacts<'a> {
+    /// The stored row itself — the plan-item line and the kind/amount source.
+    pub item: &'a ForecastItem,
     /// The month the cash line lands in (`YYYY-MM-01`).
     pub month: chrono::NaiveDate,
-    pub kind: ForecastItemKind,
-    /// Signed amount (planned lockups are negative).
-    pub amount: f64,
     /// Return-month override (`YYYY-MM-01`); NULL uses the kind's lag.
     pub return_month: Option<chrono::NaiveDate>,
 }
@@ -57,7 +58,7 @@ pub struct ForecastInput<'a> {
     /// effects (a stale pre-window plan fires nothing — its cell left the
     /// sheet when the window slid past, and its return must not double-count
     /// a deposit that already exists).
-    pub items: &'a [ForecastItemFacts],
+    pub items: &'a [ForecastItemFacts<'a>],
     /// The window's HK trades (US trades settle inside IBKR and are never
     /// passed in) — their signed totals move 活期 in their month.
     pub trades: &'a [SuggestionTrade],
@@ -68,7 +69,7 @@ pub struct ForecastInput<'a> {
 
 /// One derived month column of the 預測 grid.
 #[derive(Debug, Clone, PartialEq)]
-pub struct ForecastMonthDerived {
+struct ForecastMonthDerived {
     pub month: chrono::NaiveDate,
     pub start: Option<f64>,
     /// Σ principal of deposits ending in the month.
@@ -105,9 +106,10 @@ pub struct ForecastMonthDerived {
 
 /// The month a deposit-plan item's principal returns: its `return_month`
 /// override, else the kind's default lag from the plan month.
-fn item_return_month(item: &ForecastItemFacts) -> Option<chrono::NaiveDate> {
+fn item_return_month(item: &ForecastItemFacts<'_>) -> Option<chrono::NaiveDate> {
     item.return_month.or_else(|| {
-        item.kind
+        item.item
+            .kind
             .deposit_lag()
             .and_then(|lag| item.month.checked_add_months(chrono::Months::new(lag)))
     })
@@ -145,7 +147,7 @@ pub fn trade_amount(trade: &SuggestionTrade) -> f64 {
 /// are the column's own lines (already filtered to its month and sorted);
 /// placements route by bank via [`ForecastItemKind::placement_row`], trade
 /// and IBKR lines land on the `stock` cell only.
-pub fn forecast_cells(
+fn forecast_cells(
     column: &ForecastMonthDerived,
     items: &[ForecastItem],
     placements: &[ForecastPlacement],
@@ -204,8 +206,10 @@ pub fn forecast_cells(
 }
 
 /// The seven-month rolling 預測 grid. Every figure derives from the inputs;
-/// nothing is stored except the items themselves.
-pub fn forecast_months(input: &ForecastInput) -> Vec<ForecastMonthDerived> {
+/// nothing is stored except the items themselves. Each column's events are
+/// grouped once, and that grouping feeds the chained amounts, the cell's
+/// lines and the cell figure alike.
+pub fn forecast_grid(input: &ForecastInput) -> Vec<ForecastMonth> {
     let window: Vec<chrono::NaiveDate> = (0..FORECAST_MONTHS)
         .map(|offset| {
             input
@@ -218,62 +222,74 @@ pub fn forecast_months(input: &ForecastInput) -> Vec<ForecastMonthDerived> {
         month >= window[0] && month <= window[FORECAST_MONTHS as usize - 1]
     };
 
-    let mut derived = Vec::with_capacity(FORECAST_MONTHS as usize);
+    let mut months = Vec::with_capacity(FORECAST_MONTHS as usize);
     let mut cash = input.start;
     let mut locked = Some(input.locked_base);
     for month in &window {
-        let items: Vec<&ForecastItemFacts> = input
-            .items
-            .iter()
-            .filter(|item| item.month == *month)
-            .collect();
+        // The column's plan items, in input order — both the cell lines and
+        // the per-kind sums below read them.
+        let mut plan_items: Vec<ForecastItem> = Vec::new();
         let mut interest_items = 0.0;
         let mut bill_items = 0.0;
         let mut plans = 0.0;
         let mut deposit_plans = 0.0;
-        for item in &items {
-            match item.kind {
-                ForecastItemKind::Interest => interest_items += item.amount,
-                ForecastItemKind::Bill => bill_items += item.amount,
-                ForecastItemKind::HsDeposit | ForecastItemKind::ScDeposit => {
-                    deposit_plans += item.amount
-                }
-                ForecastItemKind::Tax | ForecastItemKind::Stock | ForecastItemKind::Other => {
-                    plans += item.amount
+        let mut deposit_return = 0.0;
+        for item in input.items {
+            if item.month == *month {
+                plan_items.push(item.item.clone());
+                match item.item.kind {
+                    ForecastItemKind::Interest => interest_items += item.item.amount,
+                    ForecastItemKind::Bill => bill_items += item.item.amount,
+                    ForecastItemKind::HsDeposit | ForecastItemKind::ScDeposit => {
+                        deposit_plans += item.item.amount
+                    }
+                    ForecastItemKind::Tax | ForecastItemKind::Stock | ForecastItemKind::Other => {
+                        plans += item.item.amount
+                    }
                 }
             }
+            // Deposits placed inside the window return at their effective
+            // month. (sum() of an empty iter is -0.0 — the +0.0 below
+            // collapses it so the UI never shows "-0.00".)
+            if item.item.kind.deposit_lag().is_some()
+                && in_window(item.month)
+                && item_return_month(item) == Some(*month)
+            {
+                deposit_return += -item.item.amount;
+            }
         }
-        // Deposits placed inside the window return at their effective month.
-        // (sum() of an empty iter is -0.0 — the +0.0 collapses it so the UI
-        // never shows "-0.00".)
-        let deposit_return: f64 = input
-            .items
-            .iter()
-            .filter(|item| {
-                item.kind.deposit_lag().is_some()
-                    && in_window(item.month)
-                    && item_return_month(item) == Some(*month)
-            })
-            .map(|item| -item.amount)
-            .sum::<f64>()
-            + 0.0;
+        let deposit_return = deposit_return + 0.0;
 
         // Sheet row 28: every deposit ending in the month, received or not.
-        let deposit_finish: f64 = input
+        let finishing: Vec<&SuggestionDeposit> = input
             .deposits
             .iter()
             .filter(|deposit| in_month(deposit.end_date, *month))
-            .map(|deposit| deposit.principal)
-            .sum::<f64>()
-            + 0.0;
+            .collect();
+        let deposit_finish: f64 = finishing.iter().map(|d| d.principal).sum::<f64>() + 0.0;
+
+        // A real deposit placed in the month moves principal out of 活期 into
+        // lockup — the same flow a hs_deposit/sc_deposit plan would model.
+        let starting: Vec<&SuggestionDeposit> = input
+            .deposits
+            .iter()
+            .filter(|deposit| deposit.start_date.is_some_and(|d| in_month(d, *month)))
+            .collect();
+        let deposit_start: f64 = starting.iter().map(|d| d.principal).sum::<f64>() + 0.0;
+        let placements: Vec<ForecastPlacement> = starting
+            .iter()
+            .map(|deposit| ForecastPlacement {
+                deposit_id: deposit.id,
+                label: deposit.label.clone(),
+                bank: deposit.bank.clone(),
+                principal: deposit.principal,
+                start_date: deposit.start_date.expect("filtered to Some").to_string(),
+            })
+            .collect();
+
         // Sheet row 31: deposit interest ending + dividends + coupons at their
         // known (received or expected) figures, plus `interest` items.
-        let receipts: f64 = input
-            .deposits
-            .iter()
-            .filter(|deposit| in_month(deposit.end_date, *month))
-            .map(|deposit| deposit.interest)
-            .sum::<f64>()
+        let receipts: f64 = finishing.iter().map(|d| d.interest).sum::<f64>()
             + input
                 .events
                 .dividends
@@ -284,7 +300,10 @@ pub fn forecast_months(input: &ForecastInput) -> Vec<ForecastMonthDerived> {
                 .sum::<f64>();
         let interest = receipts + interest_items;
 
-        let bill = if items.iter().any(|item| item.kind == ForecastItemKind::Bill) {
+        let bill = if plan_items
+            .iter()
+            .any(|item| item.kind == ForecastItemKind::Bill)
+        {
             Some(bill_items)
         } else if BILL_QUARTER_MONTHS.contains(&month.month()) {
             Some(-input.bill_amount)
@@ -292,36 +311,52 @@ pub fn forecast_months(input: &ForecastInput) -> Vec<ForecastMonthDerived> {
             None
         };
 
-        // A real deposit placed in the month moves principal out of 活期 into
-        // lockup — the same flow a hs_deposit/sc_deposit plan would model.
-        let deposit_start: f64 = input
-            .deposits
-            .iter()
-            .filter(|deposit| deposit.start_date.is_some_and(|d| in_month(d, *month)))
-            .map(|deposit| deposit.principal)
-            .sum::<f64>()
-            + 0.0;
-
         // A real HK trade moves 活期 in its month — the 股票 row's real side;
         // stock plan items are never suppressed against it.
-        let trade_flows: f64 = input
+        let trades: Vec<&SuggestionTrade> = input
             .trades
             .iter()
             .filter(|trade| in_month(trade.date, *month))
-            .map(trade_amount)
-            .sum::<f64>()
-            + 0.0;
+            .collect();
+        let trade_flows: f64 = trades.iter().map(|t| trade_amount(t)).sum::<f64>() + 0.0;
+        let mut trade_lines: Vec<ForecastTrade> = trades
+            .iter()
+            .map(|trade| ForecastTrade {
+                trade_id: trade.id,
+                code: trade.code.clone(),
+                trade_type: trade.kind,
+                trade_date: trade.date.to_string(),
+                amount: trade_amount(trade),
+            })
+            .collect();
+        trade_lines.sort_by(|a, b| {
+            a.trade_date
+                .cmp(&b.trade_date)
+                .then(a.trade_id.cmp(&b.trade_id))
+        });
 
         // A recorded IBKR transfer moved 活期 the same way — it sits in the
         // 股票 row beside the trade lines (not in `locked`: the money stayed
         // semi-liquid, it just changed accounts).
-        let transfer_flows: f64 = input
+        let transfers: Vec<&SuggestionIbkrTransfer> = input
             .ibkr_transfers
             .iter()
             .filter(|transfer| in_month(transfer.date, *month))
-            .map(|transfer| -transfer.amount)
-            .sum::<f64>()
-            + 0.0;
+            .collect();
+        let transfer_flows: f64 = transfers.iter().map(|t| -t.amount).sum::<f64>() + 0.0;
+        let mut ibkr_lines: Vec<ForecastIbkrTransfer> = transfers
+            .iter()
+            .map(|transfer| ForecastIbkrTransfer {
+                transfer_id: transfer.id,
+                transfer_date: transfer.date.to_string(),
+                amount: -transfer.amount,
+            })
+            .collect();
+        ibkr_lines.sort_by(|a, b| {
+            a.transfer_date
+                .cmp(&b.transfer_date)
+                .then(a.transfer_id.cmp(&b.transfer_id))
+        });
 
         // This column's start is the chained cash before its own flows.
         let start = cash;
@@ -342,7 +377,7 @@ pub fn forecast_months(input: &ForecastInput) -> Vec<ForecastMonthDerived> {
         locked = locked
             .map(|locked| locked - deposit_finish - deposit_plans + deposit_start - deposit_return);
         let semi_liquid = cash.and_then(|cash| locked.map(|locked| cash + locked));
-        derived.push(ForecastMonthDerived {
+        let column = ForecastMonthDerived {
             month: *month,
             start,
             deposit_finish,
@@ -359,9 +394,26 @@ pub fn forecast_months(input: &ForecastInput) -> Vec<ForecastMonthDerived> {
             semi_liquid,
             ref_check: semi_liquid
                 .map(|semi| semi - input.semi_liquid_target * input.liquid_assets),
+        };
+        let month_string = month.to_string();
+        months.push(ForecastMonth {
+            month: month_string.clone(),
+            start: column.start,
+            salary: input.salary,
+            spend: input.spend,
+            deposit_finish: column.deposit_finish,
+            interest: column.interest,
+            interest_components: interest_components(&month_string, input.events),
+            bill: column.bill,
+            cells: forecast_cells(&column, &plan_items, &placements, &trade_lines, &ibkr_lines),
+            deposit_return: column.deposit_return,
+            cash: column.cash,
+            locked: column.locked,
+            semi_liquid: column.semi_liquid,
+            ref_check: column.ref_check,
         });
     }
-    derived
+    months
 }
 
 #[cfg(test)]
@@ -372,7 +424,7 @@ mod tests {
     fn forecast_input<'a>(
         deposits: &'a [SuggestionDeposit],
         events: &'a SuggestionEvents,
-        items: &'a [ForecastItemFacts],
+        items: &'a [ForecastItemFacts<'a>],
     ) -> ForecastInput<'a> {
         ForecastInput {
             first_month: ym("2026-09-01"),
@@ -391,18 +443,52 @@ mod tests {
         }
     }
 
+    fn stored(
+        month: &str,
+        id: i64,
+        kind: ForecastItemKind,
+        amount: f64,
+        return_month: Option<&str>,
+    ) -> ForecastItem {
+        ForecastItem {
+            id,
+            month: month.to_string(),
+            kind,
+            amount,
+            return_month: return_month.map(str::to_string),
+            note: None,
+            sort_order: id,
+            created_at: "2026-01-01T00:00:00+08:00".to_string(),
+        }
+    }
+
     fn plan(
         month: &str,
         kind: ForecastItemKind,
         amount: f64,
         return_month: Option<&str>,
-    ) -> ForecastItemFacts {
-        ForecastItemFacts {
-            month: ym(month),
-            kind,
-            amount,
-            return_month: return_month.map(ym),
-        }
+    ) -> ForecastItem {
+        stored(month, 0, kind, amount, return_month)
+    }
+
+    fn facts_of(items: &[ForecastItem]) -> Vec<ForecastItemFacts<'_>> {
+        items
+            .iter()
+            .map(|item| ForecastItemFacts {
+                item,
+                month: ym(&item.month),
+                return_month: item.return_month.as_deref().map(ym),
+            })
+            .collect()
+    }
+
+    fn grid_for(
+        deposits: &[SuggestionDeposit],
+        events: &SuggestionEvents,
+        items: &[ForecastItem],
+    ) -> Vec<ForecastMonth> {
+        let facts = facts_of(items);
+        forecast_grid(&forecast_input(deposits, events, &facts))
     }
 
     fn hk_trade(date: &str, kind: TradeType, total: f64) -> SuggestionTrade {
@@ -431,10 +517,10 @@ mod tests {
     #[test]
     fn forecast_anchors_on_start_cash_and_chains() {
         let events = SuggestionEvents::default();
-        let months = forecast_months(&forecast_input(&[], &events, &[]));
+        let months = forecast_grid(&forecast_input(&[], &events, &[]));
         assert_eq!(months.len(), FORECAST_MONTHS as usize);
-        assert_eq!(months[0].month, ym("2026-09-01"));
-        assert_eq!(months[6].month, ym("2027-03-01"));
+        assert_eq!(months[0].month, "2026-09-01");
+        assert_eq!(months[6].month, "2027-03-01");
 
         assert_eq!(months[0].start, Some(23_746.72));
         // Sep cash = 23746.72 + 52700 − 8500 (+ Oct is a bill quarter? no — Oct
@@ -453,7 +539,7 @@ mod tests {
         let events = SuggestionEvents::default();
         let mut input = forecast_input(&[], &events, &[]);
         input.start = Some(32_934.62); // live cash_sum when start_cash unset
-        let months = forecast_months(&input);
+        let months = forecast_grid(&input);
         assert_eq!(months[0].start, Some(32_934.62));
     }
 
@@ -461,7 +547,7 @@ mod tests {
     fn forecast_deposit_finish_and_interest_count_the_end_month() {
         let deposits = vec![dep_event("2026-10-20", 110_000.0, 3_025.0)];
         let events = SuggestionEvents::default();
-        let months = forecast_months(&forecast_input(&deposits, &events, &[]));
+        let months = grid_for(&deposits, &events, &[]);
         let oct = &months[1];
         assert!(approx_eq(oct.deposit_finish, 110_000.0));
         assert!(approx_eq(oct.interest, 3_025.0));
@@ -493,7 +579,7 @@ mod tests {
             ..Default::default()
         };
         let items = vec![plan("2026-11-01", ForecastItemKind::Interest, 88.0, None)];
-        let months = forecast_months(&forecast_input(&[], &events, &items));
+        let months = grid_for(&[], &events, &items);
         assert!(approx_eq(months[2].interest, 500.0 + 1_234.5 + 88.0));
         // Unknown amounts (待定) are skipped.
         let events = SuggestionEvents {
@@ -506,7 +592,7 @@ mod tests {
             }],
             ..Default::default()
         };
-        let months = forecast_months(&forecast_input(&[], &events, &[]));
+        let months = grid_for(&[], &events, &[]);
         assert!(approx_eq(months[2].interest, 0.0));
     }
 
@@ -514,16 +600,16 @@ mod tests {
     fn forecast_bill_items_override_the_quarterly_default() {
         let events = SuggestionEvents::default();
         // Oct is a quarter month: default −2158.
-        let months = forecast_months(&forecast_input(&[], &events, &[]));
+        let months = grid_for(&[], &events, &[]);
         assert_eq!(months[1].bill, Some(-2_158.0));
         assert_eq!(months[0].bill, None);
         // A bill item replaces (not stacks on) the default.
         let items = vec![plan("2026-10-01", ForecastItemKind::Bill, -2_260.5, None)];
-        let months = forecast_months(&forecast_input(&[], &events, &items));
+        let months = grid_for(&[], &events, &items);
         assert_eq!(months[1].bill, Some(-2_260.5));
         // A bill item on a non-quarter month is a plain line.
         let items = vec![plan("2026-11-01", ForecastItemKind::Bill, -500.0, None)];
-        let months = forecast_months(&forecast_input(&[], &events, &items));
+        let months = grid_for(&[], &events, &items);
         assert_eq!(months[2].bill, Some(-500.0));
     }
 
@@ -534,13 +620,23 @@ mod tests {
             plan("2026-10-01", ForecastItemKind::ScDeposit, -180_000.0, None),
             plan("2026-09-01", ForecastItemKind::HsDeposit, -50_000.0, None),
         ];
-        let months = forecast_months(&forecast_input(&[], &events, &items));
+        let months = grid_for(&[], &events, &items);
 
         // Sep: −50000 out, locked +50000.
-        assert!(approx_eq(months[0].deposit_plans, -50_000.0));
+        assert!(approx_eq(
+            cell(&months[0].cells, ForecastItemKind::HsDeposit)
+                .figure
+                .unwrap(),
+            -50_000.0
+        ));
         assert!(approx_eq(months[0].locked.unwrap(), 445_000.0 + 50_000.0));
         // Oct: −180000 out.
-        assert!(approx_eq(months[1].deposit_plans, -180_000.0));
+        assert!(approx_eq(
+            cell(&months[1].cells, ForecastItemKind::ScDeposit)
+                .figure
+                .unwrap(),
+            -180_000.0
+        ));
         // Dec: the HS plan returns (+3) — +50000 cash, locked −50000.
         assert!(approx_eq(months[3].deposit_return, 50_000.0));
         // Feb 2027: the SC plan returns (+4 months from Oct).
@@ -560,7 +656,7 @@ mod tests {
             -50_000.0,
             Some("2027-02-01"),
         )];
-        let months = forecast_months(&forecast_input(&[], &events, &items));
+        let months = grid_for(&[], &events, &items);
         assert_eq!(months[3].deposit_return, 0.0); // Dec: no default return
         assert!(approx_eq(months[5].deposit_return, 50_000.0)); // Feb 2027
     }
@@ -576,28 +672,29 @@ mod tests {
             -60_000.0,
             None,
         )];
-        let months = forecast_months(&forecast_input(&[], &events, &items));
-        assert!(months.iter().all(|m| m.deposit_plans == 0.0));
+        let months = grid_for(&[], &events, &items);
+        for month in &months {
+            for kind in [ForecastItemKind::HsDeposit, ForecastItemKind::ScDeposit] {
+                assert_eq!(cell(&month.cells, kind).figure, None);
+            }
+        }
         assert!(months.iter().all(|m| m.deposit_return == 0.0));
     }
 
     #[test]
     fn forecast_empty_cells_stay_positive_zero() {
         let events = SuggestionEvents::default();
-        let months = forecast_months(&forecast_input(&[], &events, &[]));
+        let months = grid_for(&[], &events, &[]);
         for m in &months {
             assert!(
-                m.deposit_finish.is_sign_positive()
-                    && m.deposit_return.is_sign_positive()
-                    && m.trade_flows.is_sign_positive()
-                    && m.transfer_flows.is_sign_positive(),
-                "{} finish={} return={} trades={} transfers={}",
+                m.deposit_finish.is_sign_positive() && m.deposit_return.is_sign_positive(),
+                "{} finish={} return={}",
                 m.month,
                 m.deposit_finish,
-                m.deposit_return,
-                m.trade_flows,
-                m.transfer_flows
+                m.deposit_return
             );
+            // An empty stock cell lists nothing and shows no figure.
+            assert_eq!(cell(&m.cells, ForecastItemKind::Stock).figure, None);
         }
     }
 
@@ -605,11 +702,13 @@ mod tests {
     fn forecast_buy_lowers_cash_in_its_month() {
         let events = SuggestionEvents::default();
         let trades = vec![hk_trade("2026-10-27", TradeType::Buy, 54_063.17)];
-        let base = forecast_months(&forecast_input(&[], &events, &[]));
+        let base = grid_for(&[], &events, &[]);
         let mut input = forecast_input(&[], &events, &[]);
         input.trades = &trades;
-        let months = forecast_months(&input);
-        assert!(approx_eq(months[1].trade_flows, -54_063.17));
+        let months = forecast_grid(&input);
+        let stock = cell(&months[1].cells, ForecastItemKind::Stock);
+        assert!(approx_eq(stock.figure.unwrap(), -54_063.17));
+        assert!(approx_eq(stock.trade_lines[0].amount, -54_063.17));
         assert!(approx_eq(
             months[1].cash.unwrap(),
             base[1].cash.unwrap() - 54_063.17
@@ -626,11 +725,12 @@ mod tests {
     fn forecast_sell_raises_cash_in_its_month() {
         let events = SuggestionEvents::default();
         let trades = vec![hk_trade("2026-11-05", TradeType::Sell, 12_000.0)];
-        let base = forecast_months(&forecast_input(&[], &events, &[]));
+        let base = grid_for(&[], &events, &[]);
         let mut input = forecast_input(&[], &events, &[]);
         input.trades = &trades;
-        let months = forecast_months(&input);
-        assert!(approx_eq(months[2].trade_flows, 12_000.0));
+        let months = forecast_grid(&input);
+        let stock = cell(&months[2].cells, ForecastItemKind::Stock);
+        assert!(approx_eq(stock.figure.unwrap(), 12_000.0));
         assert!(approx_eq(
             months[2].cash.unwrap(),
             base[2].cash.unwrap() + 12_000.0
@@ -642,12 +742,16 @@ mod tests {
         let events = SuggestionEvents::default();
         // A trade dated before the Sep window has no month's trade_flows.
         let trades = vec![hk_trade("2026-08-15", TradeType::Buy, 10_000.0)];
-        let base = forecast_months(&forecast_input(&[], &events, &[]));
+        let base = grid_for(&[], &events, &[]);
         let mut input = forecast_input(&[], &events, &[]);
         input.trades = &trades;
-        let months = forecast_months(&input);
-        assert!(months.iter().all(|m| m.trade_flows == 0.0));
+        let months = forecast_grid(&input);
         for (month, before) in months.iter().zip(&base) {
+            assert!(
+                cell(&month.cells, ForecastItemKind::Stock)
+                    .trade_lines
+                    .is_empty()
+            );
             assert_eq!(month.cash, before.cash);
         }
     }
@@ -659,12 +763,15 @@ mod tests {
         // plans are never suppressed; the user trims the plan by hand.
         let items = vec![plan("2026-10-01", ForecastItemKind::Stock, -50_000.0, None)];
         let trades = vec![hk_trade("2026-10-27", TradeType::Buy, 54_063.17)];
-        let base = forecast_months(&forecast_input(&[], &events, &[]));
-        let mut input = forecast_input(&[], &events, &items);
+        let base = grid_for(&[], &events, &[]);
+        let facts = facts_of(&items);
+        let mut input = forecast_input(&[], &events, &facts);
         input.trades = &trades;
-        let months = forecast_months(&input);
-        assert!(approx_eq(months[1].plans, -50_000.0));
-        assert!(approx_eq(months[1].trade_flows, -54_063.17));
+        let months = forecast_grid(&input);
+        let stock = cell(&months[1].cells, ForecastItemKind::Stock);
+        assert!(approx_eq(stock.plan_items[0].amount, -50_000.0));
+        assert!(approx_eq(stock.trade_lines[0].amount, -54_063.17));
+        assert!(approx_eq(stock.figure.unwrap(), -104_063.17));
         assert!(approx_eq(
             months[1].cash.unwrap() - base[1].cash.unwrap(),
             -104_063.17
@@ -683,12 +790,15 @@ mod tests {
             amount: 50_000.0,
         }];
         let items = vec![plan("2026-10-01", ForecastItemKind::Stock, -60_000.0, None)];
-        let base = forecast_months(&forecast_input(&[], &events, &items));
-        let mut input = forecast_input(&[], &events, &items);
+        let base = grid_for(&[], &events, &items);
+        let facts = facts_of(&items);
+        let mut input = forecast_input(&[], &events, &facts);
         input.ibkr_transfers = &transfers;
-        let months = forecast_months(&input);
-        assert!(approx_eq(months[1].transfer_flows, -50_000.0));
-        assert!(approx_eq(months[1].plans, -60_000.0));
+        let months = forecast_grid(&input);
+        let stock = cell(&months[1].cells, ForecastItemKind::Stock);
+        assert!(approx_eq(stock.ibkr_lines[0].amount, -50_000.0));
+        assert!(approx_eq(stock.plan_items[0].amount, -60_000.0));
+        assert!(approx_eq(stock.figure.unwrap(), -110_000.0));
         assert!(approx_eq(months[0].cash.unwrap(), base[0].cash.unwrap()));
         for (with, without) in months.iter().zip(base.iter()).skip(1) {
             assert!(approx_eq(
@@ -708,12 +818,16 @@ mod tests {
             date: day("2026-08-15"),
             amount: 90_000.0,
         }];
-        let base = forecast_months(&forecast_input(&[], &events, &[]));
+        let base = grid_for(&[], &events, &[]);
         let mut input = forecast_input(&[], &events, &[]);
         input.ibkr_transfers = &transfers;
-        let months = forecast_months(&input);
-        assert!(months.iter().all(|m| m.transfer_flows == 0.0));
+        let months = forecast_grid(&input);
         for (month, before) in months.iter().zip(&base) {
+            assert!(
+                cell(&month.cells, ForecastItemKind::Stock)
+                    .ibkr_lines
+                    .is_empty()
+            );
             assert_eq!(month.cash, before.cash);
         }
     }
@@ -721,7 +835,7 @@ mod tests {
     #[test]
     fn forecast_ref_check_diffs_against_quarter_liquid() {
         let events = SuggestionEvents::default();
-        let months = forecast_months(&forecast_input(&[], &events, &[]));
+        let months = grid_for(&[], &events, &[]);
         let semi = months[0].cash.unwrap() + months[0].locked.unwrap();
         assert_eq!(months[0].semi_liquid, Some(semi));
         assert!(approx_eq(
@@ -735,7 +849,7 @@ mod tests {
         let events = SuggestionEvents::default();
         let mut input = forecast_input(&[], &events, &[]);
         input.semi_liquid_target = 0.3;
-        let months = forecast_months(&input);
+        let months = forecast_grid(&input);
         let semi = months[0].semi_liquid.unwrap();
         assert!(approx_eq(
             months[0].ref_check.unwrap(),
@@ -810,7 +924,7 @@ mod tests {
         let events = SuggestionEvents::default();
         let mut input = forecast_input(&deposits, &events, &[]);
         input.locked_base = 300_000.0;
-        let months = forecast_months(&input);
+        let months = forecast_grid(&input);
         assert!(approx_eq(months[0].locked.unwrap(), 355_000.0));
     }
 
@@ -821,8 +935,8 @@ mod tests {
             ..dep_event("2027-01-05", 55_000.0, 0.0)
         }];
         let events = SuggestionEvents::default();
-        let base = forecast_months(&forecast_input(&[], &events, &[]));
-        let months = forecast_months(&forecast_input(&deposits, &events, &[]));
+        let base = grid_for(&[], &events, &[]);
+        let months = grid_for(&deposits, &events, &[]);
         // Sep 活期 drops by the principal, 定期+SC gains it.
         assert!(approx_eq(
             months[0].cash.unwrap(),
@@ -843,13 +957,13 @@ mod tests {
             -55_000.0,
             Some("2027-01-01"),
         )];
-        let planned = forecast_months(&forecast_input(&[], &events, &items));
+        let planned = grid_for(&[], &events, &items);
         // B: the converted deposit — same flows, so every column matches.
         let deposits = vec![SuggestionDeposit {
             start_date: Some(day("2026-09-30")),
             ..dep_event("2027-01-05", 55_000.0, 0.0)
         }];
-        let converted = forecast_months(&forecast_input(&deposits, &events, &[]));
+        let converted = grid_for(&deposits, &events, &[]);
         for (plan_col, dep_col) in planned.iter().zip(&converted) {
             assert!(approx_eq(plan_col.cash.unwrap(), dep_col.cash.unwrap()));
             assert!(approx_eq(plan_col.locked.unwrap(), dep_col.locked.unwrap()));
@@ -866,36 +980,14 @@ mod tests {
 
     // --- Money Master (Overview!J29:N35) ---
 
-    // --- forecast_cells ---
+    // --- cells ---
 
-    fn column(bill: Option<f64>, interest: f64) -> ForecastMonthDerived {
-        let events = SuggestionEvents::default();
-        let mut column = forecast_months(&forecast_input(&[], &events, &[])).remove(0);
-        column.bill = bill;
-        column.interest = interest;
-        column
-    }
-
-    fn stored_item(id: i64, kind: ForecastItemKind, amount: f64) -> ForecastItem {
-        ForecastItem {
+    fn placement_dep(id: i64, bank: Option<&str>, principal: f64) -> SuggestionDeposit {
+        SuggestionDeposit {
             id,
-            month: "2026-10-01".to_string(),
-            kind,
-            amount,
-            return_month: None,
-            note: None,
-            sort_order: id,
-            created_at: "2026-01-01T00:00:00+08:00".to_string(),
-        }
-    }
-
-    fn placement(id: i64, bank: Option<&str>, principal: f64) -> ForecastPlacement {
-        ForecastPlacement {
-            deposit_id: id,
-            label: None,
+            start_date: Some(day("2026-10-12")),
             bank: bank.map(str::to_string),
-            principal,
-            start_date: "2026-10-12".to_string(),
+            ..dep_event("2027-06-05", principal, 0.0)
         }
     }
 
@@ -905,43 +997,55 @@ mod tests {
 
     #[test]
     fn cells_are_seven_in_sheet_order_and_empty_without_lines() {
-        let cells = forecast_cells(&column(None, 0.0), &[], &[], &[], &[]);
+        let events = SuggestionEvents::default();
+        let months = grid_for(&[], &events, &[]);
+        let cells = &months[0].cells;
         let kinds: Vec<ForecastItemKind> = cells.iter().map(|cell| cell.kind).collect();
         assert_eq!(kinds, ForecastItemKind::ALL.to_vec());
-        for cell in &cells {
+        for cell in cells {
             assert!(cell.plan_items.is_empty());
             assert!(cell.placements.is_empty());
             assert!(cell.trade_lines.is_empty());
             assert!(cell.ibkr_lines.is_empty());
         }
-        assert_eq!(cell(&cells, ForecastItemKind::Tax).figure, None);
-        assert_eq!(cell(&cells, ForecastItemKind::Other).figure, None);
+        assert_eq!(cell(cells, ForecastItemKind::Tax).figure, None);
+        assert_eq!(cell(cells, ForecastItemKind::Other).figure, None);
     }
 
     #[test]
     fn cells_bucket_items_by_kind() {
+        let events = SuggestionEvents::default();
         let items = [
-            stored_item(1, ForecastItemKind::Tax, -3_000.0),
-            stored_item(2, ForecastItemKind::HsDeposit, -70_000.0),
+            stored("2026-10-01", 1, ForecastItemKind::Tax, -3_000.0, None),
+            stored(
+                "2026-10-01",
+                2,
+                ForecastItemKind::HsDeposit,
+                -70_000.0,
+                None,
+            ),
         ];
-        let cells = forecast_cells(&column(None, 0.0), &items, &[], &[], &[]);
-        let tax = cell(&cells, ForecastItemKind::Tax);
+        let months = grid_for(&[], &events, &items);
+        let cells = &months[1].cells;
+        let tax = cell(cells, ForecastItemKind::Tax);
         assert_eq!(tax.plan_items.len(), 1);
         assert_eq!(tax.figure, Some(-3_000.0));
-        let hs = cell(&cells, ForecastItemKind::HsDeposit);
+        let hs = cell(cells, ForecastItemKind::HsDeposit);
         assert_eq!(hs.plan_items[0].id, 2);
         assert_eq!(hs.figure, Some(-70_000.0));
     }
 
     #[test]
     fn cells_route_placements_by_bank() {
-        let placements = [
-            placement(1, Some("HS"), 130_000.0),
-            placement(2, Some("SC"), 55_000.0),
-            placement(3, None, 20_000.0),
+        let events = SuggestionEvents::default();
+        let deposits = [
+            placement_dep(1, Some("HS"), 130_000.0),
+            placement_dep(2, Some("SC"), 55_000.0),
+            placement_dep(3, None, 20_000.0),
         ];
-        let cells = forecast_cells(&column(None, 0.0), &[], &placements, &[], &[]);
-        let hs = cell(&cells, ForecastItemKind::HsDeposit);
+        let months = grid_for(&deposits, &events, &[]);
+        let cells = &months[1].cells;
+        let hs = cell(cells, ForecastItemKind::HsDeposit);
         assert_eq!(
             hs.placements
                 .iter()
@@ -950,7 +1054,7 @@ mod tests {
             vec![1]
         );
         assert_eq!(hs.figure, Some(-130_000.0));
-        let sc = cell(&cells, ForecastItemKind::ScDeposit);
+        let sc = cell(cells, ForecastItemKind::ScDeposit);
         assert_eq!(
             sc.placements
                 .iter()
@@ -959,42 +1063,69 @@ mod tests {
             vec![2, 3]
         );
         assert_eq!(sc.figure, Some(-75_000.0));
-        assert!(cell(&cells, ForecastItemKind::Stock).placements.is_empty());
+        assert!(cell(cells, ForecastItemKind::Stock).placements.is_empty());
     }
 
     #[test]
     fn bill_and_interest_cells_mirror_their_rows() {
-        let cells = forecast_cells(&column(Some(-2_158.0), 0.0), &[], &[], &[], &[]);
-        let bill = cell(&cells, ForecastItemKind::Bill);
+        let events = SuggestionEvents::default();
+        let months = grid_for(&[], &events, &[]);
+        let cells = &months[1].cells;
+        let bill = cell(cells, ForecastItemKind::Bill);
         assert_eq!(bill.figure, Some(-2_158.0));
         assert!(bill.plan_items.is_empty());
-        assert_eq!(cell(&cells, ForecastItemKind::Interest).figure, Some(0.0));
+        assert_eq!(cell(cells, ForecastItemKind::Interest).figure, Some(0.0));
 
-        let cells = forecast_cells(&column(None, 1_423.0), &[], &[], &[], &[]);
-        assert_eq!(cell(&cells, ForecastItemKind::Bill).figure, None);
+        // A 1423 coupon in Sep (a non-quarter month): interest mirrors the
+        // row, bill shows nothing.
+        let events = SuggestionEvents {
+            coupons: vec![SuggestionReceipt {
+                id: 1,
+                pay_date: day("2026-09-20"),
+                amount: Some(1_423.0),
+                label: "iBond".to_string(),
+                received: false,
+            }],
+            ..Default::default()
+        };
+        let months = grid_for(&[], &events, &[]);
+        let cells = &months[0].cells;
+        assert_eq!(cell(cells, ForecastItemKind::Bill).figure, None);
         assert_eq!(
-            cell(&cells, ForecastItemKind::Interest).figure,
+            cell(cells, ForecastItemKind::Interest).figure,
             Some(1_423.0)
         );
     }
 
     #[test]
     fn stock_cell_sums_plans_trades_and_transfers() {
-        let items = [stored_item(1, ForecastItemKind::Stock, -50_000.0)];
-        let trades = [ForecastTrade {
-            trade_id: 7,
+        let events = SuggestionEvents::default();
+        let items = [stored(
+            "2026-10-01",
+            1,
+            ForecastItemKind::Stock,
+            -50_000.0,
+            None,
+        )];
+        let trades = [SuggestionTrade {
+            id: 7,
+            date: day("2026-10-27"),
+            kind: TradeType::Buy,
+            total: 54_063.17,
             code: "匯豐".to_string(),
-            trade_type: TradeType::Buy,
-            trade_date: "2026-10-27".to_string(),
-            amount: -54_063.17,
         }];
-        let transfers = [ForecastIbkrTransfer {
-            transfer_id: 3,
-            transfer_date: "2026-10-03".to_string(),
-            amount: -50_000.0,
+        let transfers = [SuggestionIbkrTransfer {
+            id: 3,
+            date: day("2026-10-03"),
+            amount: 50_000.0,
         }];
-        let cells = forecast_cells(&column(None, 0.0), &items, &[], &trades, &transfers);
-        let stock = cell(&cells, ForecastItemKind::Stock);
+        let facts = facts_of(&items);
+        let mut input = forecast_input(&[], &events, &facts);
+        input.trades = &trades;
+        input.ibkr_transfers = &transfers;
+        let months = forecast_grid(&input);
+        let cells = &months[1].cells;
+        let stock = cell(cells, ForecastItemKind::Stock);
         assert_eq!(stock.trade_lines.len(), 1);
         assert_eq!(stock.ibkr_lines.len(), 1);
         assert!(approx_eq(stock.figure.unwrap(), -154_063.17));
@@ -1003,10 +1134,109 @@ mod tests {
             assert!(other.ibkr_lines.is_empty());
         }
 
-        let cells = forecast_cells(&column(None, 0.0), &[], &[], &[], &transfers);
+        let mut input = forecast_input(&[], &events, &[]);
+        input.ibkr_transfers = &transfers;
+        let months = forecast_grid(&input);
         assert_eq!(
-            cell(&cells, ForecastItemKind::Stock).figure,
+            cell(&months[1].cells, ForecastItemKind::Stock).figure,
             Some(-50_000.0)
         );
+    }
+
+    /// Every cell's figure is the sum of its own lines, and each column's
+    /// cash delta reconciles with those figures — the lines the grid shows
+    /// and the amounts it chains can never drift.
+    #[test]
+    fn forecast_grid_reconciles() {
+        let events = SuggestionEvents::default();
+        // One plan item of every kind, spread over Sep and Oct.
+        let items = vec![
+            plan("2026-09-01", ForecastItemKind::HsDeposit, -50_000.0, None),
+            plan("2026-09-01", ForecastItemKind::Tax, -3_000.0, None),
+            plan("2026-09-01", ForecastItemKind::Interest, 88.0, None),
+            plan("2026-10-01", ForecastItemKind::ScDeposit, -180_000.0, None),
+            plan("2026-10-01", ForecastItemKind::Stock, -50_000.0, None),
+            plan("2026-10-01", ForecastItemKind::Bill, -2_260.5, None),
+            plan("2026-10-01", ForecastItemKind::Other, -1_200.0, None),
+        ];
+        // An HS and an SC placement, one per column.
+        let deposits = vec![
+            SuggestionDeposit {
+                id: 1,
+                bank: Some("HS".to_string()),
+                start_date: Some(day("2026-09-12")),
+                ..dep_event("2027-09-05", 130_000.0, 0.0)
+            },
+            SuggestionDeposit {
+                id: 2,
+                bank: Some("渣打".to_string()),
+                start_date: Some(day("2026-10-12")),
+                ..dep_event("2027-10-05", 55_000.0, 0.0)
+            },
+        ];
+        let trades = vec![hk_trade("2026-10-27", TradeType::Buy, 54_063.17)];
+        let transfers = vec![SuggestionIbkrTransfer {
+            id: 1,
+            date: day("2026-09-05"),
+            amount: 50_000.0,
+        }];
+        let facts = facts_of(&items);
+        let mut input = forecast_input(&deposits, &events, &facts);
+        input.trades = &trades;
+        input.ibkr_transfers = &transfers;
+        let months = forecast_grid(&input);
+
+        // Sep: 23746.72 + 52700 − 8500 + 88 − 3000 (tax) − 50000 (hs plan)
+        //      − 130000 (HS placement) − 50000 (轉入) = −164965.28.
+        assert!(approx_eq(months[0].cash.unwrap(), -164_965.28));
+        // Oct: −164965.28 + 52700 − 8500 − 2260.5 (bill) − 51200 (stock + other
+        //      plans) − 180000 (sc plan) − 55000 (SC placement) − 54063.17
+        //      (trade) = −463288.95.
+        assert!(approx_eq(months[1].cash.unwrap(), -463_288.95));
+
+        for month in months.iter().take(2) {
+            let mut cell_figures = 0.0;
+            for cell in &month.cells {
+                if matches!(
+                    cell.kind,
+                    ForecastItemKind::Bill | ForecastItemKind::Interest
+                ) {
+                    continue;
+                }
+                let lists_nothing = cell.plan_items.is_empty()
+                    && cell.placements.is_empty()
+                    && cell.trade_lines.is_empty()
+                    && cell.ibkr_lines.is_empty();
+                if lists_nothing {
+                    assert_eq!(cell.figure, None, "{:?}", cell.kind);
+                    continue;
+                }
+                let lines: f64 = cell.plan_items.iter().map(|item| item.amount).sum::<f64>()
+                    + cell
+                        .placements
+                        .iter()
+                        .map(|placement| -placement.principal)
+                        .sum::<f64>()
+                    + cell.trade_lines.iter().map(|line| line.amount).sum::<f64>()
+                    + cell.ibkr_lines.iter().map(|line| line.amount).sum::<f64>();
+                assert!(
+                    approx_eq(cell.figure.unwrap(), lines),
+                    "{:?} figure {:?} != lines {lines}",
+                    cell.kind,
+                    cell.figure
+                );
+                cell_figures += cell.figure.unwrap();
+            }
+            assert!(approx_eq(
+                month.cash.unwrap() - month.start.unwrap(),
+                month.salary.unwrap_or(0.0)
+                    + month.spend.unwrap_or(0.0)
+                    + month.deposit_finish
+                    + month.interest
+                    + month.bill.unwrap_or(0.0)
+                    + month.deposit_return
+                    + cell_figures
+            ));
+        }
     }
 }

@@ -2,8 +2,9 @@ use sqlx::Row;
 use sqlx::SqlitePool;
 use sqlx::sqlite::SqliteRow;
 
+use crate::calc::ForecastItemFacts;
 use crate::models::{ForecastItem, ForecastItemKind};
-use crate::store::{StoreError, now_timestamp};
+use crate::store::{StoreError, now_timestamp, stored_date};
 
 const ITEM_COLUMNS: &str = "id, month, kind, amount, return_month, note, sort_order, created_at";
 
@@ -19,6 +20,21 @@ pub fn row_to_item(row: &SqliteRow) -> Result<ForecastItem, StoreError> {
         note: row.try_get("note")?,
         sort_order: row.try_get("sort_order")?,
         created_at: row.try_get("created_at")?,
+    })
+}
+
+/// A stored forecast item reduced to the facts the grid derivation needs;
+/// a stored month that will not parse is `Corrupt` — the parse-once rule as
+/// `store::deposits::facts_of`.
+pub fn facts_of(item: &ForecastItem) -> Result<ForecastItemFacts<'_>, StoreError> {
+    Ok(ForecastItemFacts {
+        item,
+        month: stored_date("month", &item.month)?,
+        return_month: item
+            .return_month
+            .as_deref()
+            .map(|value| stored_date("return_month", value))
+            .transpose()?,
     })
 }
 
@@ -120,4 +136,57 @@ pub async fn delete_item_in_tx(
         .execute(&mut *conn)
         .await?;
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn stored(month: &str, return_month: Option<&str>) -> ForecastItem {
+        ForecastItem {
+            id: 7,
+            month: month.to_string(),
+            kind: ForecastItemKind::HsDeposit,
+            amount: -55_000.0,
+            return_month: return_month.map(str::to_string),
+            note: None,
+            sort_order: 3,
+            created_at: "2026-01-01T00:00:00+08:00".to_string(),
+        }
+    }
+
+    #[test]
+    fn facts_of_parses_the_stored_months() {
+        let item = stored("2026-10-01", Some("2027-02-01"));
+        let facts = facts_of(&item).unwrap();
+        assert_eq!(facts.month.to_string(), "2026-10-01");
+        assert_eq!(facts.return_month.unwrap().to_string(), "2027-02-01");
+        assert_eq!(facts.item.id, 7);
+        assert_eq!(facts.item.kind, ForecastItemKind::HsDeposit);
+        assert_eq!(facts.item.amount, -55_000.0);
+    }
+
+    #[test]
+    fn facts_of_leaves_a_null_return_month_null() {
+        let item = stored("2026-10-01", None);
+        assert_eq!(facts_of(&item).unwrap().return_month, None);
+    }
+
+    #[test]
+    fn facts_of_rejects_a_bad_month() {
+        let item = stored("2026-13-01", None);
+        assert_eq!(
+            facts_of(&item).unwrap_err().to_string(),
+            "stored month 2026-13-01 is not valid"
+        );
+    }
+
+    #[test]
+    fn facts_of_rejects_a_bad_return_month() {
+        let item = stored("2026-10-01", Some("not-a-date"));
+        assert_eq!(
+            facts_of(&item).unwrap_err().to_string(),
+            "stored return_month not-a-date is not valid"
+        );
+    }
 }

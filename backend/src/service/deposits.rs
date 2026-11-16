@@ -9,9 +9,9 @@ use serde::Serialize;
 use sqlx::SqlitePool;
 
 use crate::calc::{
-    ActiveMonthBucket, ActiveTotals, BankRollup, DepositFacts, DepositInput, FieldError,
-    ValidatedDeposit, YearRollup, active_month_rollup, active_totals, bank_rollup, history_years,
-    validate_deposit, year_rollups,
+    ActiveMonthBucket, ActiveTotals, BankRollup, CandidateKey, DepositFacts, DepositInput,
+    FieldError, ValidatedDeposit, YearRollup, active_month_rollup, active_totals, bank_rollup,
+    dep_end, dep_start, history_years, validate_deposit, year_rollups,
 };
 use crate::models::{CashRole, Currency, Deposit, NewDeposit};
 use crate::service::{ServiceError, receipts};
@@ -60,19 +60,11 @@ async fn place(
         cash_accounts::add_amount(&mut *conn, account.id, -principal, &now).await?;
         deposits::set_debit(&mut *conn, id, account.id, principal, &now).await?;
     }
-    if let (Some(start_date), Some(principal)) = (&deposit.start_date, deposit.principal)
-        && principal != 0.0
+    if deposit.principal.is_some_and(|principal| principal != 0.0)
+        && let Some(event) = deposits::suggestion_event(&mut *conn, id).await?
+        && let Some(candidate) = dep_start(&event)
     {
-        let month = format!("{}-01", &start_date[..7]);
-        let label = deposit.label.as_deref().unwrap_or("定期");
-        months::record_receipt_item(
-            &mut *conn,
-            &month,
-            &format!("dep-start:{id}"),
-            label,
-            -principal,
-        )
-        .await?;
+        months::record_candidate(&mut *conn, &candidate).await?;
     }
     Ok(id)
 }
@@ -155,8 +147,6 @@ pub async fn receive(pool: &SqlitePool, id: i64, input: &ReceiveInput) -> Result
     // The credit and the dep-end item are always principal + (corrected)
     // interest — not user-entered.
     let amount = deposit.principal.unwrap_or(0.0) + input.interest.unwrap_or(0.0);
-    // The dep-end item lands in the end month, as the suggestion would have.
-    let month = format!("{}-01", &deposit.end_date[..7]);
     let now = now_timestamp();
     let mut tx = pool.begin().await.map_err(StoreError::from)?;
     let credit = receipts::credit(
@@ -177,8 +167,13 @@ pub async fn receive(pool: &SqlitePool, id: i64, input: &ReceiveInput) -> Result
         &now,
     )
     .await?;
-    let label = deposit.label.as_deref().unwrap_or("定期");
-    months::record_receipt_item(&mut tx, &month, &format!("dep-end:{id}"), label, amount).await?;
+    // The dep-end Candidate rebuilds from the stored row — same event shape
+    // the suggestion read.
+    if let Some(event) = deposits::suggestion_event(&mut tx, id).await?
+        && let Some(candidate) = dep_end(&event)
+    {
+        months::record_candidate(&mut tx, &candidate).await?;
+    }
     tx.commit().await?;
     Ok(())
 }
@@ -252,7 +247,7 @@ pub async fn delete(pool: &SqlitePool, id: i64) -> Result<(), ServiceError> {
     let mut tx = pool.begin().await.map_err(StoreError::from)?;
     let debit = deposits::load_debit(&mut tx, id).await?;
     receipts::refund(&mut tx, debit, &now).await?;
-    months::delete_auto_items_by_key(&mut tx, &format!("dep-start:{id}")).await?;
+    months::retire_candidate(&mut tx, &CandidateKey::DepStart(id)).await?;
     deposits::delete_deposit(&mut tx, id).await?;
     tx.commit().await?;
     Ok(())
@@ -261,6 +256,137 @@ pub async fn delete(pool: &SqlitePool, id: i64) -> Result<(), ServiceError> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use chrono::Datelike;
+    use std::collections::HashSet;
+
+    fn this_month() -> chrono::NaiveDate {
+        let today = today();
+        chrono::NaiveDate::from_ymd_opt(today.year(), today.month(), 1).unwrap()
+    }
+
+    /// The suggestion the month read shows for one key.
+    async fn suggestion_of(
+        pool: &SqlitePool,
+        month: chrono::NaiveDate,
+        auto_key: &str,
+    ) -> crate::models::MonthSuggestion {
+        let events = crate::service::months::load_events(pool, month, 0.0)
+            .await
+            .unwrap();
+        let suggestions = crate::calc::build_suggestions(
+            &month.to_string(),
+            &events,
+            &HashSet::new(),
+            &HashSet::new(),
+        );
+        suggestions
+            .into_iter()
+            .find(|suggestion| suggestion.auto_key == auto_key)
+            .unwrap_or_else(|| panic!("no suggestion {auto_key}"))
+    }
+
+    /// A deposit created while its start-month row is missing suggests
+    /// `dep-start:<id>`; one created while it exists stores the item — same
+    /// key, month, category, label and amount either way.
+    #[tokio::test]
+    async fn parity_dep_start() {
+        use crate::models::MonthItemCategory;
+        let pool = crate::db::connect_memory().await.expect("memory db");
+        let month = this_month();
+        let mut placement = body();
+        placement.label = Some("SC-parity".to_string());
+        placement.start_date = Some(format!("{}-13", &month.to_string()[..7]));
+
+        let id = create(&pool, &placement).await.unwrap();
+        assert_eq!(dep_start_amount(&pool, id).await, None);
+        let suggestion = suggestion_of(&pool, month, &format!("dep-start:{id}")).await;
+        assert_eq!(suggestion.category, MonthItemCategory::Adjustment);
+        assert_eq!(suggestion.label.as_deref(), Some("SC-parity"));
+        assert_eq!(suggestion.amount, -140000.0);
+
+        seed_months(&pool, &[&month.to_string()]).await;
+        let id = create(&pool, &placement).await.unwrap();
+        let (item_month, category, label, amount): (String, String, String, f64) = sqlx::query_as(
+            "SELECT month, category, label, amount FROM month_items WHERE auto_key = ?",
+        )
+        .bind(format!("dep-start:{id}"))
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+        assert_eq!(
+            (
+                item_month.as_str(),
+                category.as_str(),
+                label.as_str(),
+                amount
+            ),
+            (
+                month.to_string().as_str(),
+                "adjustment",
+                "SC-parity",
+                -140000.0
+            )
+        );
+    }
+
+    /// A pending dep-end suggestion and the item 收訖 stores agree — the
+    /// amount is principal + the received interest.
+    #[tokio::test]
+    async fn parity_dep_end() {
+        use crate::models::MonthItemCategory;
+        let pool = crate::db::connect_memory().await.expect("memory db");
+        let month = this_month();
+        seed_months(&pool, &[&month.to_string()]).await;
+        let id: i64 = sqlx::query_scalar(
+            "INSERT INTO deposits (label, bank, principal, interest, end_date, sort_order, \
+             created_at, updated_at) VALUES ('SC-parity', 'SC', 110000, 993, ?, 1, \
+             '2026-01-01T00:00:00', '2026-01-01T00:00:00') RETURNING id",
+        )
+        .bind(format!("{}-20", &month.to_string()[..7]))
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+
+        let suggestion = suggestion_of(&pool, month, &format!("dep-end:{id}")).await;
+        assert_eq!(suggestion.category, MonthItemCategory::Adjustment);
+        assert_eq!(suggestion.label.as_deref(), Some("SC-parity"));
+        assert_eq!(suggestion.amount, 110993.0);
+
+        receive(
+            &pool,
+            id,
+            &ReceiveInput {
+                received_at: today().to_string(),
+                interest: Some(993.0),
+                bank_in: false,
+                account_id: None,
+            },
+        )
+        .await
+        .unwrap();
+        let (item_month, category, label, amount): (String, String, String, f64) = sqlx::query_as(
+            "SELECT month, category, label, amount FROM month_items WHERE auto_key = ?",
+        )
+        .bind(format!("dep-end:{id}"))
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+        assert_eq!(
+            (
+                item_month.as_str(),
+                category.as_str(),
+                label.as_str(),
+                amount
+            ),
+            (
+                month.to_string().as_str(),
+                "adjustment",
+                "SC-parity",
+                110993.0
+            )
+        );
+    }
+
     fn body() -> NewDeposit {
         NewDeposit {
             label: Some("SC-1".to_string()),
@@ -388,6 +514,27 @@ mod tests {
         no_start.start_date = None;
         let id = create(&pool, &no_start).await.unwrap();
         assert_eq!(dep_start_amount(&pool, id).await, None);
+    }
+
+    /// An unlabeled deposit's dep-start item is stored as 定期 — the same
+    /// label the suggestion carries.
+    #[tokio::test]
+    async fn an_unlabeled_deposit_records_dep_start_as_定期() {
+        let pool = crate::db::connect_memory().await.expect("memory db");
+        seed_months(&pool, &["2099-10-01"]).await;
+        let mut unlabeled = body();
+        unlabeled.label = None;
+
+        let id = create(&pool, &unlabeled).await.unwrap();
+
+        let label: String = sqlx::query_scalar(
+            "SELECT label FROM month_items WHERE month = '2099-10-01' AND auto_key = ?",
+        )
+        .bind(format!("dep-start:{id}"))
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+        assert_eq!(label, "定期");
     }
 
     /// A deposit receive with `bank_in` and no explicit account credits the

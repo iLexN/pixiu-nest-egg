@@ -113,7 +113,9 @@ _Avoid_: refresh, snapshot
 
 **Candidate**: an event-derived month-item suggestion carrying a stable
 `auto_key` — accept stores it as an item, dismiss records the key so it never
-reappears. Suggested only for the current month and later.
+reappears. Suggested only for the current month and later. A Candidate
+carries its expected amount until 收訖; at 收訖 the stored item takes the
+received amount — what actually landed — whichever way it got stored.
 _Avoid_: suggestion, auto-item
 
 **Month book**: the assembled 月結 ledger for reads — all stored month rows,
@@ -198,6 +200,12 @@ _Avoid_: checking, savings
 **Cash account**: a stored money balance — role `bank` (HKD, e.g. HS/渣打) or
 `broker` (IBKR HKD/USD); the umbrella term covering 活期 and IBKR broker
 cash.
+
+**Cash movement**: a recorded change to a Cash account caused by a money
+event — a 收訖 credit, a 定期 placement debit, an IBKR 轉入, or a US trade
+settlement. Recorded with the event so it can be undone exactly; an undo
+skips an account that no longer exists.
+_Avoid_: transaction, transfer (that is 轉入), credit alone
 
 **IBKR**: the Interactive Brokers account — US stock value + HKD/USD broker
 cash + the 轉入 log.

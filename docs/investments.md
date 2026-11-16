@@ -52,9 +52,13 @@ BondsView (債券 → 總覽)
       → UPDATE cash_accounts amount += credited — the chosen account_id or
         the HKD default receipt account (不存入 sends bank_in: false)
       → INSERT the bond-end:<id> adjustment month_item for the maturity
-        month (an already-stored keyed item is refreshed to the credited
-        amount; skipped when the month has no row)
+        month at the credited amount — the principal when nothing was
+        credited (不存入 or no default account) — (an already-stored keyed
+        item is refreshed to the credited amount; skipped when the month
+        has no row, where the bond-end:<id> suggestion still surfaces)
 ```
+
+A bond maturing in the current month or later shows a `bond-end:<id>` suggestion (source `bond`) in its maturity month — at the principal before 收訖, at the credited amount after — until the keyed item is stored or dismissed. A bond 收訖'd before its maturity month's row exists therefore resurfaces as that suggestion once the row opens.
 
 Coupon receipt is per-coupon (each 付息日's `received_amount`); bond 收訖 covers only the principal return. The Active/已到期 split follows 收訖 — an unreceived bond stays in Active (flagged 已到期未收 once past maturity) until its principal is confirmed.
 
@@ -87,7 +91,7 @@ Coupon receipt is per-coupon (each 付息日's `received_amount`); bond 收訖 c
     month_item for the pay month
 ```
 
-Rate fields are entered as a percent (4); the API stores the fraction. Clearing `received_amount` flips the coupon back to pending, reverses the stored bank credit, and deletes the coupon item. A matured bond's coupons stay editable — the receipt history remains completable after maturity.
+Rate fields are entered as a percent (4); the API stores the fraction. Clearing `received_amount` flips the coupon back to pending, reverses the stored bank credit, and retires the `coupon:<id>` item in whichever month it sits — plus its dismissal tombstones — so a `pay_date` moved in the same PATCH cannot orphan the old-month item. A matured bond's coupons stay editable — the receipt history remains completable after maturity.
 
 ## Load the AIA view
 

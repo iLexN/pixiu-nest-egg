@@ -4,7 +4,7 @@
 
 use sqlx::SqlitePool;
 
-use crate::calc::FieldError;
+use crate::calc::{CandidateKey, FieldError};
 use crate::models::{CashRole, Currency, IbkrTransfer, NewIbkrTransfer};
 use crate::service::ServiceError;
 use crate::store::{StoreError, cash_accounts, ibkr as ibkr_store, months, now_timestamp, today};
@@ -87,14 +87,13 @@ pub async fn create_transfer(
     .await?;
     cash_accounts::add_amount(&mut tx, source.id, -body.amount_hkd, &now).await?;
     cash_accounts::add_amount(&mut tx, broker.id, body.amount_hkd, &now).await?;
-    months::record_receipt_item(
-        &mut tx,
-        &format!("{}-01", &transfer_date.to_string()[..7]),
-        &format!("ibkr:{id}"),
-        "IBKR 轉入",
-        -body.amount_hkd,
-    )
-    .await?;
+    // The ibkr:<id> Candidate rebuilds from the stored row — same event
+    // shape the suggestion read.
+    if let Some(event) = ibkr_store::transfer_event(&mut *tx, id).await?
+        && let Some(candidate) = crate::calc::ibkr(&event)
+    {
+        months::record_candidate(&mut tx, &candidate).await?;
+    }
     tx.commit().await?;
     ibkr_store::load_transfer(pool, id)
         .await
@@ -122,7 +121,7 @@ pub async fn delete_transfer(pool: &SqlitePool, id: i64) -> Result<(), ServiceEr
             }
         }
     }
-    months::delete_auto_items_by_key(&mut tx, &format!("ibkr:{id}")).await?;
+    months::retire_candidate(&mut tx, &CandidateKey::Ibkr(id)).await?;
     ibkr_store::delete_transfer(&mut tx, id).await?;
     tx.commit().await?;
     Ok(())
@@ -376,6 +375,51 @@ mod tests {
             .await
             .unwrap();
         assert_eq!(items, 0);
+    }
+
+    /// A transfer created while its month row is missing suggests
+    /// `ibkr:<id>`; one created while it exists stores the item — same key,
+    /// month, category, label and amount either way.
+    #[tokio::test]
+    async fn parity_ibkr() {
+        use crate::models::MonthItemCategory;
+        let pool = connect_memory().await.expect("memory db");
+        seed_bank(&pool, "HS", 200000.0).await;
+        let first = format!("{}-01", &today().to_string()[..7]);
+
+        let created = create_transfer(&pool, &body(50000.0)).await.unwrap();
+        assert_eq!(item_count(&pool, &format!("ibkr:{}", created.id)).await, 0);
+        let month = chrono::NaiveDate::parse_from_str(&first, "%Y-%m-%d").unwrap();
+        let events = crate::service::months::load_events(&pool, month, 0.0)
+            .await
+            .unwrap();
+        let suggestions = build_suggestions(&first, &events, &HashSet::new(), &HashSet::new());
+        let suggestion = suggestions
+            .iter()
+            .find(|suggestion| suggestion.auto_key == format!("ibkr:{}", created.id))
+            .expect("ibkr suggestion");
+        assert_eq!(suggestion.category, MonthItemCategory::Adjustment);
+        assert_eq!(suggestion.label.as_deref(), Some("IBKR 轉入"));
+        assert_eq!(suggestion.amount, -50000.0);
+
+        seed_month(&pool, &first).await;
+        let created = create_transfer(&pool, &body(50000.0)).await.unwrap();
+        let (item_month, category, label, amount): (String, String, String, f64) = sqlx::query_as(
+            "SELECT month, category, label, amount FROM month_items WHERE auto_key = ?",
+        )
+        .bind(format!("ibkr:{}", created.id))
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+        assert_eq!(
+            (
+                item_month.as_str(),
+                category.as_str(),
+                label.as_str(),
+                amount
+            ),
+            (first.as_str(), "adjustment", "IBKR 轉入", -50000.0)
+        );
     }
 
     /// A transfer dated in a month with no row records no item; once the

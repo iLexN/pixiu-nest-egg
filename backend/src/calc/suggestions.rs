@@ -2,7 +2,7 @@ use super::*;
 
 use std::collections::HashSet;
 
-use crate::models::{InterestComponent, MonthItemCategory, MonthSuggestion, TradeType};
+use crate::models::{InterestComponent, MonthSuggestion, TradeType};
 
 /// A deposit as a suggestion source: 定期 start/end events.
 #[derive(Debug, Clone)]
@@ -77,6 +77,9 @@ pub struct SuggestionEvents {
     pub trades: Vec<SuggestionTrade>,
     pub dividends: Vec<SuggestionReceipt>,
     pub coupons: Vec<SuggestionReceipt>,
+    /// Bonds whose maturity date falls in the month — the `bond-end:<id>`
+    /// suggestion source.
+    pub bonds: Vec<SuggestionBond>,
     pub aia_payments: Vec<SuggestionAiaPayment>,
     /// Cash-moving IBKR transfers (the `ibkr:<id>` suggestion source).
     pub ibkr_transfers: Vec<SuggestionIbkrTransfer>,
@@ -96,6 +99,8 @@ pub fn suggestions_enabled(month: &str, today: chrono::NaiveDate) -> bool {
 }
 
 /// The candidate items for one month, minus keys already stored or dismissed.
+/// Every event kind builds its Candidate through `calc::candidates` — the
+/// same definitions the write paths record through `record_candidate`.
 /// `month` is 'YYYY-MM-01'.
 pub fn build_suggestions(
     month: &str,
@@ -106,119 +111,50 @@ pub fn build_suggestions(
     let Some(month) = parse_month(month) else {
         return Vec::new();
     };
-    let mut suggestions = Vec::new();
+    let mut built = Vec::new();
 
     for deposit in &events.deposits {
-        if let Some(start_date) = deposit.start_date
-            && in_month(start_date, month)
-        {
-            suggestions.push(MonthSuggestion {
-                auto_key: format!("dep-start:{}", deposit.id),
-                category: MonthItemCategory::Adjustment,
-                label: deposit.label.clone(),
-                amount: -deposit.principal,
-                source: "deposit".to_string(),
-            });
-        }
-        if in_month(deposit.end_date, month) {
-            suggestions.push(MonthSuggestion {
-                auto_key: format!("dep-end:{}", deposit.id),
-                category: MonthItemCategory::Adjustment,
-                label: deposit.label.clone(),
-                amount: deposit.principal + deposit.interest,
-                source: "deposit".to_string(),
-            });
-        }
+        built.push(dep_start(deposit));
+        built.push(dep_end(deposit));
     }
-
-    for trade in &events.trades {
-        if in_month(trade.date, month) {
-            suggestions.push(MonthSuggestion {
-                auto_key: format!("trade:{}", trade.id),
-                category: MonthItemCategory::Adjustment,
-                label: Some(format!("{} {}", trade.code, trade.kind.as_str())),
-                amount: match trade.kind {
-                    TradeType::Buy => -trade.total,
-                    TradeType::Sell => trade.total,
-                },
-                source: "trade".to_string(),
-            });
-        }
+    for event in &events.trades {
+        built.push(trade(event));
     }
-
-    // Coupons and HK dividends suggest before 收訖 — like dep-end — at the
-    // received amount, else the expected/estimated figure. A receipt with no
-    // known amount (待定 coupon, estimate-less dividend) has nothing to
-    // suggest.
-    for dividend in &events.dividends {
-        if in_month(dividend.pay_date, month)
-            && let Some(amount) = dividend.amount
-        {
-            suggestions.push(MonthSuggestion {
-                auto_key: format!("div:{}", dividend.id),
-                category: MonthItemCategory::Adjustment,
-                label: Some(dividend.label.clone()),
-                amount,
-                source: "dividend".to_string(),
-            });
-        }
+    // Coupons and HK dividends suggest before 收訖 — like dep-end and
+    // bond-end — at the received amount, else the expected/estimated figure.
+    // A receipt with no known amount (待定 coupon, estimate-less dividend)
+    // has nothing to suggest.
+    for receipt in &events.dividends {
+        built.push(dividend(receipt));
     }
-
-    for coupon in &events.coupons {
-        if in_month(coupon.pay_date, month)
-            && let Some(amount) = coupon.amount
-        {
-            suggestions.push(MonthSuggestion {
-                auto_key: format!("coupon:{}", coupon.id),
-                category: MonthItemCategory::Adjustment,
-                label: Some(coupon.label.clone()),
-                amount,
-                source: "coupon".to_string(),
-            });
-        }
+    for receipt in &events.coupons {
+        built.push(coupon(receipt));
     }
-
+    for bond in &events.bonds {
+        built.push(bond_end(bond));
+    }
     // A cash-moving IBKR transfer suggests only while its month row missed
-    // the auto item — normally `record_receipt_item` stores `ibkr:<id>` at
+    // the auto item — normally `record_candidate` stores `ibkr:<id>` at
     // transfer time and the stored-key filter suppresses this candidate.
     for transfer in &events.ibkr_transfers {
-        if in_month(transfer.date, month) {
-            suggestions.push(MonthSuggestion {
-                auto_key: format!("ibkr:{}", transfer.id),
-                category: MonthItemCategory::Adjustment,
-                label: Some("IBKR 轉入".to_string()),
-                amount: -transfer.amount,
-                source: "ibkr".to_string(),
-            });
-        }
+        built.push(ibkr(transfer));
     }
-
     for payment in &events.aia_payments {
-        if in_month(payment.date, month)
-            && let Some(rate) = events.usd_hkd_rate
-        {
-            suggestions.push(MonthSuggestion {
-                auto_key: format!("aia-pay:{}", payment.id),
-                category: MonthItemCategory::ExtraSpend,
-                label: Some(payment.policy.clone()),
-                amount: payment.amount_usd * rate,
-                source: "aia".to_string(),
-            });
-        }
+        built.push(aia_pay(payment, events.usd_hkd_rate));
     }
+    built.push(pool_input(month, events.pool_input));
 
-    if events.pool_input > 0.0 {
-        suggestions.push(MonthSuggestion {
-            auto_key: "pool-input".to_string(),
-            category: MonthItemCategory::Adjustment,
-            label: Some("Irene + 開心 Pool".to_string()),
-            amount: events.pool_input,
-            source: "pool".to_string(),
-        });
-    }
-
-    suggestions
+    built
         .into_iter()
+        .flatten()
+        .filter(|candidate| candidate.month == month)
+        .map(|candidate| MonthSuggestion {
+            auto_key: candidate.key.to_string(),
+            category: candidate.category,
+            label: Some(candidate.label),
+            amount: candidate.amount,
+            source: candidate.key.source().to_string(),
+        })
         .filter(|suggestion| {
             !stored_keys.contains(&suggestion.auto_key)
                 && !dismissed_keys.contains(&suggestion.auto_key)
@@ -286,6 +222,7 @@ mod tests {
 
     use super::*;
     use crate::calc::test_helpers::*;
+    use crate::models::MonthItemCategory;
 
     fn suggestion_events() -> SuggestionEvents {
         SuggestionEvents {
@@ -373,6 +310,24 @@ mod tests {
                     received: false,
                 },
             ],
+            bonds: vec![
+                // Maturing in the month, not yet 收訖: suggests at principal.
+                SuggestionBond {
+                    id: 13,
+                    maturity_date: ym("2026-10-20"),
+                    principal: 50000.0,
+                    credited_amount: None,
+                    label: "iBond".to_string(),
+                },
+                // Matures out of the month: never suggests.
+                SuggestionBond {
+                    id: 14,
+                    maturity_date: ym("2026-11-20"),
+                    principal: 70000.0,
+                    credited_amount: None,
+                    label: "green bond".to_string(),
+                },
+            ],
             aia_payments: vec![SuggestionAiaPayment {
                 id: 7,
                 date: ym("2026-10-01"),
@@ -428,6 +383,35 @@ mod tests {
         assert_eq!(by_key["ibkr:11"].category, MonthItemCategory::Adjustment);
         assert!(!by_key.contains_key("ibkr:12"));
         assert!(approx_eq(by_key["pool-input"].amount, 4142.66));
+    }
+
+    /// A maturing bond suggests `bond-end:<id>` at its principal before
+    /// 收訖, then at the credited amount once one was banked.
+    #[test]
+    fn bond_end_suggests_at_principal_then_at_the_credited_amount() {
+        let events = suggestion_events();
+        let suggestions =
+            build_suggestions("2026-10-01", &events, &HashSet::new(), &HashSet::new());
+        let by_key: HashMap<&str, &MonthSuggestion> = suggestions
+            .iter()
+            .map(|suggestion| (suggestion.auto_key.as_str(), suggestion))
+            .collect();
+        let bond = by_key["bond-end:13"];
+        assert_eq!(bond.source, "bond");
+        assert_eq!(bond.category, MonthItemCategory::Adjustment);
+        assert_eq!(bond.label.as_deref(), Some("iBond"));
+        assert!(approx_eq(bond.amount, 50000.0));
+        assert!(!by_key.contains_key("bond-end:14"));
+
+        let mut events = suggestion_events();
+        events.bonds[0].credited_amount = Some(49500.0);
+        let suggestions =
+            build_suggestions("2026-10-01", &events, &HashSet::new(), &HashSet::new());
+        let bond = suggestions
+            .iter()
+            .find(|suggestion| suggestion.auto_key == "bond-end:13")
+            .expect("bond-end suggestion");
+        assert!(approx_eq(bond.amount, 49500.0));
     }
 
     #[test]

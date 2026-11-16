@@ -332,52 +332,71 @@ fn rows_to_facts(rows: &[SqliteRow]) -> Result<Vec<DepositFacts<'static>>, Store
     Ok(facts)
 }
 
+const SUGGESTION_DEPOSIT_COLUMNS: &str =
+    "id, label, bank, start_date, end_date, principal, interest, received_at";
+
+fn row_to_suggestion_deposit(row: &SqliteRow) -> Result<SuggestionDeposit, StoreError> {
+    let start_date: Option<String> = row.try_get("start_date")?;
+    let received_at: Option<String> = row.try_get("received_at")?;
+    let end_date: String = row.try_get("end_date")?;
+    Ok(SuggestionDeposit {
+        id: row.try_get("id")?,
+        start_date: start_date
+            .map(|date| stored_date("date", &date))
+            .transpose()?,
+        end_date: stored_date("date", &end_date)?,
+        principal: row.try_get::<Option<f64>, _>("principal")?.unwrap_or(0.0),
+        interest: row.try_get::<Option<f64>, _>("interest")?.unwrap_or(0.0),
+        label: row.try_get("label")?,
+        received: received_at.is_some(),
+        bank: row.try_get("bank")?,
+    })
+}
+
 /// Deposits whose start or end date falls in `range` (`[first, next)`); `None`
 /// loads them all — the derived 利息 needs every month at once.
 pub async fn suggestion_events(
     pool: &SqlitePool,
     range: Option<(String, String)>,
 ) -> Result<Vec<SuggestionDeposit>, StoreError> {
-    let rows =
-        match &range {
-            Some((first, next)) => sqlx::query(
-                "SELECT id, label, bank, start_date, end_date, principal, interest, received_at \
-                 FROM deposits \
+    let rows = match &range {
+        Some((first, next)) => {
+            sqlx::query(sqlx::AssertSqlSafe(format!(
+                "SELECT {SUGGESTION_DEPOSIT_COLUMNS} FROM deposits \
              WHERE (start_date IS NOT NULL AND start_date >= ? AND start_date < ?) \
-             OR (end_date >= ? AND end_date < ?)",
-            )
+             OR (end_date >= ? AND end_date < ?)"
+            )))
             .bind(first)
             .bind(next)
             .bind(first)
             .bind(next)
             .fetch_all(pool)
-            .await?,
-            None => sqlx::query(
-                "SELECT id, label, bank, start_date, end_date, principal, interest, received_at \
-                 FROM deposits",
-            )
+            .await?
+        }
+        None => {
+            sqlx::query(sqlx::AssertSqlSafe(format!(
+                "SELECT {SUGGESTION_DEPOSIT_COLUMNS} FROM deposits"
+            )))
             .fetch_all(pool)
-            .await?,
-        };
-    rows.iter()
-        .map(|row| {
-            let start_date: Option<String> = row.try_get("start_date")?;
-            let received_at: Option<String> = row.try_get("received_at")?;
-            let end_date: String = row.try_get("end_date")?;
-            Ok(SuggestionDeposit {
-                id: row.try_get("id")?,
-                start_date: start_date
-                    .map(|date| stored_date("date", &date))
-                    .transpose()?,
-                end_date: stored_date("date", &end_date)?,
-                principal: row.try_get::<Option<f64>, _>("principal")?.unwrap_or(0.0),
-                interest: row.try_get::<Option<f64>, _>("interest")?.unwrap_or(0.0),
-                label: row.try_get("label")?,
-                received: received_at.is_some(),
-                bank: row.try_get("bank")?,
-            })
-        })
-        .collect()
+            .await?
+        }
+    };
+    rows.iter().map(row_to_suggestion_deposit).collect()
+}
+
+/// One deposit as its suggestion event, inside the caller's transaction —
+/// the write paths rebuild their Candidate from the stored row.
+pub async fn suggestion_event(
+    conn: &mut sqlx::SqliteConnection,
+    id: i64,
+) -> Result<Option<SuggestionDeposit>, StoreError> {
+    let row = sqlx::query(sqlx::AssertSqlSafe(format!(
+        "SELECT {SUGGESTION_DEPOSIT_COLUMNS} FROM deposits WHERE id = ?"
+    )))
+    .bind(id)
+    .fetch_optional(&mut *conn)
+    .await?;
+    row.as_ref().map(row_to_suggestion_deposit).transpose()
 }
 
 /// Next deposit sort order, inside the caller's transaction (the 轉為定期

@@ -350,7 +350,7 @@ The snapshots are stored, not recomputed: buying more of the same stock later do
   → 同時更新現價 checked → a separate PATCH /api/stocks/:id sets manual_price
 ```
 
-The 現價 entered at receipt is stored on the dividend record only — and a blank 當時現價 snapshots the stock's current 現價 onto the record (a read, not a write). It does not update the stock's 現價 unless 同時更新現價 is checked, because the receipt price may be recorded on a different day than the price update. Clearing `received_price` on an already-received record stays cleared; clearing `received_amount` reverses the bank-in credit, deletes the `div:<id>` item, and clears `withholding_tax`.
+The 現價 entered at receipt is stored on the dividend record only — and a blank 當時現價 snapshots the stock's current 現價 onto the record (a read, not a write). It does not update the stock's 現價 unless 同時更新現價 is checked, because the receipt price may be recorded on a different day than the price update. Clearing `received_price` on an already-received record stays cleared; clearing `received_amount` reverses the bank-in credit, retires the `div:<id>` item in whichever month it sits plus its dismissal tombstones, and clears `withholding_tax`.
 
 ## Load the 股票 → 派息 view
 

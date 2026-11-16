@@ -7,7 +7,8 @@ use serde::Serialize;
 use sqlx::SqlitePool;
 
 use crate::calc::{
-    DividendFacts, DividendYearRollup, ValidatedDividend, dividend_year_rollups, history_years,
+    CandidateKey, DividendFacts, DividendYearRollup, ValidatedDividend, dividend,
+    dividend_year_rollups, history_years,
 };
 use crate::models::{Currency, Dividend, Market};
 use crate::service::{ServiceError, receipts};
@@ -70,8 +71,6 @@ pub struct DividendUpdate<'a> {
     pub note: Option<String>,
     /// The dividend's `received_amount` before the update.
     pub existing_received: Option<f64>,
-    /// The stock's 股票代碼, for the `div:<id>` month item's label.
-    pub code: &'a str,
     pub bank_in: bool,
     /// The chosen receipt account; `None` falls back to the currency default.
     pub account_id: Option<i64>,
@@ -96,12 +95,11 @@ pub async fn update(
     .await?;
 
     // 收訖: received_amount NULL → set banks the amount (HK → the chosen or
-    // default HKD account; US → the chosen or default USD/IBKR account) and,
-    // for HK, records the div:<id> month item. Clearing received_amount
-    // reverses through the recorded credit.
+    // default HKD account; US → the chosen or default USD/IBKR account) and
+    // records the div:<id> month item — the HK-only rule lives in the
+    // loader, which returns no event for US. Clearing received_amount
+    // reverses the credit and retires the item in whichever month it sits.
     let credited_before = dividends::credit(&mut tx, id).await?;
-    let auto_key = format!("div:{id}");
-    let month = format!("{}-01", &input.validated.pay_date[..7]);
     match (input.existing_received, input.validated.received_amount) {
         (None, Some(amount)) => {
             let credit = receipts::credit(
@@ -114,18 +112,238 @@ pub async fn update(
             )
             .await?;
             dividends::set_credit(&mut tx, id, credit).await?;
-            // US dividends land in IBKR, not 活期 — no adjustment item.
-            if input.market == Market::Hk {
-                months::record_receipt_item(&mut tx, &month, &auto_key, input.code, amount).await?;
+            if let Some(event) = dividends::suggestion_receipt(&mut tx, id).await?
+                && let Some(candidate) = dividend(&event)
+            {
+                months::record_candidate(&mut tx, &candidate).await?;
             }
         }
         (Some(_), None) => {
             receipts::reverse(&mut tx, credited_before, &now).await?;
             dividends::set_credit(&mut tx, id, None).await?;
-            months::delete_auto_item(&mut tx, &month, &auto_key).await?;
+            months::retire_candidate(&mut tx, &CandidateKey::Div(id)).await?;
         }
         _ => {}
     }
     tx.commit().await?;
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::calc::ValidatedDividend;
+    use crate::db::connect_memory;
+    use crate::models::MonthItemCategory;
+    use std::collections::HashSet;
+
+    fn this_month() -> chrono::NaiveDate {
+        let today = today();
+        chrono::NaiveDate::from_ymd_opt(today.year(), today.month(), 1).unwrap()
+    }
+
+    async fn seed_month(pool: &SqlitePool, month: chrono::NaiveDate) {
+        sqlx::query("INSERT INTO month_stats (month, created_at, updated_at) VALUES (?, ?, ?)")
+            .bind(month.to_string())
+            .bind("2026-01-01T00:00:00")
+            .bind("2026-01-01T00:00:00")
+            .execute(pool)
+            .await
+            .unwrap();
+    }
+
+    async fn seed_stock(pool: &SqlitePool, market: &str, code: &str) -> i64 {
+        sqlx::query_scalar("INSERT INTO stocks (market, code) VALUES (?, ?) RETURNING id")
+            .bind(market)
+            .bind(code)
+            .fetch_one(pool)
+            .await
+            .unwrap()
+    }
+
+    async fn seed_dividend(
+        pool: &SqlitePool,
+        stock_id: i64,
+        pay_date: &str,
+        estimated: Option<f64>,
+    ) -> i64 {
+        sqlx::query_scalar(
+            "INSERT INTO dividends (stock_id, pay_date, estimated_amount, created_at, updated_at) \
+             VALUES (?, ?, ?, '2026-01-01T00:00:00', '2026-01-01T00:00:00') RETURNING id",
+        )
+        .bind(stock_id)
+        .bind(pay_date)
+        .bind(estimated)
+        .fetch_one(pool)
+        .await
+        .unwrap()
+    }
+
+    fn validated(
+        pay_date: &str,
+        estimated: Option<f64>,
+        received: Option<f64>,
+    ) -> ValidatedDividend {
+        ValidatedDividend {
+            pay_date: pay_date.to_string(),
+            per_share: None,
+            shares_held: None,
+            buy_cost: None,
+            estimated_amount: estimated,
+            received_amount: received,
+            received_price: None,
+            withholding_tax: None,
+        }
+    }
+
+    /// The suggestion seen before 收訖 and the item the 收訖 stores agree on
+    /// key, month, category and label, with the amount at the 收訖 figure.
+    #[tokio::test]
+    async fn parity_div() {
+        let pool = connect_memory().await.expect("memory db");
+        let month = this_month();
+        seed_month(&pool, month).await;
+        let stock_id = seed_stock(&pool, "HK", "中國銀行").await;
+        let pay_date = format!("{}-05", &month.to_string()[..7]);
+        let id = seed_dividend(&pool, stock_id, &pay_date, Some(500.0)).await;
+
+        let events = crate::service::months::load_events(&pool, month, 0.0)
+            .await
+            .unwrap();
+        let suggestions = crate::calc::build_suggestions(
+            &month.to_string(),
+            &events,
+            &HashSet::new(),
+            &HashSet::new(),
+        );
+        let suggestion = suggestions
+            .iter()
+            .find(|suggestion| suggestion.auto_key == format!("div:{id}"))
+            .expect("div suggestion");
+        assert_eq!(suggestion.category, MonthItemCategory::Adjustment);
+        assert_eq!(suggestion.label.as_deref(), Some("中國銀行"));
+        assert_eq!(suggestion.amount, 500.0);
+
+        let received = validated(&pay_date, Some(500.0), Some(500.0));
+        update(
+            &pool,
+            id,
+            &DividendUpdate {
+                stock_id,
+                market: Market::Hk,
+                validated: &received,
+                note: None,
+                existing_received: None,
+                bank_in: false,
+                account_id: None,
+            },
+        )
+        .await
+        .unwrap();
+
+        let (item_month, category, label, amount): (String, String, String, f64) = sqlx::query_as(
+            "SELECT month, category, label, amount FROM month_items WHERE auto_key = ?",
+        )
+        .bind(format!("div:{id}"))
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+        assert_eq!(
+            (
+                item_month.as_str(),
+                category.as_str(),
+                label.as_str(),
+                amount
+            ),
+            (month.to_string().as_str(), "adjustment", "中國銀行", 500.0)
+        );
+    }
+
+    /// One PATCH moving `pay_date` and clearing `received_amount` retires the
+    /// `div:<id>` item in whichever month it sits; a US dividend never
+    /// records one.
+    #[tokio::test]
+    async fn clearing_after_the_pay_date_moved_leaves_no_item() {
+        let pool = connect_memory().await.expect("memory db");
+        let month = this_month();
+        let next = month + chrono::Months::new(1);
+        seed_month(&pool, month).await;
+        seed_month(&pool, next).await;
+        let stock_id = seed_stock(&pool, "HK", "中國銀行").await;
+        let pay_date = format!("{}-05", &month.to_string()[..7]);
+        let id = seed_dividend(&pool, stock_id, &pay_date, Some(500.0)).await;
+
+        let received = validated(&pay_date, Some(500.0), Some(500.0));
+        update(
+            &pool,
+            id,
+            &DividendUpdate {
+                stock_id,
+                market: Market::Hk,
+                validated: &received,
+                note: None,
+                existing_received: None,
+                bank_in: false,
+                account_id: None,
+            },
+        )
+        .await
+        .unwrap();
+        let item_month: String =
+            sqlx::query_scalar("SELECT month FROM month_items WHERE auto_key = ?")
+                .bind(format!("div:{id}"))
+                .fetch_one(&pool)
+                .await
+                .unwrap();
+        assert_eq!(item_month, month.to_string());
+
+        let moved = validated(&format!("{}-20", &next.to_string()[..7]), Some(500.0), None);
+        update(
+            &pool,
+            id,
+            &DividendUpdate {
+                stock_id,
+                market: Market::Hk,
+                validated: &moved,
+                note: None,
+                existing_received: Some(500.0),
+                bank_in: false,
+                account_id: None,
+            },
+        )
+        .await
+        .unwrap();
+        let count: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM month_items WHERE auto_key = ?")
+            .bind(format!("div:{id}"))
+            .fetch_one(&pool)
+            .await
+            .unwrap();
+        assert_eq!(count, 0);
+
+        // A US dividend 收訖 still records no item.
+        let us_stock = seed_stock(&pool, "US", "AAPL").await;
+        let us_id = seed_dividend(&pool, us_stock, &pay_date, Some(200.0)).await;
+        let received = validated(&pay_date, Some(200.0), Some(200.0));
+        update(
+            &pool,
+            us_id,
+            &DividendUpdate {
+                stock_id: us_stock,
+                market: Market::Us,
+                validated: &received,
+                note: None,
+                existing_received: None,
+                bank_in: false,
+                account_id: None,
+            },
+        )
+        .await
+        .unwrap();
+        let count: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM month_items WHERE auto_key = ?")
+            .bind(format!("div:{us_id}"))
+            .fetch_one(&pool)
+            .await
+            .unwrap();
+        assert_eq!(count, 0);
+    }
 }

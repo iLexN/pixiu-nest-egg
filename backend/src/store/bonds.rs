@@ -3,8 +3,8 @@ use sqlx::SqlitePool;
 use sqlx::sqlite::SqliteRow;
 
 use crate::calc::{
-    BondYearFacts, SuggestionReceipt, ValidatedBond, ValidatedCoupon, bond_active, coupon_expected,
-    coupon_status, coupon_variance,
+    BondYearFacts, SuggestionBond, SuggestionReceipt, ValidatedBond, ValidatedCoupon, bond_active,
+    coupon_expected, coupon_status, coupon_variance,
 };
 use crate::models::{Bond, BondCoupon, BondStatus, NewBond, NewBondCoupon};
 use crate::store::{Credit, StoreError, now_timestamp, today};
@@ -380,15 +380,79 @@ pub async fn load_coupon(pool: &SqlitePool, id: i64) -> Result<BondCoupon, Store
     row_to_coupon(&row)
 }
 
+fn row_to_suggestion_bond(row: &SqliteRow) -> Result<SuggestionBond, StoreError> {
+    let maturity_date: String = row.try_get("maturity_date")?;
+    Ok(SuggestionBond {
+        id: row.try_get("id")?,
+        maturity_date: chrono::NaiveDate::parse_from_str(&maturity_date, "%Y-%m-%d").map_err(
+            |_| StoreError::Corrupt(format!("stored maturity_date {maturity_date} is not valid")),
+        )?,
+        principal: row.try_get("principal")?,
+        credited_amount: row.try_get("credited_amount")?,
+        label: row.try_get("label")?,
+    })
+}
+
+/// Bonds maturing in `range` (`[first, next)`), or all of them when `None`
+/// — the `bond-end:<id>` suggestion source. `credited_amount` carries the
+/// 收訖 figure once banked.
+pub async fn bond_end_events(
+    pool: &SqlitePool,
+    range: Option<(String, String)>,
+) -> Result<Vec<SuggestionBond>, StoreError> {
+    let mut sql =
+        "SELECT id, label, principal, maturity_date, credited_amount FROM bonds".to_string();
+    if range.is_some() {
+        sql.push_str(" WHERE maturity_date >= ? AND maturity_date < ?");
+    }
+    let mut query = sqlx::query(sqlx::AssertSqlSafe(sql));
+    if let Some((first, next)) = &range {
+        query = query.bind(first).bind(next);
+    }
+    let rows = query.fetch_all(pool).await?;
+    rows.iter().map(row_to_suggestion_bond).collect()
+}
+
+/// One bond as its bond-end event, inside the caller's transaction — the
+/// 收訖 write rebuilds its Candidate from the stored row.
+pub async fn bond_end_event(
+    conn: &mut sqlx::SqliteConnection,
+    id: i64,
+) -> Result<Option<SuggestionBond>, StoreError> {
+    let row = sqlx::query(
+        "SELECT id, label, principal, maturity_date, credited_amount FROM bonds WHERE id = ?",
+    )
+    .bind(id)
+    .fetch_optional(&mut *conn)
+    .await?;
+    row.as_ref().map(row_to_suggestion_bond).transpose()
+}
+
+const COUPON_RECEIPT_SELECT: &str = "SELECT c.id, c.pay_date, c.received_amount, c.per_10k, \
+     b.principal, b.label FROM bond_coupons c JOIN bonds b ON b.id = c.bond_id";
+
+fn row_to_coupon_receipt(row: &SqliteRow) -> Result<SuggestionReceipt, StoreError> {
+    let received_amount: Option<f64> = row.try_get("received_amount")?;
+    let per_10k: Option<f64> = row.try_get("per_10k")?;
+    let principal: f64 = row.try_get("principal")?;
+    let pay_date: String = row.try_get("pay_date")?;
+    Ok(SuggestionReceipt {
+        id: row.try_get("id")?,
+        pay_date: chrono::NaiveDate::parse_from_str(&pay_date, "%Y-%m-%d")
+            .map_err(|_| StoreError::Corrupt(format!("stored date {pay_date} is not valid")))?,
+        amount: received_amount.or(crate::calc::coupon_expected(per_10k, principal)),
+        label: row.try_get("label")?,
+        received: received_amount.is_some(),
+    })
+}
+
 /// Bond coupons paid in `range`, or all of them when `None` — received ones
 /// carry their amount, pending ones the expected figure (None while 待定).
 pub async fn suggestion_receipts(
     pool: &SqlitePool,
     range: Option<(String, String)>,
 ) -> Result<Vec<SuggestionReceipt>, StoreError> {
-    let mut sql = "SELECT c.id, c.pay_date, c.received_amount, c.per_10k, b.principal, b.label \
-         FROM bond_coupons c JOIN bonds b ON b.id = c.bond_id"
-        .to_string();
+    let mut sql = COUPON_RECEIPT_SELECT.to_string();
     if range.is_some() {
         sql.push_str(" WHERE c.pay_date >= ? AND c.pay_date < ?");
     }
@@ -397,23 +461,22 @@ pub async fn suggestion_receipts(
         query = query.bind(first).bind(next);
     }
     let rows = query.fetch_all(pool).await?;
-    rows.iter()
-        .map(|row| {
-            let received_amount: Option<f64> = row.try_get("received_amount")?;
-            let per_10k: Option<f64> = row.try_get("per_10k")?;
-            let principal: f64 = row.try_get("principal")?;
-            let pay_date: String = row.try_get("pay_date")?;
-            Ok(SuggestionReceipt {
-                id: row.try_get("id")?,
-                pay_date: chrono::NaiveDate::parse_from_str(&pay_date, "%Y-%m-%d").map_err(
-                    |_| StoreError::Corrupt(format!("stored date {pay_date} is not valid")),
-                )?,
-                amount: received_amount.or(crate::calc::coupon_expected(per_10k, principal)),
-                label: row.try_get("label")?,
-                received: received_amount.is_some(),
-            })
-        })
-        .collect()
+    rows.iter().map(row_to_coupon_receipt).collect()
+}
+
+/// One coupon as its suggestion event, inside the caller's transaction — the
+/// 收訖 write rebuilds its Candidate from the stored row.
+pub async fn coupon_event(
+    conn: &mut sqlx::SqliteConnection,
+    id: i64,
+) -> Result<Option<SuggestionReceipt>, StoreError> {
+    let row = sqlx::query(sqlx::AssertSqlSafe(format!(
+        "{COUPON_RECEIPT_SELECT} WHERE c.id = ?"
+    )))
+    .bind(id)
+    .fetch_optional(&mut *conn)
+    .await?;
+    row.as_ref().map(row_to_coupon_receipt).transpose()
 }
 
 /// Bonds reduced to what the year review needs: principal, maturity, the

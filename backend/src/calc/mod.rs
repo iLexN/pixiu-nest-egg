@@ -6,6 +6,7 @@
 
 mod aia;
 mod bonds;
+mod candidates;
 mod deposits;
 mod dividends;
 mod forecast;
@@ -19,6 +20,7 @@ mod yearly;
 
 pub use aia::*;
 pub use bonds::*;
+pub use candidates::*;
 pub use deposits::*;
 pub use dividends::*;
 pub use forecast::*;

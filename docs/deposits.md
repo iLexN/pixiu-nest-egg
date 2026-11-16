@@ -19,9 +19,10 @@ DepositForm (the 扣自 select lists the HKD bank accounts + 不扣活期,
     debited_account_id/debited_amount; skipped for an auto-received insert
     (past end_date — a historic entry never moves today's balance)
   → INSERT the dep-start:<id> adjustment month_item of −principal for the
-    start month (skipped when the deposit has no start_date or the start
-    month has no row — the dep-start suggestion still surfaces then; an
-    already-stored keyed item is refreshed to the new amount)
+    start month, labeled with the deposit's label or 定期 when unlabeled
+    (skipped when the deposit has no start_date or the start month has no
+    row — the dep-start suggestion still surfaces then; an already-stored
+    keyed item is refreshed to the new amount)
   → GET /api/deposits?year=... reloads the history list
 ```
 

@@ -462,8 +462,46 @@ pub async fn remove_asset(
 mod tests {
     use super::*;
     use crate::db::connect_memory;
-    use crate::models::{AppSettingsPatch, ManualAssetLiquidity};
+    use crate::models::{AppSettingsPatch, ManualAssetLiquidity, MonthItemCategory};
     use crate::routes::settings;
+
+    /// A bond maturing in the current month suggests its `bond-end:<id>`
+    /// adjustment through the month read.
+    #[tokio::test]
+    async fn a_maturing_bond_suggests_bond_end() {
+        let pool = connect_memory().await.expect("memory db");
+        let this_month = today().format("%Y-%m").to_string();
+        sqlx::query("INSERT INTO month_stats (month, created_at, updated_at) VALUES (?, ?, ?)")
+            .bind(format!("{this_month}-01"))
+            .bind("2026-01-01T00:00:00")
+            .bind("2026-01-01T00:00:00")
+            .execute(&pool)
+            .await
+            .unwrap();
+        let bond: i64 = sqlx::query_scalar(
+            "INSERT INTO bonds (label, issue_no, principal, maturity_date, sort_order, \
+             created_at, updated_at) VALUES ('iBond', 'x', 50000, ?, 1, \
+             '2026-01-01T00:00:00', '2026-01-01T00:00:00') RETURNING id",
+        )
+        .bind(format!("{this_month}-15"))
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+
+        let response = show(State(AppState { pool }), Path(this_month))
+            .await
+            .expect("show")
+            .0;
+        let suggestion = response
+            .suggestions
+            .iter()
+            .find(|suggestion| suggestion.auto_key == format!("bond-end:{bond}"))
+            .expect("bond-end suggestion");
+        assert_eq!(suggestion.source, "bond");
+        assert_eq!(suggestion.category, MonthItemCategory::Adjustment);
+        assert_eq!(suggestion.label.as_deref(), Some("iBond"));
+        assert_eq!(suggestion.amount, 50000.0);
+    }
 
     #[tokio::test]
     async fn create_asset_defaults_liquidity_to_long() {

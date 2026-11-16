@@ -3,24 +3,11 @@
 //! plan-row cells — the whole grid is derived on read; only
 //! `forecast_items` is stored.
 
-use chrono::Datelike;
 use sqlx::SqlitePool;
 
-use crate::calc::{self, ForecastItemFacts};
-use crate::models::{
-    ForecastIbkrTransfer, ForecastItem, ForecastMonth, ForecastPlacement, ForecastResponse,
-    ForecastTrade,
-};
+use crate::calc;
+use crate::models::ForecastResponse;
 use crate::store::StoreError;
-
-fn parse_stored_ym(value: &str, field: &str) -> Result<chrono::NaiveDate, StoreError> {
-    chrono::NaiveDate::parse_from_str(value, "%Y-%m-%d")
-        .map_err(|_| StoreError::Corrupt(format!("stored {field} {value} is not valid")))
-}
-
-fn same_month(date: chrono::NaiveDate, month: chrono::NaiveDate) -> bool {
-    date.year() == month.year() && date.month() == month.month()
-}
 
 /// The seven-month 預測 grid, fully derived on read. A stored item month
 /// that does not parse is `Err(Corrupt)`.
@@ -61,21 +48,12 @@ pub async fn build(pool: &SqlitePool) -> Result<ForecastResponse, StoreError> {
             .await?;
 
     let items = crate::store::forecast::load_all_items(pool).await?;
-    let mut facts = Vec::with_capacity(items.len());
-    for item in &items {
-        facts.push(ForecastItemFacts {
-            month: parse_stored_ym(&item.month, "month")?,
-            kind: item.kind,
-            amount: item.amount,
-            return_month: item
-                .return_month
-                .as_deref()
-                .map(|value| parse_stored_ym(value, "return_month"))
-                .transpose()?,
-        });
-    }
+    let facts = items
+        .iter()
+        .map(crate::store::forecast::facts_of)
+        .collect::<Result<Vec<_>, _>>()?;
 
-    let derived = calc::forecast_months(&calc::ForecastInput {
+    let months = calc::forecast_grid(&calc::ForecastInput {
         first_month: first,
         start,
         salary,
@@ -90,85 +68,6 @@ pub async fn build(pool: &SqlitePool) -> Result<ForecastResponse, StoreError> {
         trades: &trades,
         ibkr_transfers: &ibkr_transfers,
     });
-    let months = derived
-        .iter()
-        .map(|column| {
-            let month = column.month.to_string();
-            let plan_items: Vec<ForecastItem> = items
-                .iter()
-                .filter(|item| item.month == month)
-                .cloned()
-                .collect();
-            let placements: Vec<ForecastPlacement> = events
-                .deposits
-                .iter()
-                .filter(|deposit| {
-                    deposit
-                        .start_date
-                        .is_some_and(|start_date| same_month(start_date, column.month))
-                })
-                .map(|deposit| ForecastPlacement {
-                    deposit_id: deposit.id,
-                    label: deposit.label.clone(),
-                    bank: deposit.bank.clone(),
-                    principal: deposit.principal,
-                    start_date: deposit.start_date.expect("filtered to Some").to_string(),
-                })
-                .collect();
-            let mut trade_lines: Vec<ForecastTrade> = trades
-                .iter()
-                .filter(|trade| same_month(trade.date, column.month))
-                .map(|trade| ForecastTrade {
-                    trade_id: trade.id,
-                    code: trade.code.clone(),
-                    trade_type: trade.kind,
-                    trade_date: trade.date.to_string(),
-                    amount: calc::trade_amount(trade),
-                })
-                .collect();
-            trade_lines.sort_by(|a, b| {
-                a.trade_date
-                    .cmp(&b.trade_date)
-                    .then(a.trade_id.cmp(&b.trade_id))
-            });
-            let mut ibkr_lines: Vec<ForecastIbkrTransfer> = ibkr_transfers
-                .iter()
-                .filter(|transfer| same_month(transfer.date, column.month))
-                .map(|transfer| ForecastIbkrTransfer {
-                    transfer_id: transfer.id,
-                    transfer_date: transfer.date.to_string(),
-                    amount: -transfer.amount,
-                })
-                .collect();
-            ibkr_lines.sort_by(|a, b| {
-                a.transfer_date
-                    .cmp(&b.transfer_date)
-                    .then(a.transfer_id.cmp(&b.transfer_id))
-            });
-            ForecastMonth {
-                interest_components: calc::interest_components(&month, &events),
-                cells: calc::forecast_cells(
-                    column,
-                    &plan_items,
-                    &placements,
-                    &trade_lines,
-                    &ibkr_lines,
-                ),
-                month,
-                start: column.start,
-                salary,
-                spend,
-                deposit_finish: column.deposit_finish,
-                interest: column.interest,
-                bill: column.bill,
-                deposit_return: column.deposit_return,
-                cash: column.cash,
-                locked: column.locked,
-                semi_liquid: column.semi_liquid,
-                ref_check: column.ref_check,
-            }
-        })
-        .collect();
     Ok(ForecastResponse {
         bill_amount,
         months,
@@ -179,7 +78,7 @@ pub async fn build(pool: &SqlitePool) -> Result<ForecastResponse, StoreError> {
 mod tests {
     use super::*;
     use crate::db::connect_memory;
-    use crate::models::ForecastItemKind;
+    use crate::models::{ForecastIbkrTransfer, ForecastItemKind, ForecastMonth};
 
     fn stock_cell(month: &ForecastMonth) -> &crate::models::ForecastCell {
         month

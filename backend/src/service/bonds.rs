@@ -1,7 +1,7 @@
 use serde::Serialize;
 use sqlx::SqlitePool;
 
-use crate::calc::ValidatedCoupon;
+use crate::calc::{CandidateKey, ValidatedCoupon, bond_end, coupon};
 use crate::models::{Bond, BondCoupon, BondStatus, Currency};
 use crate::service::{ServiceError, receipts};
 use crate::store::{StoreError, bonds, months, now_timestamp, today};
@@ -123,7 +123,8 @@ pub struct ReceiveInput {
 
 /// 收訖 the bond's principal return — one transaction: mark received,
 /// credit the amount into a cash account, and record the maturity month's
-/// `bond-end` item. `Err(Conflict)` on an already-received bond.
+/// `bond-end` item at the credited amount (the principal when nothing was
+/// credited). `Err(Conflict)` on an already-received bond.
 pub async fn receive(pool: &SqlitePool, id: i64, input: &ReceiveInput) -> Result<(), ServiceError> {
     let bond = bonds::load_bond(pool, id).await?;
     if bond.received_at.is_some() {
@@ -131,9 +132,6 @@ pub async fn receive(pool: &SqlitePool, id: i64, input: &ReceiveInput) -> Result
             "bond {id} is already received"
         )));
     }
-    // The bond-end item lands in the maturity month and carries the
-    // principal, as the suggestion would have.
-    let month = format!("{}-01", &bond.maturity_date[..7]);
     let now = now_timestamp();
     let mut tx = pool.begin().await.map_err(StoreError::from)?;
     let credit = receipts::credit(
@@ -146,14 +144,13 @@ pub async fn receive(pool: &SqlitePool, id: i64, input: &ReceiveInput) -> Result
     )
     .await?;
     bonds::mark_received(&mut tx, id, &input.received_at, credit, &now).await?;
-    months::record_receipt_item(
-        &mut tx,
-        &month,
-        &format!("bond-end:{id}"),
-        &bond.label,
-        bond.principal,
-    )
-    .await?;
+    // The bond-end Candidate rebuilds from the stored row — same event shape
+    // the suggestion read.
+    if let Some(event) = bonds::bond_end_event(&mut tx, id).await?
+        && let Some(candidate) = bond_end(&event)
+    {
+        months::record_candidate(&mut tx, &candidate).await?;
+    }
     tx.commit().await?;
     Ok(())
 }
@@ -192,10 +189,8 @@ pub async fn update_coupon(
 
     // 收訖: received_amount NULL → set banks the amount into the chosen or
     // default HKD account and records the coupon:<id> month item; clearing it
-    // reverses both through the recorded credit.
+    // reverses the credit and retires the item in whichever month it sits.
     let credited_before = bonds::coupon_credit(&mut tx, id).await?;
-    let auto_key = format!("coupon:{id}");
-    let month = format!("{}-01", &input.validated.pay_date[..7]);
     match (input.existing_received, input.validated.received_amount) {
         (None, Some(amount)) => {
             let credit = receipts::credit(
@@ -208,13 +203,16 @@ pub async fn update_coupon(
             )
             .await?;
             bonds::set_coupon_credit(&mut tx, id, credit).await?;
-            let bond_label = bonds::bond_label(&mut tx, input.bond_id).await?;
-            months::record_receipt_item(&mut tx, &month, &auto_key, &bond_label, amount).await?;
+            if let Some(event) = bonds::coupon_event(&mut tx, id).await?
+                && let Some(candidate) = coupon(&event)
+            {
+                months::record_candidate(&mut tx, &candidate).await?;
+            }
         }
         (Some(_), None) => {
             receipts::reverse(&mut tx, credited_before, &now).await?;
             bonds::set_coupon_credit(&mut tx, id, None).await?;
-            months::delete_auto_item(&mut tx, &month, &auto_key).await?;
+            months::retire_candidate(&mut tx, &CandidateKey::Coupon(id)).await?;
         }
         _ => {}
     }
@@ -226,6 +224,161 @@ pub async fn update_coupon(
 mod tests {
     use super::*;
     use crate::db::connect_memory;
+    use chrono::Datelike;
+    use std::collections::HashSet;
+
+    fn this_month() -> chrono::NaiveDate {
+        let today = today();
+        chrono::NaiveDate::from_ymd_opt(today.year(), today.month(), 1).unwrap()
+    }
+
+    /// The suggestion the month read shows for one key.
+    async fn suggestion_of(
+        pool: &SqlitePool,
+        month: chrono::NaiveDate,
+        auto_key: &str,
+    ) -> crate::models::MonthSuggestion {
+        let events = crate::service::months::load_events(pool, month, 0.0)
+            .await
+            .unwrap();
+        let suggestions = crate::calc::build_suggestions(
+            &month.to_string(),
+            &events,
+            &HashSet::new(),
+            &HashSet::new(),
+        );
+        suggestions
+            .into_iter()
+            .find(|suggestion| suggestion.auto_key == auto_key)
+            .unwrap_or_else(|| panic!("no suggestion {auto_key}"))
+    }
+
+    /// A maturing bond suggests `bond-end:<id>` at its principal; 收訖 at the
+    /// same figure stores the identical item.
+    #[tokio::test]
+    async fn parity_bond_end() {
+        use crate::models::MonthItemCategory;
+        let pool = connect_memory().await.expect("memory db");
+        let month = this_month();
+        seed_month(&pool, &month.to_string()).await;
+        let id = seed_bond(
+            &pool,
+            "silver bond",
+            100000.0,
+            &format!("{}-15", &month.to_string()[..7]),
+        )
+        .await;
+
+        let suggestion = suggestion_of(&pool, month, &format!("bond-end:{id}")).await;
+        assert_eq!(suggestion.category, MonthItemCategory::Adjustment);
+        assert_eq!(suggestion.label.as_deref(), Some("silver bond"));
+        assert_eq!(suggestion.amount, 100000.0);
+
+        receive(
+            &pool,
+            id,
+            &ReceiveInput {
+                received_at: today().to_string(),
+                bank_in: false,
+                account_id: None,
+                credit_amount: 100000.0,
+            },
+        )
+        .await
+        .unwrap();
+        let (item_month, category, label, amount): (String, String, String, f64) = sqlx::query_as(
+            "SELECT month, category, label, amount FROM month_items WHERE auto_key = ?",
+        )
+        .bind(format!("bond-end:{id}"))
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+        assert_eq!(
+            (
+                item_month.as_str(),
+                category.as_str(),
+                label.as_str(),
+                amount
+            ),
+            (
+                month.to_string().as_str(),
+                "adjustment",
+                "silver bond",
+                100000.0
+            )
+        );
+    }
+
+    /// A pending coupon suggests at its expected figure; 收訖 at that figure
+    /// stores the identical item.
+    #[tokio::test]
+    async fn parity_coupon() {
+        use crate::models::MonthItemCategory;
+        let pool = connect_memory().await.expect("memory db");
+        let month = this_month();
+        seed_month(&pool, &month.to_string()).await;
+        let bond_id = seed_bond(&pool, "silver bond", 100000.0, "2100-01-15").await;
+        let pay_date = format!("{}-15", &month.to_string()[..7]);
+        let coupon_id: i64 = sqlx::query_scalar(
+            "INSERT INTO bond_coupons (bond_id, pay_date, annual_rate, per_10k, \
+             created_at, updated_at) \
+             VALUES (?, ?, 0.04, 200.0, \
+             '2026-01-01T00:00:00', '2026-01-01T00:00:00') RETURNING id",
+        )
+        .bind(bond_id)
+        .bind(&pay_date)
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+
+        let suggestion = suggestion_of(&pool, month, &format!("coupon:{coupon_id}")).await;
+        assert_eq!(suggestion.category, MonthItemCategory::Adjustment);
+        assert_eq!(suggestion.label.as_deref(), Some("silver bond"));
+        assert_eq!(suggestion.amount, 2000.0);
+
+        let received = ValidatedCoupon {
+            pay_date,
+            fixing_date: None,
+            annual_rate: Some(0.04),
+            per_10k: Some(200.0),
+            received_amount: Some(2000.0),
+        };
+        update_coupon(
+            &pool,
+            coupon_id,
+            &CouponUpdate {
+                bond_id,
+                validated: &received,
+                note: &None,
+                existing_received: None,
+                bank_in: false,
+                account_id: None,
+            },
+        )
+        .await
+        .unwrap();
+        let (item_month, category, label, amount): (String, String, String, f64) = sqlx::query_as(
+            "SELECT month, category, label, amount FROM month_items WHERE auto_key = ?",
+        )
+        .bind(format!("coupon:{coupon_id}"))
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+        assert_eq!(
+            (
+                item_month.as_str(),
+                category.as_str(),
+                label.as_str(),
+                amount
+            ),
+            (
+                month.to_string().as_str(),
+                "adjustment",
+                "silver bond",
+                2000.0
+            )
+        );
+    }
 
     /// A matured bond inserted straight into the table stays unreceived —
     /// `insert_bond` would auto-receive the past maturity_date.
@@ -254,6 +407,173 @@ mod tests {
         .execute(pool)
         .await
         .unwrap();
+    }
+
+    async fn seed_month(pool: &SqlitePool, month: &str) {
+        sqlx::query("INSERT INTO month_stats (month, created_at, updated_at) VALUES (?, ?, ?)")
+            .bind(month)
+            .bind("2026-01-01T00:00:00")
+            .bind("2026-01-01T00:00:00")
+            .execute(pool)
+            .await
+            .unwrap();
+    }
+
+    async fn seed_bank(pool: &SqlitePool) -> i64 {
+        sqlx::query_scalar(
+            "INSERT INTO cash_accounts (label, currency, role, amount, is_default_receipt, \
+             sort_order, updated_at) VALUES ('HS', 'HKD', 'bank', 0.0, 1, 1, \
+             '2026-01-01T00:00:00') RETURNING id",
+        )
+        .fetch_one(pool)
+        .await
+        .unwrap()
+    }
+
+    async fn seed_bond(pool: &SqlitePool, label: &str, principal: f64, maturity: &str) -> i64 {
+        sqlx::query_scalar(
+            "INSERT INTO bonds (label, issue_no, principal, maturity_date, sort_order, \
+             created_at, updated_at) VALUES (?, 'x', ?, ?, 1, \
+             '2026-01-01T00:00:00', '2026-01-01T00:00:00') RETURNING id",
+        )
+        .bind(label)
+        .bind(principal)
+        .bind(maturity)
+        .fetch_one(pool)
+        .await
+        .unwrap()
+    }
+
+    async fn bond_end_item(pool: &SqlitePool, id: i64) -> Option<(String, f64)> {
+        sqlx::query_as("SELECT month, amount FROM month_items WHERE auto_key = ?")
+            .bind(format!("bond-end:{id}"))
+            .fetch_optional(pool)
+            .await
+            .unwrap()
+    }
+
+    /// 收訖 records the maturity month's `bond-end:<id>` item at the credited
+    /// amount; with `bank_in` off nothing is credited and the item records
+    /// the principal instead.
+    #[tokio::test]
+    async fn receive_records_bond_end_at_the_credited_amount() {
+        let pool = connect_memory().await.expect("memory db");
+        seed_month(&pool, "2099-10-01").await;
+        seed_bank(&pool).await;
+        let id = seed_bond(&pool, "silver bond", 100000.0, "2099-10-15").await;
+
+        receive(
+            &pool,
+            id,
+            &ReceiveInput {
+                received_at: today().to_string(),
+                bank_in: true,
+                account_id: None,
+                credit_amount: 99500.0,
+            },
+        )
+        .await
+        .unwrap();
+        assert_eq!(
+            bond_end_item(&pool, id).await,
+            Some(("2099-10-01".to_string(), 99500.0))
+        );
+
+        let id = seed_bond(&pool, "green bond", 100000.0, "2099-10-20").await;
+        receive(
+            &pool,
+            id,
+            &ReceiveInput {
+                received_at: today().to_string(),
+                bank_in: false,
+                account_id: None,
+                credit_amount: 100000.0,
+            },
+        )
+        .await
+        .unwrap();
+        assert_eq!(
+            bond_end_item(&pool, id).await,
+            Some(("2099-10-01".to_string(), 100000.0))
+        );
+    }
+
+    /// Moving a coupon's `pay_date` and clearing `received_amount` in one
+    /// PATCH retires the `coupon:<id>` item in whichever month it sits.
+    #[tokio::test]
+    async fn clearing_after_the_pay_date_moved_leaves_no_item() {
+        let pool = connect_memory().await.expect("memory db");
+        seed_month(&pool, "2099-10-01").await;
+        seed_month(&pool, "2099-11-01").await;
+        let bond_id = seed_bond(&pool, "silver bond", 100000.0, "2100-01-15").await;
+        let coupon_id: i64 = sqlx::query_scalar(
+            "INSERT INTO bond_coupons (bond_id, pay_date, annual_rate, per_10k, \
+             created_at, updated_at) \
+             VALUES (?, '2099-10-15', 0.04, 200.0, \
+             '2026-01-01T00:00:00', '2026-01-01T00:00:00') RETURNING id",
+        )
+        .bind(bond_id)
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+
+        // 收訖 stores the item in 2099-10.
+        let received = ValidatedCoupon {
+            pay_date: "2099-10-15".to_string(),
+            fixing_date: None,
+            annual_rate: Some(0.04),
+            per_10k: Some(200.0),
+            received_amount: Some(1000.0),
+        };
+        update_coupon(
+            &pool,
+            coupon_id,
+            &CouponUpdate {
+                bond_id,
+                validated: &received,
+                note: &None,
+                existing_received: None,
+                bank_in: false,
+                account_id: None,
+            },
+        )
+        .await
+        .unwrap();
+        let (month, amount): (String, f64) =
+            sqlx::query_as("SELECT month, amount FROM month_items WHERE auto_key = ?")
+                .bind(format!("coupon:{coupon_id}"))
+                .fetch_one(&pool)
+                .await
+                .unwrap();
+        assert_eq!((month.as_str(), amount), ("2099-10-01", 1000.0));
+
+        // One PATCH moves the pay date and clears the receipt: the item
+        // retires from 2099-10, not the new month.
+        let cleared = ValidatedCoupon {
+            pay_date: "2099-11-20".to_string(),
+            received_amount: None,
+            ..received
+        };
+        update_coupon(
+            &pool,
+            coupon_id,
+            &CouponUpdate {
+                bond_id,
+                validated: &cleared,
+                note: &None,
+                existing_received: Some(1000.0),
+                bank_in: false,
+                account_id: None,
+            },
+        )
+        .await
+        .unwrap();
+        let count: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM month_items WHERE auto_key = ?")
+            .bind(format!("coupon:{coupon_id}"))
+            .fetch_one(&pool)
+            .await
+            .unwrap();
+        assert_eq!(count, 0);
     }
 
     #[tokio::test]

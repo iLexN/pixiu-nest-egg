@@ -342,14 +342,29 @@ pub async fn market_dividend_facts(
     Ok(facts)
 }
 
+const DIVIDEND_RECEIPT_SELECT: &str = "SELECT d.id, d.pay_date, d.received_amount, \
+     d.estimated_amount, s.code FROM dividends d JOIN stocks s ON s.id = d.stock_id \
+     WHERE s.market = 'HK'";
+
+fn row_to_dividend_receipt(row: &SqliteRow) -> Result<SuggestionReceipt, StoreError> {
+    let received_amount: Option<f64> = row.try_get("received_amount")?;
+    let estimated_amount: Option<f64> = row.try_get("estimated_amount")?;
+    let pay_date: String = row.try_get("pay_date")?;
+    Ok(SuggestionReceipt {
+        id: row.try_get("id")?,
+        pay_date: stored_date("date", &pay_date)?,
+        amount: received_amount.or(estimated_amount),
+        label: row.try_get("code")?,
+        received: received_amount.is_some(),
+    })
+}
+
 /// Received HK dividends paid in `range`, or all of them when `None`.
 pub async fn suggestion_receipts(
     pool: &SqlitePool,
     range: Option<(String, String)>,
 ) -> Result<Vec<SuggestionReceipt>, StoreError> {
-    let mut sql = "SELECT d.id, d.pay_date, d.received_amount, d.estimated_amount, s.code \
-         FROM dividends d JOIN stocks s ON s.id = d.stock_id WHERE s.market = 'HK'"
-        .to_string();
+    let mut sql = DIVIDEND_RECEIPT_SELECT.to_string();
     if range.is_some() {
         sql.push_str(" AND d.pay_date >= ? AND d.pay_date < ?");
     }
@@ -358,18 +373,21 @@ pub async fn suggestion_receipts(
         query = query.bind(first).bind(next);
     }
     let rows = query.fetch_all(pool).await?;
-    rows.iter()
-        .map(|row| {
-            let received_amount: Option<f64> = row.try_get("received_amount")?;
-            let estimated_amount: Option<f64> = row.try_get("estimated_amount")?;
-            let pay_date: String = row.try_get("pay_date")?;
-            Ok(SuggestionReceipt {
-                id: row.try_get("id")?,
-                pay_date: stored_date("date", &pay_date)?,
-                amount: received_amount.or(estimated_amount),
-                label: row.try_get("code")?,
-                received: received_amount.is_some(),
-            })
-        })
-        .collect()
+    rows.iter().map(row_to_dividend_receipt).collect()
+}
+
+/// One dividend as its suggestion event, inside the caller's transaction —
+/// HK only, as the range query already is: a US dividend settles inside
+/// IBKR and records no month item, so it loads `None`.
+pub async fn suggestion_receipt(
+    conn: &mut sqlx::SqliteConnection,
+    id: i64,
+) -> Result<Option<SuggestionReceipt>, StoreError> {
+    let row = sqlx::query(sqlx::AssertSqlSafe(format!(
+        "{DIVIDEND_RECEIPT_SELECT} AND d.id = ?"
+    )))
+    .bind(id)
+    .fetch_optional(&mut *conn)
+    .await?;
+    row.as_ref().map(row_to_dividend_receipt).transpose()
 }

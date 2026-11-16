@@ -519,88 +519,76 @@ pub(crate) async fn delete_asset(pool: &SqlitePool, id: i64) -> Result<u64, Stor
         .rows_affected())
 }
 
-/// Record an auto `month_items` row for a received amount — bond ends,
-/// coupons, deposits all use it. An already-stored keyed item (e.g. an
-/// accepted pending suggestion) is refreshed to the actual amount; a
-/// monthless month records nothing. Inside the caller's transaction.
-pub async fn record_receipt_item(
+/// Record a Candidate's `month_items` row — the write-time twin of the
+/// suggestion, carrying the candidate's own category, label and amount. An
+/// already-stored keyed item (e.g. an accepted pending suggestion) is
+/// refreshed; a monthless month records nothing. Either way the month's
+/// dismissal for the key clears. Inside the caller's transaction.
+pub async fn record_candidate(
     conn: &mut sqlx::SqliteConnection,
-    month: &str,
-    auto_key: &str,
-    label: &str,
-    amount: f64,
+    candidate: &crate::calc::Candidate,
 ) -> Result<(), StoreError> {
+    let month = candidate.month.to_string();
+    let auto_key = candidate.key.to_string();
     let item_exists: bool = sqlx::query_scalar(
         "SELECT EXISTS(SELECT 1 FROM month_items WHERE month = ? AND auto_key = ?)",
     )
-    .bind(month)
-    .bind(auto_key)
+    .bind(&month)
+    .bind(&auto_key)
     .fetch_one(&mut *conn)
     .await?;
     let month_exists: bool =
         sqlx::query_scalar("SELECT EXISTS(SELECT 1 FROM month_stats WHERE month = ?)")
-            .bind(month)
+            .bind(&month)
             .fetch_one(&mut *conn)
             .await?;
     if item_exists {
         sqlx::query(
             "UPDATE month_items SET label = ?, amount = ? WHERE month = ? AND auto_key = ?",
         )
-        .bind(label)
-        .bind(amount)
-        .bind(month)
-        .bind(auto_key)
+        .bind(&candidate.label)
+        .bind(candidate.amount)
+        .bind(&month)
+        .bind(&auto_key)
         .execute(&mut *conn)
         .await?;
     } else if month_exists {
         sqlx::query(
             "INSERT INTO month_items (month, category, label, amount, auto_key, created_at) \
-             VALUES (?, 'adjustment', ?, ?, ?, ?)",
+             VALUES (?, ?, ?, ?, ?, ?)",
         )
-        .bind(month)
-        .bind(label)
-        .bind(amount)
-        .bind(auto_key)
+        .bind(&month)
+        .bind(candidate.category.as_str())
+        .bind(&candidate.label)
+        .bind(candidate.amount)
+        .bind(&auto_key)
         .bind(now_timestamp())
         .execute(&mut *conn)
         .await?;
     }
     sqlx::query("DELETE FROM month_item_dismissals WHERE month = ? AND auto_key = ?")
-        .bind(month)
-        .bind(auto_key)
+        .bind(&month)
+        .bind(&auto_key)
         .execute(&mut *conn)
         .await?;
     Ok(())
 }
 
-/// Drop the auto `month_items` row for one key, inside the caller's
-/// transaction.
-pub async fn delete_auto_item(
+/// Retire a Candidate's `month_items` row in whichever month it sits — an
+/// auto item stays in the month it was recorded even when the source row's
+/// date later moves — plus every dismissal tombstone for the key. Inside
+/// the caller's transaction.
+pub async fn retire_candidate(
     conn: &mut sqlx::SqliteConnection,
-    month: &str,
-    auto_key: &str,
+    key: &crate::calc::CandidateKey,
 ) -> Result<(), StoreError> {
-    sqlx::query("DELETE FROM month_items WHERE month = ? AND auto_key = ?")
-        .bind(month)
-        .bind(auto_key)
-        .execute(&mut *conn)
-        .await?;
-    Ok(())
-}
-
-/// Like `delete_auto_item` but matches the key in any month — an auto item
-/// stays in the month it was recorded even when the source row's date later
-/// moves. Dismissal tombstones for the key go too, in any month.
-pub async fn delete_auto_items_by_key(
-    conn: &mut sqlx::SqliteConnection,
-    auto_key: &str,
-) -> Result<(), StoreError> {
+    let auto_key = key.to_string();
     sqlx::query("DELETE FROM month_items WHERE auto_key = ?")
-        .bind(auto_key)
+        .bind(&auto_key)
         .execute(&mut *conn)
         .await?;
     sqlx::query("DELETE FROM month_item_dismissals WHERE auto_key = ?")
-        .bind(auto_key)
+        .bind(&auto_key)
         .execute(&mut *conn)
         .await?;
     Ok(())
@@ -609,29 +597,52 @@ pub async fn delete_auto_items_by_key(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::calc::{Candidate, CandidateKey};
     use crate::db::connect_memory;
 
+    async fn seed_month(pool: &SqlitePool, month: &str) {
+        sqlx::query("INSERT INTO month_stats (month, created_at, updated_at) VALUES (?, ?, ?)")
+            .bind(month)
+            .bind("2026-01-01T00:00:00")
+            .bind("2026-01-01T00:00:00")
+            .execute(pool)
+            .await
+            .unwrap();
+    }
+
+    fn candidate(month: &str, key: CandidateKey, amount: f64) -> Candidate {
+        Candidate {
+            key,
+            month: chrono::NaiveDate::parse_from_str(month, "%Y-%m-%d").unwrap(),
+            category: MonthItemCategory::Adjustment,
+            label: "silver bond".to_string(),
+            amount,
+        }
+    }
+
     /// An already-stored keyed item (an accepted pending suggestion) is
-    /// refreshed to the receipt amount; a monthless month writes nothing.
+    /// refreshed to the candidate's label and amount; the month's dismissal
+    /// for the key clears either way.
     #[tokio::test]
-    async fn receipt_item_refresh_updates_the_stored_row() {
+    async fn record_candidate_refreshes_the_stored_row() {
         let pool = connect_memory().await.expect("memory db");
-        sqlx::query(
-            "INSERT INTO month_stats (month, created_at, updated_at) \
-             VALUES ('2026-10-01', '2026-01-01T00:00:00', '2026-01-01T00:00:00')",
-        )
-        .execute(&pool)
-        .await
-        .unwrap();
+        seed_month(&pool, "2026-10-01").await;
+        dismiss_item(&pool, "2026-10-01", "coupon:4").await.unwrap();
 
         let mut tx = pool.begin().await.unwrap();
-        record_receipt_item(&mut tx, "2026-10-01", "coupon:4", "silver bond", 1002.75)
-            .await
-            .unwrap();
+        record_candidate(
+            &mut tx,
+            &candidate("2026-10-01", CandidateKey::Coupon(4), 1002.75),
+        )
+        .await
+        .unwrap();
         // The 收訖 write with the 實收 amount refreshes the stored row.
-        record_receipt_item(&mut tx, "2026-10-01", "coupon:4", "silver bond", 1000.0)
-            .await
-            .unwrap();
+        record_candidate(
+            &mut tx,
+            &candidate("2026-10-01", CandidateKey::Coupon(4), 1000.0),
+        )
+        .await
+        .unwrap();
         tx.commit().await.unwrap();
 
         let (label, amount): (String, f64) = sqlx::query_as(
@@ -642,15 +653,46 @@ mod tests {
         .await
         .unwrap();
         assert_eq!((label.as_str(), amount), ("silver bond", 1000.0));
+        assert!(
+            !dismissed_keys(&pool, "2026-10-01")
+                .await
+                .unwrap()
+                .contains("coupon:4")
+        );
+    }
+
+    /// The category comes from the candidate, not a hard-coded adjustment.
+    #[tokio::test]
+    async fn record_candidate_stores_the_candidates_category() {
+        let pool = connect_memory().await.expect("memory db");
+        seed_month(&pool, "2026-10-01").await;
+        let mut extra_spend = candidate("2026-10-01", CandidateKey::AiaPay(7), 64896.0);
+        extra_spend.category = MonthItemCategory::ExtraSpend;
+
+        let mut tx = pool.begin().await.unwrap();
+        record_candidate(&mut tx, &extra_spend).await.unwrap();
+        tx.commit().await.unwrap();
+
+        let category: String = sqlx::query_scalar(
+            "SELECT category FROM month_items \
+             WHERE month = '2026-10-01' AND auto_key = 'aia-pay:7'",
+        )
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+        assert_eq!(category, "extra_spend");
     }
 
     #[tokio::test]
-    async fn receipt_item_monthless_writes_nothing() {
+    async fn record_candidate_monthless_writes_nothing() {
         let pool = connect_memory().await.expect("memory db");
         let mut tx = pool.begin().await.unwrap();
-        record_receipt_item(&mut tx, "2027-01-01", "coupon:9", "bond", 5.0)
-            .await
-            .unwrap();
+        record_candidate(
+            &mut tx,
+            &candidate("2027-01-01", CandidateKey::Coupon(9), 5.0),
+        )
+        .await
+        .unwrap();
         tx.commit().await.unwrap();
 
         let count: i64 =
@@ -659,5 +701,50 @@ mod tests {
                 .await
                 .unwrap();
         assert_eq!(count, 0);
+    }
+
+    /// Retire drops the key's item in whichever month it sits, plus every
+    /// dismissal recorded for it.
+    #[tokio::test]
+    async fn retire_candidate_removes_the_item_and_dismissals_in_any_month() {
+        let pool = connect_memory().await.expect("memory db");
+        seed_month(&pool, "2026-10-01").await;
+        seed_month(&pool, "2026-11-01").await;
+        let mut tx = pool.begin().await.unwrap();
+        record_candidate(
+            &mut tx,
+            &candidate("2026-10-01", CandidateKey::Coupon(4), 1000.0),
+        )
+        .await
+        .unwrap();
+        tx.commit().await.unwrap();
+        dismiss_item(&pool, "2026-10-01", "coupon:4").await.unwrap();
+        dismiss_item(&pool, "2026-11-01", "coupon:4").await.unwrap();
+        dismiss_item(&pool, "2026-11-01", "div:9").await.unwrap();
+
+        let mut tx = pool.begin().await.unwrap();
+        retire_candidate(&mut tx, &CandidateKey::Coupon(4))
+            .await
+            .unwrap();
+        tx.commit().await.unwrap();
+
+        let items: i64 =
+            sqlx::query_scalar("SELECT COUNT(*) FROM month_items WHERE auto_key = 'coupon:4'")
+                .fetch_one(&pool)
+                .await
+                .unwrap();
+        let dismissals: i64 = sqlx::query_scalar(
+            "SELECT COUNT(*) FROM month_item_dismissals WHERE auto_key = 'coupon:4'",
+        )
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+        assert_eq!((items, dismissals), (0, 0));
+        assert!(
+            dismissed_keys(&pool, "2026-11-01")
+                .await
+                .unwrap()
+                .contains("div:9")
+        );
     }
 }

@@ -216,7 +216,7 @@ It credits exactly `principal + interest` (not user-supplied) under the cash-acc
 
 ### Requirement: Deposit receipt month item and finality
 
-The receive endpoint also records the month's `dep-end:<id>` `adjustment` item for that amount. Re-receiving SHALL return 409. Receipt SHALL NOT be reversible: there is no unreceive endpoint or action.
+The receive endpoint also records the month's `dep-end:<id>` `adjustment` item for that amount, labelled with the deposit's label or `定期` when it has none. Re-receiving SHALL return 409. Receipt SHALL NOT be reversible: there is no unreceive endpoint or action.
 
 #### Scenario: Receive is final
 
@@ -225,7 +225,7 @@ The receive endpoint also records the month's `dep-end:<id>` `adjustment` item f
 
 ### Requirement: Deposit creation month item
 
-`POST /api/deposits` SHALL record the `dep-start:<id>` `adjustment` item of −`principal` in the `start_date` month, in the same write as the deposit itself — as the dep-start suggestion would have. The item is skipped when the deposit carries no `start_date` or when the start month has no month row; a skipped item still surfaces as the month's `dep-start` suggestion once the month exists.
+`POST /api/deposits` SHALL record the `dep-start:<id>` `adjustment` item of −`principal` in the `start_date` month, in the same write as the deposit itself — as the dep-start suggestion would have, labelled with the deposit's label or `定期` when it has none. The item is skipped when the deposit carries no `start_date` or when the start month has no month row; a skipped item still surfaces as the month's `dep-start` suggestion once the month exists.
 
 #### Scenario: Create records the start month item
 

@@ -106,6 +106,17 @@ pub async fn delete_transfer(conn: &mut sqlx::SqliteConnection, id: i64) -> Resu
     Ok(())
 }
 
+fn row_to_suggestion_transfer(row: &SqliteRow) -> Result<SuggestionIbkrTransfer, StoreError> {
+    let transfer_date: String = row.try_get("transfer_date")?;
+    Ok(SuggestionIbkrTransfer {
+        id: row.try_get("id")?,
+        date: chrono::NaiveDate::parse_from_str(&transfer_date, "%Y-%m-%d").map_err(|_| {
+            StoreError::Corrupt(format!("stored date {transfer_date} is not valid"))
+        })?,
+        amount: row.try_get("amount_hkd")?,
+    })
+}
+
 /// Transfers dated in `[first, next)` as suggestion/forecast sources. The
 /// 月結 candidates pass `cash_moving_only` (rows carrying a source account —
 /// log-only rows already have their manual items); the forecast passes
@@ -129,18 +140,24 @@ pub async fn transfers_in_range(
     .bind(next)
     .fetch_all(pool)
     .await?;
-    let mut transfers = Vec::with_capacity(rows.len());
-    for row in &rows {
-        let transfer_date: String = row.try_get("transfer_date")?;
-        transfers.push(SuggestionIbkrTransfer {
-            id: row.try_get("id")?,
-            date: chrono::NaiveDate::parse_from_str(&transfer_date, "%Y-%m-%d").map_err(|_| {
-                StoreError::Corrupt(format!("stored date {transfer_date} is not valid"))
-            })?,
-            amount: row.try_get("amount_hkd")?,
-        });
-    }
-    Ok(transfers)
+    rows.iter().map(row_to_suggestion_transfer).collect()
+}
+
+/// One transfer as its suggestion event — the create write rebuilds its
+/// Candidate from the stored row. No cash-moving filter: `create_transfer`
+/// only ever writes cash-moving rows.
+pub async fn transfer_event<'e, E>(
+    exec: E,
+    id: i64,
+) -> Result<Option<SuggestionIbkrTransfer>, StoreError>
+where
+    E: sqlx::Executor<'e, Database = sqlx::Sqlite>,
+{
+    let row = sqlx::query("SELECT id, transfer_date, amount_hkd FROM ibkr_transfers WHERE id = ?")
+        .bind(id)
+        .fetch_optional(exec)
+        .await?;
+    row.as_ref().map(row_to_suggestion_transfer).transpose()
 }
 
 /// Σ `ibkr_transfers` per calendar year — the year's IBKR 轉入.

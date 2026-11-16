@@ -219,7 +219,6 @@ pub async fn update(
             validated: &validated,
             note,
             existing_received: existing.received_amount,
-            code: &existing.code,
             bank_in: patch.bank_in.unwrap_or(true),
             account_id: patch.account_id,
         },

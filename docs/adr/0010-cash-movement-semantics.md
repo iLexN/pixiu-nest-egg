@@ -10,6 +10,6 @@ Cash movement is asymmetric by design — the map every cash-touching change mus
 - **US trades settle inside IBKR.** Broker cash is the settlement account; no bank touch — which is also why US dividends are never counted in month 利息.
 - **家人 deposits move nothing.** Record-only.
 
-New money-moving behavior must reuse `service::receipts::credit`/`reverse` (credit pattern), `record_receipt_item` + `auto_key` (month item), and the transfer's in-transaction account-id recording (exact reversal) — not invent parallel paths.
+New money-moving behavior must reuse `service::receipts::credit`/`reverse` (credit pattern), `record_candidate` + `auto_key` (month item — one `calc::candidates` definition shared by suggestions and writes; `retire_candidate` removes the keyed item and its dismissals in any month), and the transfer's in-transaction account-id recording (exact reversal) — not invent parallel paths.
 
 Source: `openspec/changes/archive/2026-10-20-consolidate-cash-fx-settings`, `2026-11-03-deposit-placement-debits-cash`, `2026-11-03-ibkr-transfer-moves-cash`, `2026-11-05-us-trade-cash-settlement`.
