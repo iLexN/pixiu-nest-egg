@@ -1,20 +1,17 @@
 use axum::Json;
 use axum::extract::{Path, Query, State};
 use axum::http::StatusCode;
-use chrono::Datelike;
-use serde::{Deserialize, Serialize};
+use serde::Deserialize;
 use sqlx::SqlitePool;
 
-use super::AppState;
 use super::patch::{merge_num, merge_text};
-use crate::calc::{
-    DividendFacts, DividendInput, DividendYearRollup, dividend_year_rollups, holdings_snapshot,
-    net_from_gross, validate_dividend,
-};
+use super::{AppState, parse_order, parse_status};
+use crate::calc::{DividendInput, holdings_snapshot, net_from_gross, validate_dividend};
 use crate::error::{ApiError, ErrorBody};
 use crate::models::{Dividend, DividendPatch, NewDividend};
 use crate::store::dividends as store;
-use crate::store::today;
+
+pub use crate::service::dividends::DividendSummaryResponse;
 
 #[derive(Debug, Deserialize, utoipa::ToSchema, utoipa::IntoParams)]
 pub struct ListQuery {
@@ -42,26 +39,13 @@ pub async fn list(
     State(state): State<AppState>,
     Query(query): Query<ListQuery>,
 ) -> Result<Json<Vec<Dividend>>, ApiError> {
-    let received = match query.status.as_deref() {
-        Some(status) => match status.to_ascii_lowercase().as_str() {
-            "pending" => Some(false),
-            "received" => Some(true),
-            _ => {
-                return Err(ApiError::field(
-                    "status",
-                    "status must be pending or received",
-                ));
-            }
-        },
-        None => None,
-    };
+    let received = parse_status(query.status.as_deref(), "pending", "received")?;
     let market = query
         .market
         .as_deref()
         .map(super::parse_market)
         .transpose()?;
-    let descending =
-        matches!(query.order.as_deref(), Some(order) if order.eq_ignore_ascii_case("desc"));
+    let descending = parse_order(query.order.as_deref());
     store::list(
         &state.pool,
         market,
@@ -266,18 +250,6 @@ pub async fn remove(
     Ok(StatusCode::NO_CONTENT)
 }
 
-#[derive(Debug, Serialize, utoipa::ToSchema)]
-pub struct DividendSummaryResponse {
-    /// The date the response was generated.
-    pub today: String,
-    /// Pending dividends (no received amount), earliest pay date first.
-    pub pending: Vec<Dividend>,
-    /// Per-year totals of received amounts, with a per-stock breakdown.
-    pub years: Vec<DividendYearRollup>,
-    /// Distinct pay-date years in the data plus the current year.
-    pub history_years: Vec<i32>,
-}
-
 /// Every figure here is derived from the stored dividends on each read.
 #[utoipa::path(
     operation_id = "dividends_summary",
@@ -298,43 +270,7 @@ pub async fn summary(
         .as_deref()
         .map(super::parse_market)
         .transpose()?;
-    let dividends = store::list_for_market(&state.pool, market).await?;
-
-    let mut facts = Vec::with_capacity(dividends.len());
-    for dividend in &dividends {
-        let pay_date =
-            chrono::NaiveDate::parse_from_str(&dividend.pay_date, "%Y-%m-%d").map_err(|_| {
-                ApiError::Conflict(format!(
-                    "stored pay_date {} is not valid",
-                    dividend.pay_date
-                ))
-            })?;
-        facts.push(DividendFacts {
-            code: &dividend.code,
-            pay_date,
-            received_amount: dividend.received_amount,
-        });
-    }
-
-    let pending: Vec<Dividend> = dividends
-        .iter()
-        .filter(|dividend| dividend.received_amount.is_none())
-        .cloned()
-        .collect();
-
-    let mut history_years: Vec<i32> = dividends
-        .iter()
-        .map(|dividend| dividend.pay_date.get(..4).and_then(|y| y.parse().ok()))
-        .collect::<Option<Vec<i32>>>()
-        .unwrap_or_default();
-    history_years.push(today().year());
-    history_years.sort_unstable();
-    history_years.dedup();
-
-    Ok(Json(DividendSummaryResponse {
-        today: today().to_string(),
-        pending,
-        years: dividend_year_rollups(&facts),
-        history_years,
-    }))
+    Ok(Json(
+        crate::service::dividends::summary(&state.pool, market).await?,
+    ))
 }

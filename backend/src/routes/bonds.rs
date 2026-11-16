@@ -1,16 +1,15 @@
-use super::AppState;
 use super::patch::{merge_num, merge_text};
+use super::{AppState, finite_or, parse_order, parse_received_at, parse_status};
 use crate::calc::{BondInput, CouponInput, validate_bond, validate_coupon};
 use crate::error::{ApiError, ErrorBody};
-use crate::models::{
-    Bond, BondCoupon, BondCouponPatch, BondPatch, BondStatus, NewBond, NewBondCoupon,
-};
+use crate::models::{Bond, BondCoupon, BondCouponPatch, BondPatch, NewBond, NewBondCoupon};
 use crate::store::bonds as store;
-use crate::store::today;
 use axum::Json;
 use axum::extract::{Path, Query, State};
 use axum::http::StatusCode;
-use serde::{Deserialize, Serialize};
+use serde::Deserialize;
+
+pub use crate::service::bonds::{BondSummaryResponse, BondTotals, BondWithCoupons, UpcomingCoupon};
 
 #[derive(Debug, Deserialize, utoipa::ToSchema, utoipa::IntoParams)]
 pub struct ListQuery {
@@ -34,21 +33,8 @@ pub async fn list(
     State(state): State<AppState>,
     Query(query): Query<ListQuery>,
 ) -> Result<Json<Vec<Bond>>, ApiError> {
-    let matured = match query.status.as_deref() {
-        Some(status) => match status.to_ascii_lowercase().as_str() {
-            "active" => Some(false),
-            "matured" => Some(true),
-            _ => {
-                return Err(ApiError::field(
-                    "status",
-                    "status must be active or matured",
-                ));
-            }
-        },
-        None => None,
-    };
-    let descending =
-        matches!(query.order.as_deref(), Some(order) if order.eq_ignore_ascii_case("desc"));
+    let matured = parse_status(query.status.as_deref(), "active", "matured")?;
+    let descending = parse_order(query.order.as_deref());
     store::list(&state.pool, matured, descending)
         .await
         .map(Json)
@@ -163,22 +149,8 @@ pub async fn receive(
     Json(body): Json<ReceiveBond>,
 ) -> Result<Json<Bond>, ApiError> {
     let existing = store::load_bond(&state.pool, id).await?;
-    let received_at = match body.received_at.as_deref() {
-        Some(date) => chrono::NaiveDate::parse_from_str(date, "%Y-%m-%d")
-            .map_err(|_| ApiError::field("received_at", "received_at must be YYYY-MM-DD"))?
-            .to_string(),
-        None => today().to_string(),
-    };
-    let credit_amount = match body.credit_amount {
-        Some(value) if !value.is_finite() => {
-            return Err(ApiError::field(
-                "credit_amount",
-                "credit_amount must be a number",
-            ));
-        }
-        Some(value) => value,
-        None => existing.principal,
-    };
+    let received_at = parse_received_at(body.received_at.as_deref())?;
+    let credit_amount = finite_or("credit_amount", body.credit_amount, existing.principal)?;
     crate::service::bonds::receive(
         &state.pool,
         id,
@@ -217,42 +189,6 @@ pub async fn remove(
     Ok(StatusCode::NO_CONTENT)
 }
 
-#[derive(Debug, Serialize, utoipa::ToSchema)]
-pub struct BondTotals {
-    /// The sheet's `Total` cell: Σ principal over active bonds.
-    pub active_principal: f64,
-}
-
-/// A bond with its coupon schedule attached.
-#[derive(Debug, Serialize, utoipa::ToSchema)]
-pub struct BondWithCoupons {
-    #[serde(flatten)]
-    pub bond: Bond,
-    pub coupons: Vec<BondCoupon>,
-}
-
-/// A coupon shown under 即將付息, carrying its bond's label.
-#[derive(Debug, Serialize, utoipa::ToSchema)]
-pub struct UpcomingCoupon {
-    pub bond_label: String,
-    #[serde(flatten)]
-    pub coupon: BondCoupon,
-}
-
-#[derive(Debug, Serialize, utoipa::ToSchema)]
-pub struct BondSummaryResponse {
-    /// The date the summary derived against; an active bond matured on or
-    /// before it is 已到期未收.
-    pub today: String,
-    pub totals: BondTotals,
-    /// Active bonds with their coupons, earliest maturity first.
-    pub active: Vec<BondWithCoupons>,
-    /// Matured bonds with their coupons, latest maturity first.
-    pub matured: Vec<BondWithCoupons>,
-    /// Non-received coupons across active bonds, earliest pay_date first.
-    pub upcoming_coupons: Vec<UpcomingCoupon>,
-}
-
 /// Every figure here is derived from the stored rows on each read.
 #[utoipa::path(
     operation_id = "bonds_summary",
@@ -264,52 +200,7 @@ pub struct BondSummaryResponse {
     )
 )]
 pub async fn summary(State(state): State<AppState>) -> Result<Json<BondSummaryResponse>, ApiError> {
-    let today = today();
-    let bonds = store::load_all_bonds(&state.pool).await?;
-
-    let active_principal = crate::service::bonds::active_principal_of(&bonds);
-    let mut active = Vec::new();
-    let mut matured = Vec::new();
-    let mut upcoming_coupons = Vec::new();
-
-    for bond in bonds {
-        let coupons = store::load_bond_coupons(&state.pool, bond.id).await?;
-        if bond.status == BondStatus::Active {
-            for coupon in &coupons {
-                if coupon.received_amount.is_none() {
-                    upcoming_coupons.push(UpcomingCoupon {
-                        bond_label: bond.label.clone(),
-                        coupon: coupon.clone(),
-                    });
-                }
-            }
-            active.push(BondWithCoupons { bond, coupons });
-        } else {
-            matured.push(BondWithCoupons { bond, coupons });
-        }
-    }
-
-    active.sort_by(|a, b| {
-        a.bond
-            .maturity_date
-            .cmp(&b.bond.maturity_date)
-            .then(a.bond.sort_order.cmp(&b.bond.sort_order))
-    });
-    matured.sort_by(|a, b| {
-        b.bond
-            .maturity_date
-            .cmp(&a.bond.maturity_date)
-            .then(b.bond.sort_order.cmp(&a.bond.sort_order))
-    });
-    upcoming_coupons.sort_by(|a, b| a.coupon.pay_date.cmp(&b.coupon.pay_date));
-
-    Ok(Json(BondSummaryResponse {
-        today: today.to_string(),
-        totals: BondTotals { active_principal },
-        active,
-        matured,
-        upcoming_coupons,
-    }))
+    Ok(Json(crate::service::bonds::summary(&state.pool).await?))
 }
 
 #[derive(Debug, Deserialize, utoipa::ToSchema, utoipa::IntoParams)]
@@ -466,88 +357,6 @@ mod tests {
         .unwrap()
     }
 
-    /// One unpaid coupon on the bond — it stays in upcoming_coupons while the
-    /// bond is active.
-    async fn seed_unpaid_coupon(pool: &SqlitePool, bond_id: i64) {
-        sqlx::query(
-            "INSERT INTO bond_coupons (bond_id, pay_date, annual_rate, per_10k, \
-             created_at, updated_at) \
-             VALUES (?, '2020-06-01', 0.04, 200.0, \
-             '2026-01-01T00:00:00', '2026-01-01T00:00:00')",
-        )
-        .bind(bond_id)
-        .execute(pool)
-        .await
-        .unwrap();
-    }
-
-    fn receive_body() -> ReceiveBond {
-        ReceiveBond {
-            received_at: None,
-            bank_in: None,
-            account_id: None,
-            credit_amount: None,
-        }
-    }
-
-    #[tokio::test]
-    async fn matured_unreceived_bond_counts_until_received() {
-        let pool = connect_memory().await.expect("memory db");
-        let id = seed_matured_unreceived(&pool).await;
-        seed_unpaid_coupon(&pool, id).await;
-        let state = AppState { pool: pool.clone() };
-
-        // Past maturity but unreceived: still active everywhere.
-        let response = summary(State(state.clone())).await.expect("summary").0;
-        assert_eq!(response.totals.active_principal, 50000.0);
-        assert_eq!(response.active.len(), 1);
-        assert_eq!(response.active[0].bond.id, id);
-        assert!(response.matured.is_empty());
-        assert_eq!(response.upcoming_coupons.len(), 1);
-        assert_eq!(response.upcoming_coupons[0].coupon.pay_date, "2020-06-01");
-
-        let listed = list(
-            State(state.clone()),
-            Query(ListQuery {
-                status: Some("active".to_string()),
-                order: None,
-            }),
-        )
-        .await
-        .expect("active list")
-        .0;
-        assert_eq!(listed.len(), 1);
-        assert_eq!(listed[0].id, id);
-
-        let _received = receive(State(state.clone()), Path(id), Json(receive_body()))
-            .await
-            .expect("received");
-
-        let response = summary(State(state.clone())).await.expect("summary").0;
-        assert_eq!(response.totals.active_principal, 0.0);
-        assert!(response.active.is_empty());
-        assert_eq!(response.matured.len(), 1);
-        assert!(response.upcoming_coupons.is_empty());
-
-        let listed = list(
-            State(state.clone()),
-            Query(ListQuery {
-                status: Some("matured".to_string()),
-                order: None,
-            }),
-        )
-        .await
-        .expect("matured list")
-        .0;
-        assert_eq!(listed.len(), 1);
-
-        // Receipt is final: a second 收訖 conflicts.
-        let err = receive(State(state), Path(id), Json(receive_body()))
-            .await
-            .expect_err("second receive");
-        assert!(matches!(err, ApiError::Conflict(_)));
-    }
-
     #[tokio::test]
     async fn early_received_bond_is_matured() {
         let pool = connect_memory().await.expect("memory db");
@@ -563,7 +372,7 @@ mod tests {
         .unwrap();
 
         let bond = store::load_bond(&pool, id).await.expect("bond");
-        assert_eq!(bond.status, BondStatus::Matured);
+        assert_eq!(bond.status, crate::models::BondStatus::Matured);
     }
 
     #[tokio::test]

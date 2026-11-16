@@ -83,6 +83,8 @@ DepositHistoryView (定期 → 記錄)
 
 The list and every total/rollup are receipt-based: a deposit counts while it is not 收訖, whatever its `end_date`, and leaves on 收訖 (a stored `received_at`) — including a deposit 收訖'd early. An overdue-but-unreceived deposit shows 已到期未收 in the list and still counts in active principal, 已定期, and live 流動資產 until the user runs 收訖 → 存入活期, which moves the money into a cash_accounts row.
 
+The summary endpoints are composed by `service::deposits::summary` and `service::family::summary` — the routes only parse the query and delegate (ADR 0005).
+
 The 手動步驟提醒 checklists (定期 start step / 定期 end step) are static hints for the `Month Stat`, `回報率`, `Overview`, and money-master bookkeeping that used to live in the workbook.
 
 ## Load the 家人 → 定期 view

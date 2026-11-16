@@ -2,20 +2,77 @@
 //! to the policy in the same transaction it is recorded in, and deleting it
 //! undoes them — the same apply/undo shape as `service::deposits`.
 
+use serde::Serialize;
 use sqlx::SqlitePool;
 
 use crate::calc::{
-    ValidatedAiaEvent, apply_aia_payment, apply_aia_withdrawal, undo_aia_event_amount,
+    AiaPolicyFacts, AiaTotals, ValidatedAiaEvent, aia_totals, apply_aia_payment,
+    apply_aia_withdrawal, next_premium_due, undo_aia_event_amount,
 };
-use crate::models::AiaEventKind;
+use crate::models::{AiaEvent, AiaEventKind, AiaPolicy};
 use crate::service::ServiceError;
-use crate::store::{StoreError, aia, now_timestamp};
+use crate::store::{StoreError, aia, now_timestamp, stored_date, today};
 
 /// A stored `next_pay_date`/`event_date` the DB could not parse is a data
-/// problem, not a request one — `Conflict`, as the route mapped it.
-fn parse_day(date: &str) -> Result<chrono::NaiveDate, ServiceError> {
-    chrono::NaiveDate::parse_from_str(date, "%Y-%m-%d")
-        .map_err(|_| ServiceError::Conflict(format!("stored date {date} is not valid")))
+/// problem, not a request one — `Corrupt`, which the route maps to 409.
+fn parse_day(date: &str) -> Result<chrono::NaiveDate, StoreError> {
+    stored_date("date", date)
+}
+
+/// A policy with its payment/withdrawal history attached.
+#[derive(Debug, Serialize, utoipa::ToSchema)]
+pub struct PolicyWithEvents {
+    #[serde(flatten)]
+    pub policy: AiaPolicy,
+    pub events: Vec<AiaEvent>,
+}
+
+#[derive(Debug, Serialize, utoipa::ToSchema)]
+pub struct AiaSummaryResponse {
+    pub today: String,
+    /// The manual USD→HKD rate; HKD figures are absent while it is unset.
+    pub rate: Option<f64>,
+    /// Earliest premium-due date still ahead — the premium the user owes next.
+    pub next_premium_due: Option<String>,
+    /// The section's free-text note (`aia.note` in `app_meta`).
+    pub note: Option<String>,
+    pub totals: AiaTotals,
+    pub policies: Vec<PolicyWithEvents>,
+}
+
+/// The AIA page read model — every figure derived from the stored rows on
+/// each read.
+pub async fn summary(pool: &SqlitePool) -> Result<AiaSummaryResponse, StoreError> {
+    let today = today();
+    let policies = aia::load_all_policies(pool).await?;
+    let rate = crate::store::fx::usd_rate(pool).await?;
+    let facts: Vec<AiaPolicyFacts> = policies.iter().map(aia::facts_of).collect();
+    let totals = aia_totals(&facts, rate);
+    let next_due = next_premium_due(
+        policies
+            .iter()
+            .filter_map(|policy| policy.next_pay_date.as_deref())
+            .map(parse_day)
+            .collect::<Result<Vec<_>, _>>()?
+            .into_iter(),
+        today,
+    );
+
+    let mut with_events = Vec::with_capacity(policies.len());
+    for policy in policies {
+        let events = aia::load_policy_events(pool, policy.id).await?;
+        with_events.push(PolicyWithEvents { policy, events });
+    }
+
+    let note = crate::store::settings::aia_note(pool).await?;
+    Ok(AiaSummaryResponse {
+        today: today.to_string(),
+        rate,
+        next_premium_due: next_due.map(|date| date.to_string()),
+        note,
+        totals,
+        policies: with_events,
+    })
 }
 
 /// Record an event and apply its effects to the policy in one transaction: a

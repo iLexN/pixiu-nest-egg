@@ -1,24 +1,18 @@
 use axum::Json;
 use axum::extract::{Path, Query, State};
 use axum::http::StatusCode;
-use serde::{Deserialize, Serialize};
+use serde::Deserialize;
 
 use super::AppState;
 use super::mpf::NoteResponse;
 use super::patch::{merge_num, merge_text};
-use crate::calc::{
-    AiaEventInput, AiaPolicyFacts, AiaPolicyInput, AiaTotals, aia_totals, next_premium_due,
-    validate_aia_event, validate_aia_policy,
-};
+use crate::calc::{AiaEventInput, AiaPolicyInput, validate_aia_event, validate_aia_policy};
 use crate::error::{ApiError, ErrorBody};
 use crate::models::{AiaEvent, AiaNotePatch, AiaPolicy, AiaPolicyPatch, NewAiaEvent, NewAiaPolicy};
 use crate::store::aia as store;
-use crate::store::{now_timestamp, today};
+use crate::store::now_timestamp;
 
-fn parse_day(date: &str) -> Result<chrono::NaiveDate, ApiError> {
-    chrono::NaiveDate::parse_from_str(date, "%Y-%m-%d")
-        .map_err(|_| ApiError::Conflict(format!("stored date {date} is not valid")))
-}
+pub use crate::service::aia::{AiaSummaryResponse, PolicyWithEvents};
 
 #[utoipa::path(
     operation_id = "aia_list",
@@ -156,27 +150,6 @@ pub async fn remove(
     Ok(StatusCode::NO_CONTENT)
 }
 
-/// A policy with its payment/withdrawal history attached.
-#[derive(Debug, Serialize, utoipa::ToSchema)]
-pub struct PolicyWithEvents {
-    #[serde(flatten)]
-    pub policy: AiaPolicy,
-    pub events: Vec<AiaEvent>,
-}
-
-#[derive(Debug, Serialize, utoipa::ToSchema)]
-pub struct AiaSummaryResponse {
-    pub today: String,
-    /// The manual USD→HKD rate; HKD figures are absent while it is unset.
-    pub rate: Option<f64>,
-    /// Earliest premium-due date still ahead — the premium the user owes next.
-    pub next_premium_due: Option<String>,
-    /// The section's free-text note (`aia.note` in `app_meta`).
-    pub note: Option<String>,
-    pub totals: AiaTotals,
-    pub policies: Vec<PolicyWithEvents>,
-}
-
 /// Every figure here is derived from the stored rows on each read.
 #[utoipa::path(
     operation_id = "aia_summary",
@@ -188,36 +161,7 @@ pub struct AiaSummaryResponse {
     )
 )]
 pub async fn summary(State(state): State<AppState>) -> Result<Json<AiaSummaryResponse>, ApiError> {
-    let today = today();
-    let policies = store::load_all_policies(&state.pool).await?;
-    let rate = crate::store::fx::usd_rate(&state.pool).await?;
-    let facts: Vec<AiaPolicyFacts> = policies.iter().map(store::facts_of).collect();
-    let totals = aia_totals(&facts, rate);
-    let next_due = next_premium_due(
-        policies
-            .iter()
-            .filter_map(|policy| policy.next_pay_date.as_deref())
-            .map(parse_day)
-            .collect::<Result<Vec<_>, _>>()?
-            .into_iter(),
-        today,
-    );
-
-    let mut with_events = Vec::with_capacity(policies.len());
-    for policy in policies {
-        let events = store::load_policy_events(&state.pool, policy.id).await?;
-        with_events.push(PolicyWithEvents { policy, events });
-    }
-
-    let note = crate::store::settings::aia_note(&state.pool).await?;
-    Ok(Json(AiaSummaryResponse {
-        today: today.to_string(),
-        rate,
-        next_premium_due: next_due.map(|date| date.to_string()),
-        note,
-        totals,
-        policies: with_events,
-    }))
+    Ok(Json(crate::service::aia::summary(&state.pool).await?))
 }
 
 /// The section's free-text note, kept in `app_meta` under `aia.note` — the

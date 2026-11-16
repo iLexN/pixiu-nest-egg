@@ -20,7 +20,7 @@ Vue UI displays formatted values
 
 The **backend is authoritative**. The frontend may show a temporary preview while typing, but the backend validates and recalculates every value before saving or returning summary figures.
 
-There is **no summary table** in SQLite. Summary figures are recomputed from `stocks` and `trades` every time the summary API is called, and deposit rollups are recomputed from `deposits`.
+There is **no summary table** in SQLite. Summary figures are recomputed from `stocks` and `trades` every time the summary API is called, and deposit rollups are recomputed from `deposits`. Each page's `GET …/summary`-style read model is composed in `service::<domain>` — the route only parses the query and delegates (see `docs/adr/0005-layered-backend-seams.md`).
 
 ## API reference and playground
 

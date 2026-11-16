@@ -1,19 +1,16 @@
 use axum::Json;
 use axum::extract::{Path, Query, State};
 use axum::http::StatusCode;
-use chrono::Datelike;
-use serde::{Deserialize, Serialize};
+use serde::Deserialize;
 
-use super::AppState;
 use super::patch::{merge_num, merge_text};
-use crate::calc::{
-    ActiveMonthBucket, ActiveTotals, BankRollup, DepositFacts, DepositInput, YearRollup,
-    active_month_rollup, active_totals, bank_rollup, validate_deposit, year_rollups,
-};
+use super::{AppState, finite_or, parse_order, parse_received_at, parse_status};
+use crate::calc::{DepositInput, validate_deposit};
 use crate::error::{ApiError, ErrorBody};
 use crate::models::{Deposit, DepositPatch, NewDeposit};
 use crate::store::deposits as store;
-use crate::store::today;
+
+pub use crate::service::deposits::DepositSummaryResponse;
 
 #[derive(Debug, Deserialize, utoipa::ToSchema, utoipa::IntoParams)]
 pub struct ListQuery {
@@ -39,16 +36,8 @@ pub async fn list(
     State(state): State<AppState>,
     Query(query): Query<ListQuery>,
 ) -> Result<Json<Vec<Deposit>>, ApiError> {
-    let received = match query.status.as_deref() {
-        Some(status) => match status.to_ascii_lowercase().as_str() {
-            "active" => Some(false),
-            "ended" => Some(true),
-            _ => return Err(ApiError::field("status", "status must be active or ended")),
-        },
-        None => None,
-    };
-    let descending =
-        matches!(query.order.as_deref(), Some(order) if order.eq_ignore_ascii_case("desc"));
+    let received = parse_status(query.status.as_deref(), "active", "ended")?;
+    let descending = parse_order(query.order.as_deref());
     store::list(&state.pool, received, query.year, descending)
         .await
         .map(Json)
@@ -188,19 +177,8 @@ pub async fn receive(
     Json(body): Json<ReceiveDeposit>,
 ) -> Result<Json<Deposit>, ApiError> {
     let existing = store::load_one(&state.pool, id).await?;
-    let received_at = match body.received_at.as_deref() {
-        Some(date) => chrono::NaiveDate::parse_from_str(date, "%Y-%m-%d")
-            .map_err(|_| ApiError::field("received_at", "received_at must be YYYY-MM-DD"))?
-            .to_string(),
-        None => today().to_string(),
-    };
-    let interest = match body.interest {
-        Some(value) if !value.is_finite() => {
-            return Err(ApiError::field("interest", "interest must be a number"));
-        }
-        Some(value) => Some(value),
-        None => existing.interest,
-    };
+    let received_at = parse_received_at(body.received_at.as_deref())?;
+    let interest = finite_or("interest", body.interest, existing.interest)?;
     crate::service::deposits::receive(
         &state.pool,
         id,
@@ -216,23 +194,6 @@ pub async fn receive(
     Ok(Json(store::load_one(&state.pool, id).await?))
 }
 
-#[derive(Debug, Serialize, utoipa::ToSchema)]
-pub struct DepositSummaryResponse {
-    /// The date `status` was derived against.
-    pub today: String,
-    /// Unreceived deposits, earliest maturity first.
-    pub upcoming: Vec<Deposit>,
-    pub active_totals: ActiveTotals,
-    /// Unreceived deposits grouped by end (year, month).
-    pub months: Vec<ActiveMonthBucket>,
-    /// Unreceived deposits grouped by bank.
-    pub banks: Vec<BankRollup>,
-    /// Per-year month tables over every deposit ending that year.
-    pub years: Vec<YearRollup>,
-    /// Distinct end years in the data plus the current year, for the filter.
-    pub history_years: Vec<i32>,
-}
-
 /// Every figure here is derived from the stored deposits on each read.
 #[utoipa::path(
     operation_id = "deposits_summary",
@@ -246,56 +207,7 @@ pub struct DepositSummaryResponse {
 pub async fn summary(
     State(state): State<AppState>,
 ) -> Result<Json<DepositSummaryResponse>, ApiError> {
-    let today = today();
-    let deposits = store::load_all(&state.pool).await?;
-
-    let mut facts = Vec::with_capacity(deposits.len());
-    for deposit in &deposits {
-        let end_date =
-            chrono::NaiveDate::parse_from_str(&deposit.end_date, "%Y-%m-%d").map_err(|_| {
-                ApiError::Conflict(format!("stored end_date {} is not valid", deposit.end_date))
-            })?;
-        facts.push((
-            deposit,
-            DepositFacts {
-                bank: deposit.bank.as_deref(),
-                principal: deposit.principal,
-                interest: deposit.interest,
-                end_date,
-                received: deposit.received_at.is_some(),
-            },
-        ));
-    }
-
-    // List, totals, and rollups all follow receipt: an end_date in the past
-    // without 收訖 means "matured, awaiting confirmation" and still counts.
-    let mut upcoming: Vec<Deposit> = facts
-        .iter()
-        .filter(|(deposit, _)| deposit.received_at.is_none())
-        .map(|(deposit, _)| (*deposit).clone())
-        .collect();
-    upcoming.sort_by(|a, b| {
-        a.end_date
-            .cmp(&b.end_date)
-            .then(a.sort_order.cmp(&b.sort_order))
-    });
-
-    let fact_refs: Vec<DepositFacts<'_>> = facts.iter().map(|(_, fact)| *fact).collect();
-
-    let mut history_years: Vec<i32> = deposits.iter().map(|deposit| deposit.end_year).collect();
-    history_years.push(today.year());
-    history_years.sort_unstable();
-    history_years.dedup();
-
-    Ok(Json(DepositSummaryResponse {
-        today: today.to_string(),
-        upcoming,
-        active_totals: active_totals(&fact_refs),
-        months: active_month_rollup(&fact_refs),
-        banks: bank_rollup(&fact_refs),
-        years: year_rollups(&fact_refs),
-        history_years,
-    }))
+    Ok(Json(crate::service::deposits::summary(&state.pool).await?))
 }
 
 #[cfg(test)]
@@ -303,57 +215,6 @@ mod tests {
     use super::*;
     use crate::db::connect_memory;
     use sqlx::SqlitePool;
-
-    /// A matured deposit inserted straight into the table stays unreceived —
-    /// `insert_deposit` would auto-receive the past end_date.
-    async fn seed_matured_unreceived(pool: &SqlitePool) -> i64 {
-        sqlx::query_scalar(
-            "INSERT INTO deposits (label, bank, principal, interest, end_date, \
-             sort_order, created_at, updated_at) \
-             VALUES ('SC-9999', 'SC', 110000, 993, '2020-01-01', 1, \
-             '2026-01-01T00:00:00', '2026-01-01T00:00:00') RETURNING id",
-        )
-        .fetch_one(pool)
-        .await
-        .unwrap()
-    }
-
-    #[tokio::test]
-    async fn matured_unreceived_deposit_counts_until_received() {
-        let pool = connect_memory().await.expect("memory db");
-        let id = seed_matured_unreceived(&pool).await;
-        let state = AppState { pool: pool.clone() };
-
-        let response = summary(State(state.clone())).await.expect("summary").0;
-        assert_eq!(response.active_totals.principal, 110000.0);
-        assert_eq!(response.upcoming.len(), 1);
-
-        // Live totals count it too — liquid_assets includes the principal.
-        let input = crate::service::wealth::totals_input(&pool).await.unwrap();
-        let liquid_before = crate::calc::live_totals(&input).liquid_assets;
-
-        let _received = receive(
-            State(state.clone()),
-            Path(id),
-            Json(ReceiveDeposit {
-                received_at: None,
-                interest: None,
-                bank_in: None,
-                account_id: None,
-            }),
-        )
-        .await
-        .expect("received");
-
-        let response = summary(State(state)).await.expect("summary").0;
-        assert_eq!(response.active_totals.principal, 0.0);
-        assert!(response.upcoming.is_empty());
-
-        // No 存入活期 was picked, so the principal leaves liquid_assets whole.
-        let input = crate::service::wealth::totals_input(&pool).await.unwrap();
-        let liquid_after = crate::calc::live_totals(&input).liquid_assets;
-        assert!((liquid_before - liquid_after - 110000.0).abs() < 1e-6);
-    }
 
     fn new_deposit(
         principal: Option<f64>,

@@ -5,16 +5,16 @@
 use axum::Json;
 use axum::extract::{Path, Query, State};
 use axum::http::StatusCode;
-use chrono::Datelike;
 use serde::{Deserialize, Serialize};
 
-use super::AppState;
 use super::patch::{merge_num, merge_text};
-use crate::calc::{DepositFacts, DepositInput, active_totals, validate_deposit};
+use super::{AppState, finite_or, parse_order, parse_received_at, parse_status};
+use crate::calc::{DepositInput, validate_deposit};
 use crate::error::{ApiError, ErrorBody};
 use crate::models::{FamilyDeposit, FamilyDepositPatch, MpfNotePatch, NewFamilyDeposit};
 use crate::store::family as store;
-use crate::store::today;
+
+pub use crate::service::family::{FamilyDepositSummary, FamilyHolderSummary};
 
 #[derive(Debug, Deserialize, utoipa::ToSchema, utoipa::IntoParams)]
 pub struct ListQuery {
@@ -42,16 +42,8 @@ pub async fn list(
     State(state): State<AppState>,
     Query(query): Query<ListQuery>,
 ) -> Result<Json<Vec<FamilyDeposit>>, ApiError> {
-    let received = match query.status.as_deref() {
-        Some(status) => match status.to_ascii_lowercase().as_str() {
-            "active" => Some(false),
-            "ended" => Some(true),
-            _ => return Err(ApiError::field("status", "status must be active or ended")),
-        },
-        None => None,
-    };
-    let descending =
-        matches!(query.order.as_deref(), Some(order) if order.eq_ignore_ascii_case("desc"));
+    let received = parse_status(query.status.as_deref(), "active", "ended")?;
+    let descending = parse_order(query.order.as_deref());
     store::list(
         &state.pool,
         received,
@@ -212,24 +204,8 @@ pub async fn receive(
     Json(body): Json<ReceiveFamilyDeposit>,
 ) -> Result<Json<FamilyDeposit>, ApiError> {
     let existing = store::load_one(&state.pool, id).await?;
-    if existing.received_at.is_some() {
-        return Err(ApiError::Conflict(format!(
-            "family deposit {id} is already received"
-        )));
-    }
-    let received_at = match body.received_at.as_deref() {
-        Some(date) => chrono::NaiveDate::parse_from_str(date, "%Y-%m-%d")
-            .map_err(|_| ApiError::field("received_at", "received_at must be YYYY-MM-DD"))?
-            .to_string(),
-        None => today().to_string(),
-    };
-    let interest = match body.interest {
-        Some(value) if !value.is_finite() => {
-            return Err(ApiError::field("interest", "interest must be a number"));
-        }
-        Some(value) => Some(value),
-        None => existing.interest,
-    };
+    let received_at = parse_received_at(body.received_at.as_deref())?;
+    let interest = finite_or("interest", body.interest, existing.interest)?;
 
     store::mark_received(&state.pool, id, &received_at, interest).await?;
 
@@ -271,26 +247,6 @@ pub async fn update_note(
     }))
 }
 
-#[derive(Debug, Serialize, utoipa::ToSchema)]
-pub struct FamilyHolderSummary {
-    pub holder: String,
-    pub note: Option<String>,
-    /// Unreceived deposits, earliest maturity first.
-    pub upcoming: Vec<FamilyDeposit>,
-    /// Σ principal over this holder's unreceived deposits.
-    pub active_principal: f64,
-}
-
-#[derive(Debug, Serialize, utoipa::ToSchema)]
-pub struct FamilyDepositSummary {
-    /// The date `status`/`active_principal` were derived against.
-    pub today: String,
-    /// Every holder with deposits or a stored note, sorted by name.
-    pub holders: Vec<FamilyHolderSummary>,
-    /// Distinct end years in the data plus the current year, for the filter.
-    pub history_years: Vec<i32>,
-}
-
 /// Every figure here is derived from the stored family deposits on each read.
 #[utoipa::path(
     operation_id = "family_summary",
@@ -304,102 +260,5 @@ pub struct FamilyDepositSummary {
 pub async fn summary(
     State(state): State<AppState>,
 ) -> Result<Json<FamilyDepositSummary>, ApiError> {
-    let today = today();
-    let deposits = store::load_all(&state.pool).await?;
-
-    // Holders = distinct deposit holders ∪ holders with a stored note.
-    let mut holders: Vec<String> = deposits
-        .iter()
-        .map(|deposit| deposit.holder.clone())
-        .collect();
-    holders.extend(crate::store::settings::family_note_holders(&state.pool).await?);
-    holders.sort();
-    holders.dedup();
-
-    let mut summaries = Vec::with_capacity(holders.len());
-    for holder in holders {
-        let rows: Vec<&FamilyDeposit> = deposits
-            .iter()
-            .filter(|deposit| deposit.holder == holder)
-            .collect();
-        let mut upcoming: Vec<FamilyDeposit> = rows
-            .iter()
-            .filter(|deposit| deposit.received_at.is_none())
-            .map(|deposit| (*deposit).clone())
-            .collect();
-        upcoming.sort_by(|a, b| {
-            a.end_date
-                .cmp(&b.end_date)
-                .then(a.sort_order.cmp(&b.sort_order))
-        });
-        let facts: Vec<DepositFacts<'_>> = rows
-            .iter()
-            .map(|deposit| {
-                let end_date = chrono::NaiveDate::parse_from_str(&deposit.end_date, "%Y-%m-%d")
-                    .map_err(|_| {
-                        ApiError::Conflict(format!(
-                            "stored end_date {} is not valid",
-                            deposit.end_date
-                        ))
-                    })?;
-                Ok(DepositFacts {
-                    bank: None,
-                    principal: deposit.principal,
-                    interest: deposit.interest,
-                    end_date,
-                    received: deposit.received_at.is_some(),
-                })
-            })
-            .collect::<Result<_, ApiError>>()?;
-        summaries.push(FamilyHolderSummary {
-            note: crate::store::settings::family_note(&state.pool, &holder).await?,
-            holder,
-            upcoming,
-            active_principal: active_totals(&facts).principal,
-        });
-    }
-
-    let mut history_years: Vec<i32> = deposits.iter().map(|deposit| deposit.end_year).collect();
-    history_years.push(today.year());
-    history_years.sort_unstable();
-    history_years.dedup();
-
-    Ok(Json(FamilyDepositSummary {
-        today: today.to_string(),
-        holders: summaries,
-        history_years,
-    }))
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-    use crate::db::connect_memory;
-
-    #[tokio::test]
-    async fn matured_unreceived_deposit_counts_in_the_holders_active_principal() {
-        let pool = connect_memory().await.expect("memory db");
-        let validated = validate_deposit(DepositInput {
-            label: Some("SC-9179"),
-            bank: Some("SC"),
-            principal: Some(100000.0),
-            rate: None,
-            interest: Some(500.0),
-            start_date: None,
-            end_date: "2020-01-01",
-        })
-        .expect("valid");
-        store::insert_family_deposit(&pool, "媽媽", &validated, None, 1)
-            .await
-            .unwrap();
-
-        let response = summary(State(AppState { pool })).await.expect("summary").0;
-        let holder = response
-            .holders
-            .iter()
-            .find(|holder| holder.holder == "媽媽")
-            .expect("holder");
-        assert_eq!(holder.active_principal, 100000.0);
-        assert_eq!(holder.upcoming.len(), 1);
-    }
+    Ok(Json(crate::service::family::summary(&state.pool).await?))
 }

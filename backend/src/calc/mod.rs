@@ -73,6 +73,16 @@ fn in_month(date: chrono::NaiveDate, month: chrono::NaiveDate) -> bool {
     date.year() == month.year() && date.month() == month.month()
 }
 
+/// The year filter's options: the distinct years in the data plus the
+/// current year, sorted — every page's `history_years` builds the same list.
+pub fn history_years(years: impl IntoIterator<Item = i32>, today: chrono::NaiveDate) -> Vec<i32> {
+    let mut years: Vec<i32> = years.into_iter().collect();
+    years.push(today.year());
+    years.sort_unstable();
+    years.dedup();
+    years
+}
+
 #[cfg(test)]
 pub(crate) mod test_helpers {
     use super::*;
@@ -160,5 +170,23 @@ pub(crate) mod test_helpers {
 
     pub(crate) fn ym(month: &str) -> chrono::NaiveDate {
         chrono::NaiveDate::parse_from_str(month, "%Y-%m-%d").expect("month")
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::test_helpers::day;
+
+    #[test]
+    fn history_years_is_the_data_years_plus_today_sorted_distinct() {
+        let today = day("2026-06-15");
+        assert_eq!(
+            super::history_years([2024, 2026, 2024, 2020], today),
+            vec![2020, 2024, 2026]
+        );
+        // Today is always included even with no data.
+        assert_eq!(super::history_years([], today), vec![2026]);
+        // A data year ahead of today still sorts after it.
+        assert_eq!(super::history_years([2030], today), vec![2026, 2030]);
     }
 }

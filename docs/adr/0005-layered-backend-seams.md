@@ -8,3 +8,7 @@ The backend is horizontally layered — `routes/` (thin HTTP adapters, no SQL) �
 - Vertical feature slices — rejected: rules can't be grep-enforced across slices.
 
 Source: `openspec/changes/archive/2026-10-08-layered-backend-architecture`, `2026-11-05-service-seam-writes`.
+
+### Amendment (2026-11-16)
+
+Page read models (`GET …/summary`) live in `service/`; routes only parse the query and call it.

@@ -1,12 +1,49 @@
+use serde::Serialize;
 use sqlx::SqlitePool;
 
 use crate::calc::{
-    MpfAccountInput, MpfPoint, mpf_figures, mpf_last_month, mpf_max, validate_mpf_account,
+    MpfAccountInput, MpfPoint, MpfTotals, mpf_figures, mpf_last_month, mpf_max, mpf_totals,
+    validate_mpf_account,
 };
 use crate::models::{MpfAccount, MpfAccountPatch, MpfHistoryRow};
 use crate::service::ServiceError;
 use crate::store::mpf::{self, StoredAccount};
 use crate::store::{StoreError, today};
+
+#[derive(Debug, Serialize, utoipa::ToSchema)]
+pub struct MpfResponse {
+    pub today: String,
+    pub accounts: Vec<MpfAccount>,
+    pub totals: MpfTotals,
+    pub note: Option<String>,
+    pub history: Vec<MpfHistoryRow>,
+}
+
+/// The MPF page read model — accounts with derived figures, history, note,
+/// and totals, all derived from the stored rows on each read.
+pub async fn overview(pool: &SqlitePool) -> Result<MpfResponse, StoreError> {
+    let today = today();
+    let stored = mpf::load_all_stored(pool).await?;
+    let history = mpf::load_history(pool, None).await?;
+    let accounts: Vec<MpfAccount> = stored
+        .iter()
+        .map(|account| present_account(account, &history, today))
+        .collect();
+    let facts: Vec<_> = stored
+        .iter()
+        .map(|account| mpf::facts_of(account, &history))
+        .collect();
+    let seed_max = crate::store::settings::mpf_seed_max(pool).await?;
+    let totals = mpf_totals(&facts, today, seed_max.0, seed_max.1);
+    let note = crate::store::settings::mpf_note(pool).await?;
+    Ok(MpfResponse {
+        today: today.to_string(),
+        accounts,
+        totals,
+        note,
+        history,
+    })
+}
 
 /// `None` keeps `existing`; a present value is trimmed and `null`/blank
 /// clears it — the shared PATCH-merge rule for nullable text.

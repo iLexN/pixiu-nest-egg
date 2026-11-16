@@ -3,7 +3,7 @@ use axum::extract::{Path, Query, State};
 use axum::http::StatusCode;
 use serde::Deserialize;
 
-use super::{AppState, parse_market, resolve_stock};
+use super::{AppState, parse_market, parse_order, resolve_stock};
 use crate::calc::{FieldError, TradeInput, validate_trade};
 use crate::error::{ApiError, ErrorBody};
 use crate::models::{InputMode, NewTrade, Trade, TradePatch};
@@ -38,8 +38,7 @@ pub async fn list(
     Query(query): Query<ListQuery>,
 ) -> Result<Json<Vec<Trade>>, ApiError> {
     let market = query.market.as_deref().map(parse_market).transpose()?;
-    let descending =
-        matches!(query.order.as_deref(), Some(order) if order.eq_ignore_ascii_case("desc"));
+    let descending = parse_order(query.order.as_deref());
     store::list(
         &state.pool,
         market,

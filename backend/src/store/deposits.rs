@@ -6,7 +6,7 @@ use sqlx::sqlite::SqliteRow;
 use crate::calc::ValidatedDeposit;
 use crate::calc::{DepositFacts, SuggestionDeposit, deposit_total, derive_rate};
 use crate::models::{Deposit, DepositStatus, NewDeposit};
-use crate::store::{Credit, StoreError, now_timestamp, today};
+use crate::store::{Credit, StoreError, now_timestamp, stored_date, today};
 
 pub const DEPOSIT_COLUMNS: &str = "id, label, bank, principal, rate, interest, start_date, \
      end_date, received_at, credited_account_id, credited_amount, \
@@ -14,8 +14,7 @@ pub const DEPOSIT_COLUMNS: &str = "id, label, bank, principal, rate, interest, s
 
 pub fn row_to_deposit(row: &SqliteRow, _today: chrono::NaiveDate) -> Result<Deposit, StoreError> {
     let end_date: String = row.try_get("end_date")?;
-    let parsed = chrono::NaiveDate::parse_from_str(&end_date, "%Y-%m-%d")
-        .map_err(|_| StoreError::Corrupt(format!("stored end_date {end_date} is not valid")))?;
+    let parsed = stored_date("end_date", &end_date)?;
     let principal: Option<f64> = row.try_get("principal")?;
     let interest: Option<f64> = row.try_get("interest")?;
     let received_at: Option<String> = row.try_get("received_at")?;
@@ -304,6 +303,19 @@ pub async fn active_facts(pool: &SqlitePool) -> Result<Vec<DepositFacts<'static>
     rows_to_facts(&rows)
 }
 
+/// A loaded deposit reduced to the facts the summary rollups need; a stored
+/// `end_date` that will not parse is `Corrupt` — `row_to_deposit` already
+/// refused it on the way in, so this can only fail on hand-edited data.
+pub fn facts_of(deposit: &Deposit) -> Result<DepositFacts<'_>, StoreError> {
+    Ok(DepositFacts {
+        bank: deposit.bank.as_deref(),
+        principal: deposit.principal,
+        interest: deposit.interest,
+        end_date: stored_date("end_date", &deposit.end_date)?,
+        received: deposit.received_at.is_some(),
+    })
+}
+
 fn rows_to_facts(rows: &[SqliteRow]) -> Result<Vec<DepositFacts<'static>>, StoreError> {
     let mut facts = Vec::with_capacity(rows.len());
     for row in rows {
@@ -313,9 +325,7 @@ fn rows_to_facts(rows: &[SqliteRow]) -> Result<Vec<DepositFacts<'static>>, Store
             bank: None,
             principal: row.try_get("principal")?,
             interest: row.try_get("interest")?,
-            end_date: chrono::NaiveDate::parse_from_str(&end_date, "%Y-%m-%d").map_err(|_| {
-                StoreError::Corrupt(format!("stored end_date {end_date} is not valid"))
-            })?,
+            end_date: stored_date("end_date", &end_date)?,
             received: received_at.is_some(),
         });
     }
@@ -357,15 +367,9 @@ pub async fn suggestion_events(
             Ok(SuggestionDeposit {
                 id: row.try_get("id")?,
                 start_date: start_date
-                    .map(|date| {
-                        chrono::NaiveDate::parse_from_str(&date, "%Y-%m-%d").map_err(|_| {
-                            StoreError::Corrupt(format!("stored date {date} is not valid"))
-                        })
-                    })
+                    .map(|date| stored_date("date", &date))
                     .transpose()?,
-                end_date: chrono::NaiveDate::parse_from_str(&end_date, "%Y-%m-%d").map_err(
-                    |_| StoreError::Corrupt(format!("stored date {end_date} is not valid")),
-                )?,
+                end_date: stored_date("date", &end_date)?,
                 principal: row.try_get::<Option<f64>, _>("principal")?.unwrap_or(0.0),
                 interest: row.try_get::<Option<f64>, _>("interest")?.unwrap_or(0.0),
                 label: row.try_get("label")?,

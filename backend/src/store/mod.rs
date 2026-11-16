@@ -52,3 +52,10 @@ pub(crate) fn now_timestamp() -> String {
 pub fn today() -> chrono::NaiveDate {
     chrono::Local::now().date_naive()
 }
+
+/// A stored `YYYY-MM-DD` column value; one that won't parse is data
+/// corruption (`Corrupt`, served as 409), never a request error.
+pub fn stored_date(column: &str, raw: &str) -> Result<chrono::NaiveDate, StoreError> {
+    chrono::NaiveDate::parse_from_str(raw, "%Y-%m-%d")
+        .map_err(|_| StoreError::Corrupt(format!("stored {column} {raw} is not valid")))
+}

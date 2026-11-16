@@ -5,12 +5,17 @@
 //! the `dep-end` month item — and delete reverses the debit and removes
 //! the `dep-start` item and its dismissals together with the row.
 
+use serde::Serialize;
 use sqlx::SqlitePool;
 
-use crate::calc::{DepositInput, FieldError, ValidatedDeposit, validate_deposit};
-use crate::models::{CashRole, Currency, NewDeposit};
+use crate::calc::{
+    ActiveMonthBucket, ActiveTotals, BankRollup, DepositFacts, DepositInput, FieldError,
+    ValidatedDeposit, YearRollup, active_month_rollup, active_totals, bank_rollup, history_years,
+    validate_deposit, year_rollups,
+};
+use crate::models::{CashRole, Currency, Deposit, NewDeposit};
 use crate::service::{ServiceError, receipts};
-use crate::store::{StoreError, cash_accounts, deposits, forecast, months, now_timestamp};
+use crate::store::{StoreError, cash_accounts, deposits, forecast, months, now_timestamp, today};
 
 /// The shared placement write, inside the caller's transaction: the row
 /// insert, the optional 活期 debit of the principal from
@@ -178,6 +183,57 @@ pub async fn receive(pool: &SqlitePool, id: i64, input: &ReceiveInput) -> Result
     Ok(())
 }
 
+#[derive(Debug, Serialize, utoipa::ToSchema)]
+pub struct DepositSummaryResponse {
+    /// The date `status` was derived against.
+    pub today: String,
+    /// Unreceived deposits, earliest maturity first.
+    pub upcoming: Vec<Deposit>,
+    pub active_totals: ActiveTotals,
+    /// Unreceived deposits grouped by end (year, month).
+    pub months: Vec<ActiveMonthBucket>,
+    /// Unreceived deposits grouped by bank.
+    pub banks: Vec<BankRollup>,
+    /// Per-year month tables over every deposit ending that year.
+    pub years: Vec<YearRollup>,
+    /// Distinct end years in the data plus the current year, for the filter.
+    pub history_years: Vec<i32>,
+}
+
+/// The 定期 page read model — every figure derived from the stored deposits
+/// on each read.
+pub async fn summary(pool: &SqlitePool) -> Result<DepositSummaryResponse, StoreError> {
+    let today = today();
+    let all = deposits::load_all(pool).await?;
+    let facts: Vec<DepositFacts<'_>> = all
+        .iter()
+        .map(deposits::facts_of)
+        .collect::<Result<_, _>>()?;
+
+    // List, totals, and rollups all follow receipt: an end_date in the past
+    // without 收訖 means "matured, awaiting confirmation" and still counts.
+    let mut upcoming: Vec<Deposit> = all
+        .iter()
+        .filter(|deposit| deposit.received_at.is_none())
+        .cloned()
+        .collect();
+    upcoming.sort_by(|a, b| {
+        a.end_date
+            .cmp(&b.end_date)
+            .then(a.sort_order.cmp(&b.sort_order))
+    });
+
+    Ok(DepositSummaryResponse {
+        today: today.to_string(),
+        upcoming,
+        active_totals: active_totals(&facts),
+        months: active_month_rollup(&facts),
+        banks: bank_rollup(&facts),
+        years: year_rollups(&facts),
+        history_years: history_years(all.iter().map(|deposit| deposit.end_year), today),
+    })
+}
+
 /// Delete an unreceived deposit: one transaction — the reversal of the
 /// recorded placement debit (the stored amount added back to the stored
 /// account; skipped when the account is gone), every `dep-start:<id>`
@@ -248,6 +304,56 @@ mod tests {
         .fetch_optional(pool)
         .await
         .unwrap()
+    }
+
+    /// A matured deposit inserted straight into the table stays unreceived —
+    /// `insert_deposit` would auto-receive the past end_date.
+    async fn seed_matured_unreceived(pool: &SqlitePool) -> i64 {
+        sqlx::query_scalar(
+            "INSERT INTO deposits (label, bank, principal, interest, end_date, \
+             sort_order, created_at, updated_at) \
+             VALUES ('SC-9999', 'SC', 110000, 993, '2020-01-01', 1, \
+             '2026-01-01T00:00:00', '2026-01-01T00:00:00') RETURNING id",
+        )
+        .fetch_one(pool)
+        .await
+        .unwrap()
+    }
+
+    #[tokio::test]
+    async fn matured_unreceived_deposit_counts_until_received() {
+        let pool = crate::db::connect_memory().await.expect("memory db");
+        let id = seed_matured_unreceived(&pool).await;
+
+        let response = summary(&pool).await.expect("summary");
+        assert_eq!(response.active_totals.principal, 110000.0);
+        assert_eq!(response.upcoming.len(), 1);
+
+        // Live totals count it too — liquid_assets includes the principal.
+        let input = crate::service::wealth::totals_input(&pool).await.unwrap();
+        let liquid_before = crate::calc::live_totals(&input).liquid_assets;
+
+        receive(
+            &pool,
+            id,
+            &ReceiveInput {
+                received_at: today().to_string(),
+                interest: Some(993.0),
+                bank_in: true,
+                account_id: None,
+            },
+        )
+        .await
+        .expect("received");
+
+        let response = summary(&pool).await.expect("summary");
+        assert_eq!(response.active_totals.principal, 0.0);
+        assert!(response.upcoming.is_empty());
+
+        // No 存入活期 was picked, so the principal leaves liquid_assets whole.
+        let input = crate::service::wealth::totals_input(&pool).await.unwrap();
+        let liquid_after = crate::calc::live_totals(&input).liquid_assets;
+        assert!((liquid_before - liquid_after - 110000.0).abs() < 1e-6);
     }
 
     /// Create records the start month's dep-start item of −principal; a

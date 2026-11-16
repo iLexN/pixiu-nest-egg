@@ -2,12 +2,16 @@
 //! the row update, the receipt credit/reversal, and the `div:<id>` month
 //! item.
 
+use chrono::Datelike;
+use serde::Serialize;
 use sqlx::SqlitePool;
 
-use crate::calc::ValidatedDividend;
-use crate::models::{Currency, Market};
+use crate::calc::{
+    DividendFacts, DividendYearRollup, ValidatedDividend, dividend_year_rollups, history_years,
+};
+use crate::models::{Currency, Dividend, Market};
 use crate::service::{ServiceError, receipts};
-use crate::store::{StoreError, dividends, months, now_timestamp};
+use crate::store::{StoreError, dividends, months, now_timestamp, today};
 
 /// The credit currency a dividend banks in: HK stocks credit HKD, US stocks
 /// land in the USD (IBKR) account.
@@ -16,6 +20,45 @@ fn credit_currency(market: Market) -> Currency {
         Market::Hk => Currency::Hkd,
         Market::Us => Currency::Usd,
     }
+}
+
+#[derive(Debug, Serialize, utoipa::ToSchema)]
+pub struct DividendSummaryResponse {
+    /// The date the response was generated.
+    pub today: String,
+    /// Pending dividends (no received amount), earliest pay date first.
+    pub pending: Vec<Dividend>,
+    /// Per-year totals of received amounts, with a per-stock breakdown.
+    pub years: Vec<DividendYearRollup>,
+    /// Distinct pay-date years in the data plus the current year.
+    pub history_years: Vec<i32>,
+}
+
+/// The 派息 page read model — every figure derived from the stored dividends
+/// on each read. `market` restricts to one market; `None` covers both.
+pub async fn summary(
+    pool: &SqlitePool,
+    market: Option<Market>,
+) -> Result<DividendSummaryResponse, StoreError> {
+    let today = today();
+    let all = dividends::list_for_market(pool, market).await?;
+    let facts: Vec<DividendFacts<'_>> = all
+        .iter()
+        .map(dividends::facts_of)
+        .collect::<Result<_, _>>()?;
+
+    let pending: Vec<Dividend> = all
+        .iter()
+        .filter(|dividend| dividend.received_amount.is_none())
+        .cloned()
+        .collect();
+
+    Ok(DividendSummaryResponse {
+        today: today.to_string(),
+        pending,
+        years: dividend_year_rollups(&facts),
+        history_years: history_years(facts.iter().map(|fact| fact.pay_date.year()), today),
+    })
 }
 
 /// The dividend PATCH transition inputs — the route keeps merge+validate and

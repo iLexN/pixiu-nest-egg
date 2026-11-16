@@ -7,7 +7,7 @@ use crate::calc::{
     dividend_variance, yield_on_cost, yield_on_price,
 };
 use crate::models::{Dividend, DividendStatus, Market, TradeType};
-use crate::store::{Credit, StoreError, now_timestamp};
+use crate::store::{Credit, StoreError, now_timestamp, stored_date};
 
 pub const DIVIDEND_SELECT: &str = "SELECT d.id, d.stock_id, s.market, s.code, d.pay_date, \
      d.per_share, d.shares_held, d.buy_cost, d.estimated_amount, d.received_amount, \
@@ -54,6 +54,16 @@ pub fn row_to_dividend(row: &SqliteRow) -> Result<Dividend, StoreError> {
         yield_on_cost: yield_on_cost(amount, buy_cost),
         yield_on_price: yield_on_price(amount, received_price, shares_held),
         variance: dividend_variance(received_amount, estimated_amount),
+    })
+}
+
+/// A loaded dividend reduced to the facts the summary rollup needs; a stored
+/// `pay_date` that will not parse is `Corrupt`.
+pub fn facts_of(dividend: &Dividend) -> Result<DividendFacts<'_>, StoreError> {
+    Ok(DividendFacts {
+        code: &dividend.code,
+        pay_date: stored_date("pay_date", &dividend.pay_date)?,
+        received_amount: dividend.received_amount,
     })
 }
 
@@ -153,9 +163,7 @@ pub async fn dated_trade_facts(
     for row in &rows {
         let trade_type: String = row.try_get("trade_type")?;
         let trade_date: String = row.try_get("trade_date")?;
-        let parsed = chrono::NaiveDate::parse_from_str(&trade_date, "%Y-%m-%d").map_err(|_| {
-            StoreError::Corrupt(format!("stored trade_date {trade_date} is not valid"))
-        })?;
+        let parsed = stored_date("trade_date", &trade_date)?;
         facts.push((
             parsed,
             TradeFacts {
@@ -324,8 +332,7 @@ pub async fn market_dividend_facts(
     let mut facts = Vec::with_capacity(rows.len());
     for row in &rows {
         let pay_date: String = row.try_get("pay_date")?;
-        let parsed = chrono::NaiveDate::parse_from_str(&pay_date, "%Y-%m-%d")
-            .map_err(|_| StoreError::Corrupt(format!("stored pay_date {pay_date} is not valid")))?;
+        let parsed = stored_date("pay_date", &pay_date)?;
         facts.push(DividendFacts {
             code: "",
             pay_date: parsed,
@@ -358,9 +365,7 @@ pub async fn suggestion_receipts(
             let pay_date: String = row.try_get("pay_date")?;
             Ok(SuggestionReceipt {
                 id: row.try_get("id")?,
-                pay_date: chrono::NaiveDate::parse_from_str(&pay_date, "%Y-%m-%d").map_err(
-                    |_| StoreError::Corrupt(format!("stored date {pay_date} is not valid")),
-                )?,
+                pay_date: stored_date("date", &pay_date)?,
                 amount: received_amount.or(estimated_amount),
                 label: row.try_get("code")?,
                 received: received_amount.is_some(),

@@ -7,9 +7,9 @@ use sqlx::Row;
 use sqlx::SqlitePool;
 use sqlx::sqlite::SqliteRow;
 
-use crate::calc::{ValidatedDeposit, deposit_total};
+use crate::calc::{DepositFacts, ValidatedDeposit, deposit_total};
 use crate::models::{DepositStatus, FamilyDeposit};
-use crate::store::{StoreError, now_timestamp};
+use crate::store::{StoreError, now_timestamp, stored_date};
 
 pub const FAMILY_DEPOSIT_COLUMNS: &str = "id, holder, label, bank, principal, interest, \
      start_date, end_date, received_at, note, sort_order";
@@ -18,8 +18,7 @@ pub const FAMILY_DEPOSIT_COLUMNS: &str = "id, holder, label, bank, principal, in
 /// `status` derives from `received_at` only (never auto-ended by date).
 pub fn row_to_family_deposit(row: &SqliteRow) -> Result<FamilyDeposit, StoreError> {
     let end_date: String = row.try_get("end_date")?;
-    let parsed = chrono::NaiveDate::parse_from_str(&end_date, "%Y-%m-%d")
-        .map_err(|_| StoreError::Corrupt(format!("stored end_date {end_date} is not valid")))?;
+    let parsed = stored_date("end_date", &end_date)?;
     let principal: Option<f64> = row.try_get("principal")?;
     let interest: Option<f64> = row.try_get("interest")?;
     let received_at: Option<String> = row.try_get("received_at")?;
@@ -43,6 +42,18 @@ pub fn row_to_family_deposit(row: &SqliteRow) -> Result<FamilyDeposit, StoreErro
         },
         end_year: parsed.year(),
         end_month: parsed.month(),
+    })
+}
+
+/// A loaded family deposit reduced to the facts the summary needs — the same
+/// parse-once rule as `store::deposits::facts_of`.
+pub fn facts_of(deposit: &FamilyDeposit) -> Result<DepositFacts<'_>, StoreError> {
+    Ok(DepositFacts {
+        bank: deposit.bank.as_deref(),
+        principal: deposit.principal,
+        interest: deposit.interest,
+        end_date: stored_date("end_date", &deposit.end_date)?,
+        received: deposit.received_at.is_some(),
     })
 }
 
@@ -171,12 +182,34 @@ pub async fn delete_family_deposit(pool: &SqlitePool, id: i64) -> Result<u64, St
         .rows_affected())
 }
 
+/// 收訖 the family deposit — the single-domain atomic op owns the
+/// already-received guard, like deposits/bonds where the domain path checks.
+/// `Err(NotFound)` while `id` names no deposit, `Err(Conflict)` when it was
+/// already received.
 pub async fn mark_received(
     pool: &SqlitePool,
     id: i64,
     received_at: &str,
     interest: Option<f64>,
 ) -> Result<(), StoreError> {
+    let stored: Option<Option<String>> =
+        sqlx::query_scalar("SELECT received_at FROM family_deposits WHERE id = ?")
+            .bind(id)
+            .fetch_optional(pool)
+            .await?;
+    match stored {
+        None => {
+            return Err(StoreError::NotFound(format!(
+                "family deposit {id} not found"
+            )));
+        }
+        Some(Some(_)) => {
+            return Err(StoreError::Conflict(format!(
+                "family deposit {id} is already received"
+            )));
+        }
+        Some(None) => {}
+    }
     sqlx::query(
         "UPDATE family_deposits SET received_at = ?, interest = ?, updated_at = ? WHERE id = ?",
     )
@@ -209,4 +242,36 @@ pub async fn load_all(pool: &SqlitePool) -> Result<Vec<FamilyDeposit>, StoreErro
     rows.iter()
         .map(row_to_family_deposit)
         .collect::<Result<Vec<_>, _>>()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::db::connect_memory;
+
+    /// 收訖 is final: marking an already-received deposit conflicts, and an
+    /// unknown id is NotFound.
+    #[tokio::test]
+    async fn mark_received_on_a_received_deposit_conflicts() {
+        let pool = connect_memory().await.expect("memory db");
+        let id: i64 = sqlx::query_scalar(
+            "INSERT INTO family_deposits (holder, label, principal, end_date, received_at, \
+             sort_order, created_at, updated_at) \
+             VALUES ('媽媽', 'SC-9179', 100000, '2020-01-01', '2020-01-01', 1, \
+             '2026-01-01T00:00:00', '2026-01-01T00:00:00') RETURNING id",
+        )
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+
+        let err = mark_received(&pool, id, "2026-11-16", Some(500.0))
+            .await
+            .expect_err("already received");
+        assert!(matches!(err, StoreError::Conflict(_)));
+
+        let err = mark_received(&pool, 9999, "2026-11-16", None)
+            .await
+            .expect_err("unknown id");
+        assert!(matches!(err, StoreError::NotFound(_)));
+    }
 }

@@ -35,6 +35,8 @@ portfolio max            = the largest rate / largest gain independently over
 
 The as-of merge: for every recorded history date (plus last month-end and today), each account contributes its latest row at or before that date — an account with no eligible row falls back to its current values once it existed (`created_at` ≤ date), or is excluded before that. This carries an untouched account forward through months it was never edited and yields a true portfolio max rather than summing per-account peaks that may never have co-occurred.
 
+The page read models on this file's views — `GET /api/mpf`, `GET /api/bonds/summary`, `GET /api/aia/summary` — are composed by `service::mpf::overview`, `service::bonds::summary`, and `service::aia::summary`; the routes only parse the query and delegate (ADR 0005).
+
 The 備註 block saves free text via `PATCH /api/mpf/note` into `app_meta`; clearing it removes the entry.
 
 ## Load the 債券 view

@@ -270,3 +270,11 @@ override, else `max(0, lastSalary(Y) − lastSalary(Y−1))`.
 **Blended rate**: the year review's cross-class yields — `income_cost_rate`,
 `total_value_rate`, `income_value_rate`; USD figures blend at the fx rate and
 are absent while it is unset.
+
+## Backend structure
+
+**Page read model**: the response behind a page's `GET …/summary`-style
+endpoint (`service::<domain>::summary`, `service::mpf::overview`,
+`service::summary::build`) — owned by `service/`, called once by the route,
+and `pub use`-re-exported from it so the OpenAPI schema is unchanged.
+_Avoid_: view model, DTO

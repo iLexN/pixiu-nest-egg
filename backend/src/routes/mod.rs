@@ -183,6 +183,51 @@ pub fn parse_market(value: &str) -> Result<Market, ApiError> {
         .ok_or_else(|| ApiError::field("market", "market must be HK or US"))
 }
 
+/// The `?status=` filter every list endpoint shares: `active` → `Some(false)`,
+/// `done` → `Some(true)`, absent → `None`, anything else a field error.
+pub fn parse_status(raw: Option<&str>, active: &str, done: &str) -> Result<Option<bool>, ApiError> {
+    match raw {
+        Some(status) => match status.to_ascii_lowercase().as_str() {
+            value if value == active => Ok(Some(false)),
+            value if value == done => Ok(Some(true)),
+            _ => Err(ApiError::field(
+                "status",
+                format!("status must be {active} or {done}"),
+            )),
+        },
+        None => Ok(None),
+    }
+}
+
+/// The `?order=` flag the list endpoints share: `desc` (any case) sorts
+/// descending; anything else, or absent, ascending.
+pub fn parse_order(raw: Option<&str>) -> bool {
+    raw.is_some_and(|order| order.eq_ignore_ascii_case("desc"))
+}
+
+/// A `received_at` body field: `YYYY-MM-DD` when supplied, today when absent.
+pub fn parse_received_at(raw: Option<&str>) -> Result<String, ApiError> {
+    match raw {
+        Some(date) => Ok(chrono::NaiveDate::parse_from_str(date, "%Y-%m-%d")
+            .map_err(|_| ApiError::field("received_at", "received_at must be YYYY-MM-DD"))?
+            .to_string()),
+        None => Ok(crate::store::today().to_string()),
+    }
+}
+
+/// An optional numeric body field: non-finite is a field error, absent keeps
+/// the default (`Option<f64>` fields pass an `Option` default; `f64` fields a
+/// plain one).
+pub fn finite_or<T: From<f64>>(field: &str, value: Option<f64>, default: T) -> Result<T, ApiError> {
+    match value {
+        Some(value) if !value.is_finite() => {
+            Err(ApiError::field(field, format!("{field} must be a number")))
+        }
+        Some(value) => Ok(value.into()),
+        None => Ok(default),
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
