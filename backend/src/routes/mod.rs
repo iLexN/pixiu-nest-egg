@@ -186,17 +186,16 @@ pub fn parse_market(value: &str) -> Result<Market, ApiError> {
 /// The `?status=` filter every list endpoint shares: `active` → `Some(false)`,
 /// `done` → `Some(true)`, absent → `None`, anything else a field error.
 pub fn parse_status(raw: Option<&str>, active: &str, done: &str) -> Result<Option<bool>, ApiError> {
-    match raw {
-        Some(status) => match status.to_ascii_lowercase().as_str() {
+    raw.map_or(Ok(None), |status| {
+        match status.to_ascii_lowercase().as_str() {
             value if value == active => Ok(Some(false)),
             value if value == done => Ok(Some(true)),
             _ => Err(ApiError::field(
                 "status",
                 format!("status must be {active} or {done}"),
             )),
-        },
-        None => Ok(None),
-    }
+        }
+    })
 }
 
 /// The `?order=` flag the list endpoints share: `desc` (any case) sorts

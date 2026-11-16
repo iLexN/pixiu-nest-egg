@@ -227,6 +227,7 @@ pub async fn convert(
 mod tests {
     use super::*;
     use crate::db::connect_memory;
+    use crate::store::StoreError;
 
     async fn seed_bank(pool: &SqlitePool, label: &str, amount: f64) -> i64 {
         sqlx::query_scalar(
@@ -307,7 +308,7 @@ mod tests {
         assert_eq!(item_amount, -130000.0);
         assert!(matches!(
             store::load_item(&pool, item).await,
-            Err(crate::store::StoreError::NotFound(_))
+            Err(StoreError::NotFound(_))
         ));
     }
 
@@ -414,7 +415,7 @@ mod tests {
         assert_eq!(items, 0);
         assert!(matches!(
             store::load_item(&pool, item).await,
-            Err(crate::store::StoreError::NotFound(_))
+            Err(StoreError::NotFound(_))
         ));
     }
 }

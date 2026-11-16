@@ -45,13 +45,12 @@ pub async fn totals_input(pool: &SqlitePool) -> Result<LiveTotalsInput, StoreErr
     // what this very function is computing).
     let (stat_rows, items) = super::months::stat_rows_no_live(pool).await?;
     let rates = crate::store::months::pool_rates(pool).await?;
-    let pool_balance = match stat_rows.last() {
-        Some(latest) => crate::calc::pool_balances(&stat_rows, &items, &rates)
+    let pool_balance = stat_rows.last().map_or(0.0, |latest| {
+        crate::calc::pool_balances(&stat_rows, &items, &rates)
             .get(&latest.month.year())
             .copied()
-            .unwrap_or(0.0),
-        None => 0.0,
-    };
+            .unwrap_or(0.0)
+    });
 
     Ok(LiveTotalsInput {
         hk_market_value: hk,

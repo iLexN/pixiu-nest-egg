@@ -92,10 +92,7 @@ pub struct SuggestionEvents {
 /// already carries its 調整 as single items, so suggesting auto items there
 /// would double-count.
 pub fn suggestions_enabled(month: &str, today: chrono::NaiveDate) -> bool {
-    match parse_month(month) {
-        Some(month) => month >= first_of_month(today),
-        None => false,
-    }
+    parse_month(month).is_some_and(|month| month >= first_of_month(today))
 }
 
 /// The candidate items for one month, minus keys already stored or dismissed.

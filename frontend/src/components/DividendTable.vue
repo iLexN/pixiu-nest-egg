@@ -60,7 +60,7 @@ const columns = computed(() => (props.receivable ? 9 : props.market === 'US' ? 1
         <td class="note">{{ dividend.note ?? '' }}</td>
         <td class="row-actions">
           <RowActions
-            :receive="props.receivable === true && dividend.status === 'PENDING'"
+            :receive="props.receivable && dividend.status === 'PENDING'"
             @receive="emit('receive', dividend)"
             @edit="emit('edit', dividend)"
             @remove="emit('remove', dividend)"

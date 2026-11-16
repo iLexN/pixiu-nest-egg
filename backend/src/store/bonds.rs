@@ -440,7 +440,7 @@ fn row_to_coupon_receipt(row: &SqliteRow) -> Result<SuggestionReceipt, StoreErro
         id: row.try_get("id")?,
         pay_date: chrono::NaiveDate::parse_from_str(&pay_date, "%Y-%m-%d")
             .map_err(|_| StoreError::Corrupt(format!("stored date {pay_date} is not valid")))?,
-        amount: received_amount.or(crate::calc::coupon_expected(per_10k, principal)),
+        amount: received_amount.or(coupon_expected(per_10k, principal)),
         label: row.try_get("label")?,
         received: received_amount.is_some(),
     })

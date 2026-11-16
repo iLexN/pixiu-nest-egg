@@ -374,9 +374,10 @@ pub fn sector_rollup(rows: &[RollupInput<'_>]) -> Vec<SectorRollup> {
             .unwrap_or(UNCATEGORIZED_SECTOR)
             .to_string();
 
-        let entry = match groups.iter_mut().find(|g| g.sector == sector) {
-            Some(existing) => existing,
-            None => {
+        let index = groups
+            .iter()
+            .position(|g| g.sector == sector)
+            .unwrap_or_else(|| {
                 groups.push(SectorRollup {
                     sector,
                     buy_cost: 0.0,
@@ -385,9 +386,9 @@ pub fn sector_rollup(rows: &[RollupInput<'_>]) -> Vec<SectorRollup> {
                     share_of_market_value: None,
                     percent_change: None,
                 });
-                groups.last_mut().expect("just pushed")
-            }
-        };
+                groups.len() - 1
+            });
+        let entry = &mut groups[index];
 
         entry.buy_cost += row.total_buy_cost;
         if let Some(value) = row.market_value {

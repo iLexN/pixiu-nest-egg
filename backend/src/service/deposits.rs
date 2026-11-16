@@ -519,7 +519,7 @@ mod tests {
     /// An unlabeled deposit's dep-start item is stored as 定期 — the same
     /// label the suggestion carries.
     #[tokio::test]
-    async fn an_unlabeled_deposit_records_dep_start_as_定期() {
+    async fn an_unlabeled_deposit_records_dep_start_with_the_default_label() {
         let pool = crate::db::connect_memory().await.expect("memory db");
         seed_months(&pool, &["2099-10-01"]).await;
         let mut unlabeled = body();

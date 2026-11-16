@@ -17,9 +17,7 @@ pub fn active_principal_of(bonds: &[Bond]) -> f64 {
 
 /// 債券!B1 for callers that have not loaded the bonds (live month totals).
 pub async fn active_principal(pool: &SqlitePool) -> Result<f64, StoreError> {
-    Ok(active_principal_of(
-        &crate::store::bonds::load_all_bonds(pool).await?,
-    ))
+    Ok(active_principal_of(&bonds::load_all_bonds(pool).await?))
 }
 
 #[derive(Debug, Serialize, utoipa::ToSchema)]
@@ -591,7 +589,7 @@ mod tests {
         assert_eq!(response.upcoming_coupons.len(), 1);
         assert_eq!(response.upcoming_coupons[0].coupon.pay_date, "2020-06-01");
 
-        let listed = crate::store::bonds::list(&pool, Some(false), false)
+        let listed = bonds::list(&pool, Some(false), false)
             .await
             .expect("active list");
         assert_eq!(listed.len(), 1);
@@ -616,7 +614,7 @@ mod tests {
         assert_eq!(response.matured.len(), 1);
         assert!(response.upcoming_coupons.is_empty());
 
-        let listed = crate::store::bonds::list(&pool, Some(true), false)
+        let listed = bonds::list(&pool, Some(true), false)
             .await
             .expect("matured list");
         assert_eq!(listed.len(), 1);

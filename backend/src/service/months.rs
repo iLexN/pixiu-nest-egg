@@ -366,12 +366,11 @@ pub async fn load_events(
 /// `None` keeps `existing`; a present value is trimmed and `null`/blank
 /// clears it — the shared PATCH-merge rule for nullable text.
 fn merge_text(patch: Option<Option<String>>, existing: Option<String>) -> Option<String> {
-    match patch {
-        Some(value) => value
+    patch.map_or(existing, |value| {
+        value
             .map(|value| value.trim().to_string())
-            .filter(|value| !value.is_empty()),
-        None => existing,
-    }
+            .filter(|value| !value.is_empty())
+    })
 }
 
 /// Upsert a month row. Creating snapshots the live totals and the current
@@ -582,7 +581,7 @@ mod tests {
         total_assets: Option<f64>,
         liquid_assets: Option<f64>,
     ) {
-        let now = crate::store::now_timestamp();
+        let now = now_timestamp();
         crate::store::months::insert_month(
             pool,
             &month_key(month),

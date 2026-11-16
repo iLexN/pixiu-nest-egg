@@ -237,8 +237,9 @@ mod tests {
         assert_eq!(candidate.amount, -100000.0);
     }
 
+    /// No start_date means no candidate; an unlabeled deposit falls back to 定期.
     #[test]
-    fn dep_start_needs_a_start_date_and_falls_back_to_定期() {
+    fn dep_start_needs_a_start_date_and_falls_back_to_the_default_label() {
         let mut without_start = deposit(None);
         without_start.start_date = None;
         assert!(dep_start(&without_start).is_none());
@@ -312,7 +313,7 @@ mod tests {
     }
 
     #[test]
-    fn ibkr_is_minus_amount_labelled_轉入() {
+    fn ibkr_is_minus_amount_labelled_ibkr_transfer() {
         let candidate = ibkr(&SuggestionIbkrTransfer {
             id: 11,
             date: day("2026-10-17"),

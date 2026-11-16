@@ -48,12 +48,11 @@ pub async fn overview(pool: &SqlitePool) -> Result<MpfResponse, StoreError> {
 /// `None` keeps `existing`; a present value is trimmed and `null`/blank
 /// clears it — the shared PATCH-merge rule for nullable text.
 fn merge_text(patch: Option<Option<String>>, existing: Option<String>) -> Option<String> {
-    match patch {
-        Some(value) => value
+    patch.map_or(existing, |value| {
+        value
             .map(|value| value.trim().to_string())
-            .filter(|value| !value.is_empty()),
-        None => existing,
-    }
+            .filter(|value| !value.is_empty())
+    })
 }
 
 /// Patch an account in one transaction: `record_history` only when

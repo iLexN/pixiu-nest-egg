@@ -274,8 +274,5 @@ fn patched_optional<T>(patch: Option<Option<T>>, existing: Option<T>) -> Option<
 }
 
 fn patched_trimmed(patch: Option<Option<String>>, existing: Option<String>) -> Option<String> {
-    match patch {
-        Some(value) => trimmed(value.as_deref()),
-        None => existing,
-    }
+    patch.map_or(existing, |value| trimmed(value.as_deref()))
 }

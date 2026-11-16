@@ -25,7 +25,7 @@ pub struct StoredAccount {
     pub sort_order: i64,
     pub seed_max_rate: Option<f64>,
     pub seed_max_gain: Option<f64>,
-    pub created_on: chrono::NaiveDate,
+    pub created_on: NaiveDate,
 }
 
 pub fn row_to_stored(row: &SqliteRow) -> Result<StoredAccount, StoreError> {
@@ -121,7 +121,7 @@ pub fn facts_of(account: &StoredAccount, history: &[MpfHistoryRow]) -> MpfAccoun
             .iter()
             .filter(|row| row.account_id == account.id)
             .map(|row| MpfPoint {
-                recorded_on: chrono::NaiveDate::parse_from_str(&row.recorded_on, "%Y-%m-%d")
+                recorded_on: NaiveDate::parse_from_str(&row.recorded_on, "%Y-%m-%d")
                     .unwrap_or(account.created_on),
                 contributions: row.contributions,
                 balance: row.balance,

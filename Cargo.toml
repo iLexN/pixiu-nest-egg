@@ -1,3 +1,14 @@
 [workspace]
 members = ["backend"]
 resolver = "3"
+
+# Mirror the editor's "Non-ASCII characters" inspection in the toolchain:
+# cargo check/clippy (and rust-analyzer) warn on non-ASCII identifiers, and
+# `cargo clippy -D warnings` fails on them. Chinese in strings/comments is
+# intentional domain content and untouched by this lint.
+[workspace.lints.rust]
+non_ascii_idents = "warn"
+unused_qualifications = "warn"
+
+[workspace.lints.clippy]
+option_if_let_else = "warn"

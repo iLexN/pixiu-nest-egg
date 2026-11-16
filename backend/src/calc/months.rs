@@ -142,26 +142,29 @@ pub fn month_derived_with_tail(
                 (Some(salary), Some(spend)) => Some(salary - spend + sums.income),
                 _ => None,
             };
-            let total_change = match next {
-                Some(next) => match (next.total_assets, row.total_assets) {
-                    (Some(next_total), Some(total)) => Some(next_total - total),
-                    _ => None,
+            let total_change = next.map_or_else(
+                || {
+                    live_tail
+                        .and_then(|live| row.total_assets.map(|total| live.total_assets - total))
                 },
-                None => match (live_tail, row.total_assets) {
-                    (Some(live), Some(total)) => Some(live.total_assets - total),
-                    _ => None,
+                |next| {
+                    next.total_assets
+                        .zip(row.total_assets)
+                        .map(|(next_total, total)| next_total - total)
                 },
-            };
-            let liquid_change = match next {
-                Some(next) => match (next.liquid_assets, row.liquid_assets) {
-                    (Some(next_liquid), Some(liquid)) => Some(next_liquid - liquid),
-                    _ => None,
+            );
+            let liquid_change = next.map_or_else(
+                || {
+                    live_tail.and_then(|live| {
+                        row.liquid_assets.map(|liquid| live.liquid_assets - liquid)
+                    })
                 },
-                None => match (live_tail, row.liquid_assets) {
-                    (Some(live), Some(liquid)) => Some(live.liquid_assets - liquid),
-                    _ => None,
+                |next| {
+                    next.liquid_assets
+                        .zip(row.liquid_assets)
+                        .map(|(next_liquid, liquid)| next_liquid - liquid)
                 },
-            };
+            );
             MonthDerived {
                 end_cash,
                 month_spend,

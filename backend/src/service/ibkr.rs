@@ -25,8 +25,8 @@ pub async fn create_transfer(
             "amount must be a positive number",
         ));
     }
-    let transfer_date = match &body.transfer_date {
-        Some(date) => match chrono::NaiveDate::parse_from_str(date, "%Y-%m-%d") {
+    let transfer_date = body.transfer_date.as_deref().map_or_else(today, |date| {
+        match chrono::NaiveDate::parse_from_str(date, "%Y-%m-%d") {
             Ok(date) if date > today() => {
                 errors.push(FieldError::new(
                     "transfer_date",
@@ -39,9 +39,8 @@ pub async fn create_transfer(
                 errors.push(FieldError::new("transfer_date", "date must be YYYY-MM-DD"));
                 today()
             }
-        },
-        None => today(),
-    };
+        }
+    });
     if !errors.is_empty() {
         return Err(ServiceError::Validation(errors));
     }

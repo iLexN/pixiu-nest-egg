@@ -171,7 +171,7 @@ mod tests {
         }
     }
 
-    async fn load_record(pool: &SqlitePool, year: i32) -> Option<crate::calc::YearReviewRecord> {
+    async fn load_record(pool: &SqlitePool, year: i32) -> Option<YearReviewRecord> {
         crate::store::year_review::load_records(pool)
             .await
             .expect("records")

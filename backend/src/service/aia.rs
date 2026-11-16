@@ -185,7 +185,7 @@ mod tests {
     use super::*;
 
     async fn policy(pool: &SqlitePool) -> i64 {
-        let now = crate::store::now_timestamp();
+        let now = now_timestamp();
         sqlx::query_scalar(
             "INSERT INTO aia_policies (label, policy_no, next_pay_date, premium_usd, value_usd, \
              value_updated_at, remaining_years, withdrew_usd, note, link, excluded, in_account, \

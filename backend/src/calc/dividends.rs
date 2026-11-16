@@ -228,17 +228,18 @@ pub fn dividend_year_rollups(dividends: &[DividendFacts<'_>]) -> Vec<DividendYea
             continue;
         };
         let year = dividend.pay_date.year();
-        let rollup = match years.iter_mut().find(|rollup| rollup.year == year) {
-            Some(existing) => existing,
-            None => {
+        let index = years
+            .iter()
+            .position(|rollup| rollup.year == year)
+            .unwrap_or_else(|| {
                 years.push(DividendYearRollup {
                     year,
                     total: 0.0,
                     stocks: Vec::new(),
                 });
-                years.last_mut().expect("just pushed")
-            }
-        };
+                years.len() - 1
+            });
+        let rollup = &mut years[index];
         rollup.total += received;
         match rollup.stocks.iter_mut().find(|s| s.code == dividend.code) {
             Some(stock) => stock.received += received,

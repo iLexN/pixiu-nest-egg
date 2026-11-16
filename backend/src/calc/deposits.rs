@@ -224,12 +224,10 @@ pub fn active_month_rollup(deposits: &[DepositFacts<'_>]) -> Vec<ActiveMonthBuck
     let mut buckets: Vec<ActiveMonthBucket> = Vec::new();
     for deposit in deposits.iter().filter(|deposit| deposit_active(deposit)) {
         let (year, month) = (deposit.end_date.year(), deposit.end_date.month());
-        let bucket = match buckets
-            .iter_mut()
-            .find(|bucket| bucket.year == year && bucket.month == month)
-        {
-            Some(existing) => existing,
-            None => {
+        let index = buckets
+            .iter()
+            .position(|bucket| bucket.year == year && bucket.month == month)
+            .unwrap_or_else(|| {
                 buckets.push(ActiveMonthBucket {
                     year,
                     month,
@@ -237,9 +235,9 @@ pub fn active_month_rollup(deposits: &[DepositFacts<'_>]) -> Vec<ActiveMonthBuck
                     interest: 0.0,
                     total: 0.0,
                 });
-                buckets.last_mut().expect("just pushed")
-            }
-        };
+                buckets.len() - 1
+            });
+        let bucket = &mut buckets[index];
         bucket.principal += deposit.principal.unwrap_or(0.0);
         bucket.interest += deposit.interest.unwrap_or(0.0);
         bucket.total += deposit_total(deposit.principal, deposit.interest);
@@ -260,18 +258,19 @@ pub fn bank_rollup(deposits: &[DepositFacts<'_>]) -> Vec<BankRollup> {
             .filter(|bank| !bank.is_empty())
             .unwrap_or(UNLABELED_PREFIX)
             .to_string();
-        let group = match groups.iter_mut().find(|group| group.bank == bank) {
-            Some(existing) => existing,
-            None => {
+        let index = groups
+            .iter()
+            .position(|group| group.bank == bank)
+            .unwrap_or_else(|| {
                 groups.push(BankRollup {
                     bank,
                     principal: 0.0,
                     interest: 0.0,
                     total: 0.0,
                 });
-                groups.last_mut().expect("just pushed")
-            }
-        };
+                groups.len() - 1
+            });
+        let group = &mut groups[index];
         group.principal += deposit.principal.unwrap_or(0.0);
         group.interest += deposit.interest.unwrap_or(0.0);
         group.total += deposit_total(deposit.principal, deposit.interest);
@@ -292,9 +291,10 @@ pub fn year_rollups(deposits: &[DepositFacts<'_>]) -> Vec<YearRollup> {
     let mut years: Vec<YearRollup> = Vec::new();
     for deposit in deposits {
         let year = deposit.end_date.year();
-        let rollup = match years.iter_mut().find(|rollup| rollup.year == year) {
-            Some(existing) => existing,
-            None => {
+        let index = years
+            .iter()
+            .position(|rollup| rollup.year == year)
+            .unwrap_or_else(|| {
                 years.push(YearRollup {
                     year,
                     months: (1..=12)
@@ -306,9 +306,9 @@ pub fn year_rollups(deposits: &[DepositFacts<'_>]) -> Vec<YearRollup> {
                         })
                         .collect(),
                 });
-                years.last_mut().expect("just pushed")
-            }
-        };
+                years.len() - 1
+            });
+        let rollup = &mut years[index];
         let month = &mut rollup.months[(deposit.end_date.month() - 1) as usize];
         month.interest += deposit.interest.unwrap_or(0.0);
         month.payout += deposit.principal.unwrap_or(0.0);
