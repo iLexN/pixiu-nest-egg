@@ -123,14 +123,22 @@ pub fn forecast_locked_anchor(
     deposits: &[SuggestionDeposit],
     first_month: chrono::NaiveDate,
 ) -> f64 {
-    deposits
-        .iter()
-        .filter(|deposit| {
-            deposit.start_date.is_none_or(|d| d < first_month) && deposit.end_date >= first_month
-        })
-        .map(|deposit| deposit.principal)
-        .sum::<f64>()
-        + 0.0
+    unsigned_zero(
+        deposits
+            .iter()
+            .filter(|deposit| {
+                deposit.start_date.is_none_or(|d| d < first_month)
+                    && deposit.end_date >= first_month
+            })
+            .map(|deposit| deposit.principal)
+            .sum(),
+    )
+}
+
+/// sum() of an empty iterator is -0.0 — this collapses it to +0.0 so the
+/// UI never shows "-0.00".
+fn unsigned_zero(value: f64) -> f64 {
+    value + 0.0
 }
 
 /// A trade's signed 活期 flow: a BUY pays `total` out, a SELL brings it back.
@@ -185,13 +193,12 @@ fn forecast_cells(
                 {
                     None
                 }
-                _ => Some(
+                _ => Some(unsigned_zero(
                     plan_items.iter().map(|item| item.amount).sum::<f64>()
                         + placements.iter().map(|p| -p.principal).sum::<f64>()
                         + trade_lines.iter().map(|t| t.amount).sum::<f64>()
-                        + ibkr_lines.iter().map(|t| t.amount).sum::<f64>()
-                        + 0.0,
-                ),
+                        + ibkr_lines.iter().map(|t| t.amount).sum::<f64>(),
+                )),
             };
             ForecastCell {
                 kind,
@@ -249,8 +256,7 @@ pub fn forecast_grid(input: &ForecastInput) -> Vec<ForecastMonth> {
                 }
             }
             // Deposits placed inside the window return at their effective
-            // month. (sum() of an empty iter is -0.0 — the +0.0 below
-            // collapses it so the UI never shows "-0.00".)
+            // month.
             if item.item.kind.deposit_lag().is_some()
                 && in_window(item.month)
                 && item_return_month(item) == Some(*month)
@@ -258,7 +264,7 @@ pub fn forecast_grid(input: &ForecastInput) -> Vec<ForecastMonth> {
                 deposit_return += -item.item.amount;
             }
         }
-        let deposit_return = deposit_return + 0.0;
+        let deposit_return = unsigned_zero(deposit_return);
 
         // Sheet row 28: every deposit ending in the month, received or not.
         let finishing: Vec<&SuggestionDeposit> = input
@@ -266,7 +272,7 @@ pub fn forecast_grid(input: &ForecastInput) -> Vec<ForecastMonth> {
             .iter()
             .filter(|deposit| in_month(deposit.end_date, *month))
             .collect();
-        let deposit_finish: f64 = finishing.iter().map(|d| d.principal).sum::<f64>() + 0.0;
+        let deposit_finish: f64 = unsigned_zero(finishing.iter().map(|d| d.principal).sum());
 
         // A real deposit placed in the month moves principal out of 活期 into
         // lockup — the same flow a hs_deposit/sc_deposit plan would model.
@@ -275,7 +281,7 @@ pub fn forecast_grid(input: &ForecastInput) -> Vec<ForecastMonth> {
             .iter()
             .filter(|deposit| deposit.start_date.is_some_and(|d| in_month(d, *month)))
             .collect();
-        let deposit_start: f64 = starting.iter().map(|d| d.principal).sum::<f64>() + 0.0;
+        let deposit_start: f64 = unsigned_zero(starting.iter().map(|d| d.principal).sum());
         let placements: Vec<ForecastPlacement> = starting
             .iter()
             .map(|deposit| ForecastPlacement {
@@ -318,7 +324,7 @@ pub fn forecast_grid(input: &ForecastInput) -> Vec<ForecastMonth> {
             .iter()
             .filter(|trade| in_month(trade.date, *month))
             .collect();
-        let trade_flows: f64 = trades.iter().map(|t| trade_amount(t)).sum::<f64>() + 0.0;
+        let trade_flows: f64 = unsigned_zero(trades.iter().map(|t| trade_amount(t)).sum());
         let mut trade_lines: Vec<ForecastTrade> = trades
             .iter()
             .map(|trade| ForecastTrade {
@@ -343,7 +349,7 @@ pub fn forecast_grid(input: &ForecastInput) -> Vec<ForecastMonth> {
             .iter()
             .filter(|transfer| in_month(transfer.date, *month))
             .collect();
-        let transfer_flows: f64 = transfers.iter().map(|t| -t.amount).sum::<f64>() + 0.0;
+        let transfer_flows: f64 = unsigned_zero(transfers.iter().map(|t| -t.amount).sum());
         let mut ibkr_lines: Vec<ForecastIbkrTransfer> = transfers
             .iter()
             .map(|transfer| ForecastIbkrTransfer {

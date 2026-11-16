@@ -190,6 +190,20 @@ fn yoy(current: Option<f64>, prior: Option<f64>) -> Option<f64> {
     }
 }
 
+/// numerator ÷ denominator, absent until both exist and the denominator
+/// is positive — the sheet's rate cells stay blank otherwise.
+fn rate(numerator: Option<f64>, denominator: Option<f64>) -> Option<f64> {
+    match (numerator, denominator) {
+        (Some(numerator), Some(denominator)) if denominator > 0.0 => Some(numerator / denominator),
+        _ => None,
+    }
+}
+
+/// ÷12 monthly average; an absent total stays absent.
+fn monthly(total: Option<f64>) -> Option<f64> {
+    total.map(|total| total / 12.0)
+}
+
 /// The bond principal held in `year`: Σ principal of bonds with
 /// `min(first coupon year, maturity year) ≤ year ≤ maturity year` — the
 /// coupon schedule's start approximates the purchase a missing start date
@@ -300,8 +314,8 @@ pub fn year_review_rows(
     let mut prior: Option<Prior> = None;
     for &year in years.keys() {
         let summary = summaries.iter().find(|summary| summary.year == year);
-        let record = records.get(&year).copied().unwrap_or_default();
         let stored_record = records.get(&year).copied();
+        let record = stored_record.unwrap_or_default();
         let hk = hk_years.iter().find(|row| row.year == year);
         let us = us_years.iter().find(|row| row.year == year);
 
@@ -347,32 +361,17 @@ pub fn year_review_rows(
         let deposit_principal = record.deposit_principal.or(derived_principal);
         let deposit_interest = record.deposit_interest.or(derived_interest);
 
-        let bond_rate = match (bond_interest, bond_principal) {
-            (Some(interest), Some(principal)) if principal > 0.0 => Some(interest / principal),
-            _ => None,
-        };
+        let bond_rate = rate(bond_interest, bond_principal);
         let stock_cost = hk.map(|row| row.cost);
         let stock_dividends = hk.map(|row| row.dividends);
         let stock_now_value = hk.and_then(|row| row.market_value);
-        let stock_rate = match (stock_dividends, stock_cost) {
-            (Some(dividends), Some(cost)) if cost > 0.0 => Some(dividends / cost),
-            _ => None,
-        };
-        let stock_value_rate = match (stock_dividends, stock_now_value) {
-            (Some(dividends), Some(value)) if value > 0.0 => Some(dividends / value),
-            _ => None,
-        };
+        let stock_rate = rate(stock_dividends, stock_cost);
+        let stock_value_rate = rate(stock_dividends, stock_now_value);
         let us_stock_cost = us.map(|row| row.cost);
         let us_stock_dividends = us.map(|row| row.dividends);
         let us_stock_now_value = us.and_then(|row| row.market_value);
-        let us_stock_rate = match (us_stock_dividends, us_stock_cost) {
-            (Some(dividends), Some(cost)) if cost > 0.0 => Some(dividends / cost),
-            _ => None,
-        };
-        let us_stock_value_rate = match (us_stock_dividends, us_stock_now_value) {
-            (Some(dividends), Some(value)) if value > 0.0 => Some(dividends / value),
-            _ => None,
-        };
+        let us_stock_rate = rate(us_stock_dividends, us_stock_cost);
+        let us_stock_value_rate = rate(us_stock_dividends, us_stock_now_value);
 
         // SUM ranges treat blank cells as zero, so each blend counts whichever
         // components exist and reports a rate once its denominator is known.
@@ -413,9 +412,9 @@ pub fn year_review_rows(
             year,
             ledger: YearReviewLedger {
                 asset_gain: summary.and_then(|s| s.total_change_sum),
-                asset_gain_avg: summary.and_then(|s| s.total_change_sum.map(|v| v / 12.0)),
+                asset_gain_avg: monthly(summary.and_then(|s| s.total_change_sum)),
                 spend,
-                spend_avg: spend.map(|v| v / 12.0),
+                spend_avg: monthly(spend),
                 living_avg: summary.and_then(|s| s.living_avg),
                 pool_income: summary.map(|s| s.pool_income).unwrap_or(0.0),
                 pool_spend: summary.map(|s| s.entertainment_sum).unwrap_or(0.0),
@@ -478,10 +477,10 @@ pub fn year_review_rows(
                 total_value_rate,
                 income_value_rate,
                 income,
-                income_avg: income.map(|v| v / 12.0),
+                income_avg: monthly(income),
                 income_yoy: yoy(income, prior.as_ref().and_then(|p| p.income)),
                 saved,
-                saved_avg: saved.map(|v| v / 12.0),
+                saved_avg: monthly(saved),
                 saved_pct: match (saved, income) {
                     (Some(saved), Some(income)) if income != 0.0 => Some(saved / income),
                     _ => None,

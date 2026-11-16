@@ -142,29 +142,26 @@ pub fn month_derived_with_tail(
                 (Some(salary), Some(spend)) => Some(salary - spend + sums.income),
                 _ => None,
             };
-            let total_change = next.map_or_else(
-                || {
-                    live_tail
-                        .and_then(|live| row.total_assets.map(|total| live.total_assets - total))
-                },
-                |next| {
-                    next.total_assets
-                        .zip(row.total_assets)
-                        .map(|(next_total, total)| next_total - total)
-                },
-            );
-            let liquid_change = next.map_or_else(
-                || {
-                    live_tail.and_then(|live| {
-                        row.liquid_assets.map(|liquid| live.liquid_assets - liquid)
-                    })
-                },
-                |next| {
-                    next.liquid_assets
-                        .zip(row.liquid_assets)
-                        .map(|(next_liquid, liquid)| next_liquid - liquid)
-                },
-            );
+            // The Changed cells diff this row against the next; on the last
+            // row the live tail stands in as that "next" (see above).
+            let diff_against_next =
+                |pick_row: fn(&MonthStatRow) -> Option<f64>, pick_live: fn(&LiveTotals) -> f64| {
+                    next.map_or_else(
+                        || {
+                            live_tail
+                                .as_ref()
+                                .and_then(|live| pick_row(row).map(|value| pick_live(live) - value))
+                        },
+                        |next| {
+                            pick_row(next)
+                                .zip(pick_row(row))
+                                .map(|(next_value, value)| next_value - value)
+                        },
+                    )
+                };
+            let total_change = diff_against_next(|row| row.total_assets, |live| live.total_assets);
+            let liquid_change =
+                diff_against_next(|row| row.liquid_assets, |live| live.liquid_assets);
             MonthDerived {
                 end_cash,
                 month_spend,
