@@ -1,6 +1,7 @@
 <script setup lang="ts">
 import { computed, onMounted, reactive, ref, watch } from 'vue'
-import { api, ApiError, type CashAccount, type Deposit, type ForecastItem } from '../api'
+import { api, ApiError, toApiError, type CashAccount, type Deposit, type ForecastItem } from '../api'
+import FieldError from './FieldError.vue'
 import DateInput from './DateInput.vue'
 import { fmtMoney, todayIso } from '../format'
 
@@ -71,8 +72,7 @@ onMounted(async () => {
     )
     if (!debitTouched.value) debitAccountId.value = defaultDebitAccount()
   } catch (err) {
-    error.value =
-      err instanceof ApiError ? err : new ApiError(0, (err as Error).message ?? 'request failed', [])
+    error.value = toApiError(err)
   }
 })
 
@@ -174,8 +174,7 @@ async function submit() {
     }
     emit('saved', saved)
   } catch (err) {
-    error.value =
-      err instanceof ApiError ? err : new ApiError(0, (err as Error).message ?? 'request failed', [])
+    error.value = toApiError(err)
   } finally {
     saving.value = false
   }
@@ -198,9 +197,7 @@ async function submit() {
       <label>
         id
         <input v-model="form.label" type="text" placeholder="SC-9632" />
-        <small v-if="error?.fieldMessage('label')" class="error">{{
-          error.fieldMessage('label')
-        }}</small>
+        <FieldError :error="error" field="label" />
       </label>
 
       <label>
@@ -215,9 +212,7 @@ async function submit() {
       <label>
         本金
         <input v-model="form.principal" type="number" step="any" inputmode="decimal" />
-        <small v-if="error?.fieldMessage('principal')" class="error">{{
-          error.fieldMessage('principal')
-        }}</small>
+        <FieldError :error="error" field="principal" />
       </label>
 
       <label>
@@ -229,17 +224,13 @@ async function submit() {
           inputmode="decimal"
           :placeholder="ratePlaceholder"
         />
-        <small v-if="error?.fieldMessage('rate')" class="error">{{
-          error.fieldMessage('rate')
-        }}</small>
+        <FieldError :error="error" field="rate" />
       </label>
 
       <label>
         利息
         <input v-model="form.interest" type="number" step="any" inputmode="decimal" />
-        <small v-if="error?.fieldMessage('interest')" class="error">{{
-          error.fieldMessage('interest')
-        }}</small>
+        <FieldError :error="error" field="interest" />
       </label>
 
       <label v-if="!props.editing">
@@ -250,25 +241,19 @@ async function submit() {
             {{ account.label }}（{{ fmtMoney(account.amount) }}）
           </option>
         </select>
-        <small v-if="error?.fieldMessage('debit_account_id')" class="error">{{
-          error.fieldMessage('debit_account_id')
-        }}</small>
+        <FieldError :error="error" field="debit_account_id" />
       </label>
 
       <label>
         開始日
         <DateInput v-model="form.start_date" />
-        <small v-if="error?.fieldMessage('start_date')" class="error">{{
-          error.fieldMessage('start_date')
-        }}</small>
+        <FieldError :error="error" field="start_date" />
       </label>
 
       <label>
         end date
         <DateInput v-model="form.end_date" required />
-        <small v-if="error?.fieldMessage('end_date')" class="error">{{
-          error.fieldMessage('end_date')
-        }}</small>
+        <FieldError :error="error" field="end_date" />
       </label>
 
       <label>

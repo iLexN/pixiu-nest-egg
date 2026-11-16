@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { computed, onMounted, ref } from 'vue'
-import { api, ApiError, type IbkrTransfer } from '../api'
+import { api, errorMessage, type IbkrTransfer } from '../api'
 import { fmtMoney } from '../format'
 
 // 股票 → 轉入記錄 (美股 only): the ibkr_transfers log with per-row delete —
@@ -16,7 +16,7 @@ async function load() {
   try {
     transfers.value = await api.listIbkrTransfers()
   } catch (err) {
-    error.value = err instanceof ApiError ? err.message : String(err)
+    error.value = errorMessage(err)
   }
 }
 
@@ -34,7 +34,7 @@ async function remove(transfer: IbkrTransfer) {
     error.value = ''
     await load()
   } catch (err) {
-    error.value = err instanceof ApiError ? err.message : String(err)
+    error.value = errorMessage(err)
   }
 }
 

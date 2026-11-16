@@ -1,6 +1,7 @@
 <script setup lang="ts">
 import { reactive, ref, watch } from 'vue'
-import { api, ApiError, type Market, type Stock } from '../api'
+import { api, ApiError, toApiError, type Market, type Stock } from '../api'
+import FieldError from './FieldError.vue'
 
 const props = defineProps<{
   market: Market
@@ -106,8 +107,7 @@ async function submit() {
     if (!props.editing) Object.assign(form, emptyForm())
     emit('saved', saved)
   } catch (err) {
-    error.value =
-      err instanceof ApiError ? err : new ApiError(0, (err as Error).message ?? 'request failed', [])
+    error.value = toApiError(err)
   } finally {
     saving.value = false
   }
@@ -127,9 +127,7 @@ async function submit() {
       <label>
         股票代碼
         <input v-model="form.code" type="text" required />
-        <small v-if="error?.fieldMessage('code')" class="error">{{
-          error.fieldMessage('code')
-        }}</small>
+        <FieldError :error="error" field="code" />
       </label>
       <label>
         Stock / ticker

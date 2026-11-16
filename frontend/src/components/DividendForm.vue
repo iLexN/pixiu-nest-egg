@@ -1,6 +1,7 @@
 <script setup lang="ts">
 import { computed, reactive, ref, watch } from 'vue'
-import { api, ApiError, type Dividend, type SummaryStock } from '../api'
+import { api, ApiError, toApiError, type Dividend, type SummaryStock } from '../api'
+import FieldError from './FieldError.vue'
 import DateInput from './DateInput.vue'
 import { fmtMoney, fmtPrice, fmtShares, todayIso } from '../format'
 
@@ -166,8 +167,7 @@ async function submit() {
     }
     emit('saved', saved)
   } catch (err) {
-    error.value =
-      err instanceof ApiError ? err : new ApiError(0, (err as Error).message ?? 'request failed', [])
+    error.value = toApiError(err)
   } finally {
     saving.value = false
   }
@@ -192,17 +192,13 @@ async function submit() {
             {{ stock.code }}
           </option>
         </select>
-        <small v-if="error?.fieldMessage('code')" class="error">{{
-          error.fieldMessage('code')
-        }}</small>
+        <FieldError :error="error" field="code" />
       </label>
 
       <label>
         派息日
         <DateInput v-model="form.pay_date" required />
-        <small v-if="error?.fieldMessage('pay_date')" class="error">{{
-          error.fieldMessage('pay_date')
-        }}</small>
+        <FieldError :error="error" field="pay_date" />
       </label>
 
       <label>
@@ -214,9 +210,7 @@ async function submit() {
           inputmode="decimal"
           :placeholder="perSharePreview === null ? '' : fmtPrice(perSharePreview)"
         />
-        <small v-if="error?.fieldMessage('per_share')" class="error">{{
-          error.fieldMessage('per_share')
-        }}</small>
+        <FieldError :error="error" field="per_share" />
       </label>
 
       <label>
@@ -228,9 +222,7 @@ async function submit() {
           inputmode="decimal"
           :placeholder="preview === null ? '' : fmtMoney(preview)"
         />
-        <small v-if="error?.fieldMessage('estimated_amount')" class="error">{{
-          error.fieldMessage('estimated_amount')
-        }}</small>
+        <FieldError :error="error" field="estimated_amount" />
       </label>
 
       <template v-if="props.editing?.status === 'RECEIVED'">
@@ -238,9 +230,7 @@ async function submit() {
           <label>
             派息
             <input v-model="form.gross_amount" type="number" step="any" inputmode="decimal" />
-            <small v-if="error?.fieldMessage('gross_amount')" class="error">{{
-              error.fieldMessage('gross_amount')
-            }}</small>
+            <FieldError :error="error" field="gross_amount" />
           </label>
 
           <label>
@@ -251,9 +241,7 @@ async function submit() {
               step="any"
               inputmode="decimal"
             />
-            <small v-if="error?.fieldMessage('withholding_tax')" class="error">{{
-              error.fieldMessage('withholding_tax')
-            }}</small>
+            <FieldError :error="error" field="withholding_tax" />
           </label>
         </template>
 
@@ -265,9 +253,7 @@ async function submit() {
             step="any"
             inputmode="decimal"
           />
-          <small v-if="error?.fieldMessage('received_amount')" class="error">{{
-            error.fieldMessage('received_amount')
-          }}</small>
+          <FieldError :error="error" field="received_amount" />
         </label>
 
         <label>
@@ -278,9 +264,7 @@ async function submit() {
             step="any"
             inputmode="decimal"
           />
-          <small v-if="error?.fieldMessage('received_price')" class="error">{{
-            error.fieldMessage('received_price')
-          }}</small>
+          <FieldError :error="error" field="received_price" />
         </label>
       </template>
 

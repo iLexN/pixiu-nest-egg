@@ -3,7 +3,7 @@ import { onMounted, ref } from 'vue'
 import DepositForm from '../components/DepositForm.vue'
 import DepositReceiveForm from '../components/DepositReceiveForm.vue'
 import DepositTable from '../components/DepositTable.vue'
-import { api, ApiError, type CashAccount, type Deposit } from '../api'
+import { api, errorMessage, type CashAccount, type Deposit } from '../api'
 
 const showForm = ref(false)
 const editing = ref<Deposit | null>(null)
@@ -30,7 +30,7 @@ async function load() {
     }
     await loadHistory()
   } catch (err) {
-    error.value = err instanceof ApiError ? err.message : String(err)
+    error.value = errorMessage(err)
   }
 }
 
@@ -39,7 +39,7 @@ async function loadHistory() {
   try {
     history.value = await api.listDeposits({ year: selectedYear.value, order: 'desc' })
   } catch (err) {
-    error.value = err instanceof ApiError ? err.message : String(err)
+    error.value = errorMessage(err)
   }
 }
 
@@ -51,7 +51,7 @@ async function remove(deposit: Deposit) {
     message.value = `已刪除定期 ${name}`
     await load()
   } catch (err) {
-    error.value = err instanceof ApiError ? err.message : String(err)
+    error.value = errorMessage(err)
   }
 }
 

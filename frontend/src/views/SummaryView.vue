@@ -2,7 +2,7 @@
 import { computed, onMounted, ref, watch } from 'vue'
 import {
   api,
-  ApiError,
+  errorMessage,
   type IbkrBlock,
   type Market,
   type SummaryResponse,
@@ -66,7 +66,7 @@ async function load() {
     summary.value = null
     yearly.value = null
     ibkr.value = null
-    error.value = err instanceof ApiError ? err.message : String(err)
+    error.value = errorMessage(err)
   }
 }
 
@@ -97,7 +97,7 @@ async function savePrice(id: number) {
     editingPrice.value = null
     await load()
   } catch (err) {
-    error.value = err instanceof ApiError ? err.message : String(err)
+    error.value = errorMessage(err)
   }
 }
 
@@ -135,7 +135,7 @@ async function saveNote(id: number) {
     editingNote.value = null
     await load()
   } catch (err) {
-    error.value = err instanceof ApiError ? err.message : String(err)
+    error.value = errorMessage(err)
   }
 }
 
@@ -175,7 +175,7 @@ async function onDrop(targetId: number, event: DragEvent) {
   try {
     await api.reorderStocks(props.market, rows.map((stock) => stock.id))
   } catch (err) {
-    error.value = err instanceof ApiError ? err.message : String(err)
+    error.value = errorMessage(err)
     await load()
   } finally {
     savingOrder.value = false
@@ -206,7 +206,7 @@ async function onPriceFile(event: Event) {
     uploadMessage.value = parts.join('；')
     await load()
   } catch (err) {
-    error.value = err instanceof ApiError ? err.message : String(err)
+    error.value = errorMessage(err)
   } finally {
     uploadingPrices.value = false
   }
@@ -250,7 +250,7 @@ async function saveYearEdit(row: YearRow, field: YearField) {
     editingYearCell.value = null
     await load()
   } catch (err) {
-    error.value = err instanceof ApiError ? err.message : String(err)
+    error.value = errorMessage(err)
   }
 }
 
@@ -266,7 +266,7 @@ async function freezeYear(row: YearRow) {
     await api.freezeYearly(props.market, row.year)
     await load()
   } catch (err) {
-    error.value = err instanceof ApiError ? err.message : String(err)
+    error.value = errorMessage(err)
   } finally {
     freezing.value = false
   }

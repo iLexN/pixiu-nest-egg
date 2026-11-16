@@ -4,12 +4,13 @@ import DateInput from '../components/DateInput.vue'
 import RowActions from '../components/RowActions.vue'
 import {
   api,
-  ApiError,
+  errorMessage,
   type FamilyDeposit,
   type FamilyDepositSummary,
   type FamilyHolderSummary,
 } from '../api'
 import { fmtBank, fmtBankName, fmtMoney, googleCalendarUrl, todayIso } from '../format'
+import { numOrNull } from '../parse'
 
 const summary = ref<FamilyDepositSummary | null>(null)
 const privateCalendarId = ref<string | null>(null)
@@ -56,7 +57,7 @@ async function load() {
     }
     await loadHistory()
   } catch (err) {
-    error.value = err instanceof ApiError ? err.message : String(err)
+    error.value = errorMessage(err)
   }
 }
 
@@ -85,11 +86,6 @@ function openCalendar(deposit: FamilyDeposit) {
     src: deposit.holder === 'Irene' ? null : privateCalendarId.value,
   })
   window.open(url, '_blank', 'noopener')
-}
-
-function numOrNull(raw: string | number): number | null {
-  const parsed = Number(raw)
-  return String(raw).trim() === '' || !Number.isFinite(parsed) ? null : parsed
 }
 
 // ----- holder note -----
@@ -121,7 +117,7 @@ async function saveNote(holder: string) {
     message.value = '已儲存備註'
     await load()
   } catch (err) {
-    error.value = err instanceof ApiError ? err.message : String(err)
+    error.value = errorMessage(err)
   }
 }
 
@@ -216,7 +212,7 @@ async function saveDeposit() {
     error.value = ''
     await load()
   } catch (err) {
-    error.value = err instanceof ApiError ? err.message : String(err)
+    error.value = errorMessage(err)
   }
 }
 
@@ -228,7 +224,7 @@ async function remove(deposit: FamilyDeposit) {
     message.value = `已刪除定期 ${name}`
     await load()
   } catch (err) {
-    error.value = err instanceof ApiError ? err.message : String(err)
+    error.value = errorMessage(err)
   }
 }
 
@@ -266,7 +262,7 @@ async function saveReceive() {
     error.value = ''
     await load()
   } catch (err) {
-    error.value = err instanceof ApiError ? err.message : String(err)
+    error.value = errorMessage(err)
   }
 }
 
@@ -284,7 +280,7 @@ async function loadHistory() {
   try {
     history.value = await api.listFamilyDeposits({ year: selectedYear.value, order: 'desc' })
   } catch (err) {
-    error.value = err instanceof ApiError ? err.message : String(err)
+    error.value = errorMessage(err)
   }
 }
 

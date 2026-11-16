@@ -2,7 +2,7 @@
 import { computed, onMounted, ref } from 'vue'
 import {
   api,
-  ApiError,
+  errorMessage,
   type YearReviewPatch,
   type YearReviewResponse,
   type YearReviewRow,
@@ -19,7 +19,7 @@ async function load() {
     response.value = await api.yearReview()
   } catch (err) {
     response.value = null
-    error.value = err instanceof ApiError ? err.message : String(err)
+    error.value = errorMessage(err)
   }
 }
 
@@ -185,7 +185,7 @@ async function saveEdit(row: YearReviewRow, field: EditField) {
     editingCell.value = null
     await load()
   } catch (err) {
-    error.value = err instanceof ApiError ? err.message : String(err)
+    error.value = errorMessage(err)
   }
 }
 </script>

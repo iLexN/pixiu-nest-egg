@@ -2,7 +2,7 @@
 import { computed, onMounted, reactive, ref } from 'vue'
 import {
   api,
-  ApiError,
+  errorMessage,
   type ForecastCell,
   type ForecastItem,
   type ForecastItemKind,
@@ -14,6 +14,7 @@ import {
 import DepositForm from '../components/DepositForm.vue'
 import IbkrCard from '../components/IbkrCard.vue'
 import { fmtMoney, fmtPercent, fmtPercentShort, fmtPrice, signClass } from '../format'
+import { numOrNull } from '../parse'
 
 /** `remain ≤ 0` means the goal is already reached — show 已達成, not years. */
 function reached(remain: number | null): boolean {
@@ -110,11 +111,6 @@ function syncDrafts() {
   }
 }
 
-function numOrNull(raw: string | number): number | null {
-  const parsed = Number(raw)
-  return String(raw).trim() === '' || !Number.isFinite(parsed) ? null : parsed
-}
-
 async function saveItem(item: ForecastItem) {
   const draft = drafts.value[item.id]
   if (!draft) return
@@ -136,7 +132,7 @@ async function saveItem(item: ForecastItem) {
     error.value = ''
     await load()
   } catch (err) {
-    error.value = err instanceof ApiError ? err.message : String(err)
+    error.value = errorMessage(err)
   }
 }
 
@@ -164,7 +160,7 @@ async function addItem() {
     error.value = ''
     await load()
   } catch (err) {
-    error.value = err instanceof ApiError ? err.message : String(err)
+    error.value = errorMessage(err)
   }
 }
 
@@ -176,7 +172,7 @@ async function removeItem(item: ForecastItem) {
     error.value = ''
     await load()
   } catch (err) {
-    error.value = err instanceof ApiError ? err.message : String(err)
+    error.value = errorMessage(err)
   }
 }
 
@@ -202,7 +198,7 @@ async function copyItem(item: ForecastItem) {
     error.value = ''
     await load()
   } catch (err) {
-    error.value = err instanceof ApiError ? err.message : String(err)
+    error.value = errorMessage(err)
   }
 }
 
@@ -225,7 +221,7 @@ async function load() {
     error.value = ''
     if (selected.value) syncDrafts()
   } catch (err) {
-    error.value = err instanceof ApiError ? err.message : String(err)
+    error.value = errorMessage(err)
   }
 }
 
@@ -238,8 +234,8 @@ function startEdit(id: number, current: number | null, target: 'cash' | 'asset' 
 async function saveEdit() {
   const id = editingId.value
   if (id === null) return
-  const amount = Number(editDraft.value)
-  if (String(editDraft.value).trim() === '' || !Number.isFinite(amount)) {
+  const amount = numOrNull(editDraft.value)
+  if (amount === null) {
     error.value = '金額必須是數字'
     return
   }
@@ -255,7 +251,7 @@ async function saveEdit() {
     error.value = ''
     await load()
   } catch (err) {
-    error.value = err instanceof ApiError ? err.message : String(err)
+    error.value = errorMessage(err)
   }
 }
 

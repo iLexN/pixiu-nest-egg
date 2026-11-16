@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { computed, onMounted, ref } from 'vue'
-import { api, ApiError, type MpfAccount, type MpfOverview } from '../api'
+import { api, errorMessage, type MpfAccount, type MpfOverview } from '../api'
 import { compareClass, fmtFigures, fmtMoney, fmtPercent, signClass } from '../format'
 import RowActions from '../components/RowActions.vue'
 
@@ -13,7 +13,7 @@ async function load() {
   try {
     overview.value = await api.mpfOverview()
   } catch (err) {
-    error.value = err instanceof ApiError ? err.message : String(err)
+    error.value = errorMessage(err)
   }
 }
 
@@ -95,7 +95,7 @@ async function saveAccount() {
     error.value = ''
     await load()
   } catch (err) {
-    error.value = err instanceof ApiError ? err.message : String(err)
+    error.value = errorMessage(err)
   }
 }
 
@@ -106,7 +106,7 @@ async function removeAccount(account: MpfAccount) {
     message.value = `已刪除 ${account.label}`
     await load()
   } catch (err) {
-    error.value = err instanceof ApiError ? err.message : String(err)
+    error.value = errorMessage(err)
   }
 }
 
@@ -127,7 +127,7 @@ async function saveNote() {
     message.value = '已儲存備註'
     await load()
   } catch (err) {
-    error.value = err instanceof ApiError ? err.message : String(err)
+    error.value = errorMessage(err)
   }
 }
 
@@ -151,7 +151,7 @@ async function removeHistory(id: number) {
     await api.deleteMpfHistory(id)
     await load()
   } catch (err) {
-    error.value = err instanceof ApiError ? err.message : String(err)
+    error.value = errorMessage(err)
   }
 }
 

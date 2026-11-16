@@ -135,7 +135,23 @@ export function googleCalendarUrl(event: {
 
 export function todayIso(): string {
   const now = new Date()
-  const month = `${now.getMonth() + 1}`.padStart(2, '0')
-  const day = `${now.getDate()}`.padStart(2, '0')
-  return `${now.getFullYear()}-${month}-${day}`
+  return toIso(now)
+}
+
+function toIso(date: Date): string {
+  const month = `${date.getMonth() + 1}`.padStart(2, '0')
+  const day = `${date.getDate()}`.padStart(2, '0')
+  return `${date.getFullYear()}-${month}-${day}`
+}
+
+/** Month-level values display as YYYY-MM; the day is dropped. */
+export function fmtMonth(value: string | null | undefined): string {
+  return value?.slice(0, 7) ?? ''
+}
+
+/** `date` (YYYY-MM-DD) shifted by whole years, for suggested next-due dates. */
+export function shiftYearIso(date: string, years: number): string {
+  const shifted = new Date(`${date}T00:00:00`)
+  shifted.setFullYear(shifted.getFullYear() + years)
+  return toIso(shifted)
 }

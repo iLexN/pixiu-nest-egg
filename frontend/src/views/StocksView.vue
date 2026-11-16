@@ -2,7 +2,7 @@
 import { onMounted, ref, watch } from 'vue'
 import StockForm from '../components/StockForm.vue'
 import StockTable from '../components/StockTable.vue'
-import { api, ApiError, type Market, type Stock } from '../api'
+import { api, errorMessage, type Market, type Stock } from '../api'
 
 const props = defineProps<{ market: Market }>()
 
@@ -17,7 +17,7 @@ async function load() {
   try {
     stocks.value = await api.listStocks(props.market)
   } catch (err) {
-    error.value = err instanceof ApiError ? err.message : String(err)
+    error.value = errorMessage(err)
   }
 }
 
@@ -53,7 +53,7 @@ async function toggleHide(stock: Stock) {
     message.value = stock.is_active ? `已隱藏 ${stock.code}` : `已顯示 ${stock.code}`
     await load()
   } catch (err) {
-    error.value = err instanceof ApiError ? err.message : String(err)
+    error.value = errorMessage(err)
   }
 }
 
@@ -66,7 +66,7 @@ async function remove(stock: Stock) {
     message.value = `已刪除 ${stock.code}`
     await load()
   } catch (err) {
-    error.value = err instanceof ApiError ? err.message : String(err)
+    error.value = errorMessage(err)
   }
 }
 

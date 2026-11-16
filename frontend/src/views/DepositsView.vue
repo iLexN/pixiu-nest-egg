@@ -5,7 +5,7 @@ import DepositReceiveForm from '../components/DepositReceiveForm.vue'
 import DepositTable from '../components/DepositTable.vue'
 import {
   api,
-  ApiError,
+  errorMessage,
   type CashAccount,
   type Deposit,
   type DepositSummary,
@@ -31,7 +31,7 @@ async function load() {
     accounts.value = accountsData
     privateCalendarId.value = settingsData.calendar_private_id
   } catch (err) {
-    error.value = err instanceof ApiError ? err.message : String(err)
+    error.value = errorMessage(err)
   }
 }
 
@@ -43,7 +43,7 @@ async function remove(deposit: Deposit) {
     message.value = `已刪除定期 ${name}`
     await load()
   } catch (err) {
-    error.value = err instanceof ApiError ? err.message : String(err)
+    error.value = errorMessage(err)
   }
 }
 

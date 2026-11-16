@@ -3,7 +3,7 @@ import { onMounted, ref, watch } from 'vue'
 import DateInput from '../components/DateInput.vue'
 import TradeForm from '../components/TradeForm.vue'
 import TradeTable from '../components/TradeTable.vue'
-import { api, ApiError, type Market, type Stock, type Trade } from '../api'
+import { api, errorMessage, type Market, type Stock, type Trade } from '../api'
 
 const props = defineProps<{ market: Market }>()
 
@@ -34,7 +34,7 @@ async function load() {
       order: order.value,
     })
   } catch (err) {
-    error.value = err instanceof ApiError ? err.message : String(err)
+    error.value = errorMessage(err)
   }
 }
 
@@ -50,7 +50,7 @@ async function remove(trade: Trade) {
     message.value = `已刪除交易 #${trade.id}`
     await load()
   } catch (err) {
-    error.value = err instanceof ApiError ? err.message : String(err)
+    error.value = errorMessage(err)
   }
 }
 

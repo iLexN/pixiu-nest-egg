@@ -2,13 +2,14 @@
 import { onMounted, ref } from 'vue'
 import {
   api,
-  ApiError,
+  errorMessage,
   type AiaEvent,
   type AiaPolicy,
   type AiaPolicyWithEvents,
   type AiaSummary,
 } from '../api'
-import { fmtMoney, fmtPercent, signClass, todayIso } from '../format'
+import { fmtMoney, fmtMonth, fmtPercent, signClass, shiftYearIso, todayIso } from '../format'
+import { numOrNull } from '../parse'
 import DateInput from '../components/DateInput.vue'
 import RowActions from '../components/RowActions.vue'
 
@@ -21,18 +22,8 @@ async function load() {
   try {
     summary.value = await api.aiaSummary()
   } catch (err) {
-    error.value = err instanceof ApiError ? err.message : String(err)
+    error.value = errorMessage(err)
   }
-}
-
-function numOrNull(raw: string | number): number | null {
-  const parsed = Number(raw)
-  return String(raw).trim() === '' || !Number.isFinite(parsed) ? null : parsed
-}
-
-/** Next-pay dates are month-level; the day is always the 1st. */
-function fmtMonth(value: string | null | undefined): string {
-  return value?.slice(0, 7) ?? ''
 }
 
 function flagLabel(policy: AiaPolicy): string {
@@ -64,7 +55,7 @@ async function saveRate() {
     error.value = ''
     await load()
   } catch (err) {
-    error.value = err instanceof ApiError ? err.message : String(err)
+    error.value = errorMessage(err)
   }
 }
 
@@ -154,7 +145,7 @@ async function savePolicy() {
     error.value = ''
     await load()
   } catch (err) {
-    error.value = err instanceof ApiError ? err.message : String(err)
+    error.value = errorMessage(err)
   }
 }
 
@@ -165,7 +156,7 @@ async function removePolicy(policy: AiaPolicy) {
     message.value = `已刪除 ${policy.label}`
     await load()
   } catch (err) {
-    error.value = err instanceof ApiError ? err.message : String(err)
+    error.value = errorMessage(err)
   }
 }
 
@@ -179,14 +170,10 @@ const paying = ref<{
   note: string
 } | null>(null)
 
-/** The form's suggested next due date: current date +1 year. */
+/** The form's suggested next due date: current date +1 year. Next-pay
+ * dates are month-level; the day is always the 1st. */
 function defaultNextPay(policy: AiaPolicy): string {
-  if (!policy.next_pay_date) return ''
-  const date = new Date(`${policy.next_pay_date}T00:00:00`)
-  date.setFullYear(date.getFullYear() + 1)
-  const month = `${date.getMonth() + 1}`.padStart(2, '0')
-  const day = `${date.getDate()}`.padStart(2, '0')
-  return `${date.getFullYear()}-${month}-${day}`
+  return policy.next_pay_date ? shiftYearIso(policy.next_pay_date, 1) : ''
 }
 
 function startPay(policy: AiaPolicy) {
@@ -221,7 +208,7 @@ async function savePay() {
     error.value = ''
     await load()
   } catch (err) {
-    error.value = err instanceof ApiError ? err.message : String(err)
+    error.value = errorMessage(err)
   }
 }
 
@@ -257,7 +244,7 @@ async function saveWithdraw() {
     error.value = ''
     await load()
   } catch (err) {
-    error.value = err instanceof ApiError ? err.message : String(err)
+    error.value = errorMessage(err)
   }
 }
 
@@ -269,7 +256,7 @@ async function removeEvent(policy: AiaPolicyWithEvents, event: AiaEvent) {
     message.value = `已刪除 ${policy.label} ${event.event_date} ${kind}`
     await load()
   } catch (err) {
-    error.value = err instanceof ApiError ? err.message : String(err)
+    error.value = errorMessage(err)
   }
 }
 
@@ -294,7 +281,7 @@ async function saveNote() {
     message.value = '已儲存備註'
     await load()
   } catch (err) {
-    error.value = err instanceof ApiError ? err.message : String(err)
+    error.value = errorMessage(err)
   }
 }
 

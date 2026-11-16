@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { computed, onMounted, ref } from 'vue'
-import { api, ApiError, type MonthSummary, type MonthYearSummary } from '../api'
+import { api, errorMessage, type MonthSummary, type MonthYearSummary } from '../api'
 import { fmtMoney } from '../format'
 
 const summary = ref<MonthSummary | null>(null)
@@ -40,7 +40,7 @@ async function load() {
     summary.value = await api.monthSummary()
   } catch (err) {
     summary.value = null
-    error.value = err instanceof ApiError ? err.message : String(err)
+    error.value = errorMessage(err)
   }
 }
 

@@ -5,7 +5,7 @@ import DividendReceiveForm from '../components/DividendReceiveForm.vue'
 import DividendTable from '../components/DividendTable.vue'
 import {
   api,
-  ApiError,
+  errorMessage,
   type Dividend,
   type DividendSummary,
   type Market,
@@ -47,7 +47,7 @@ async function load() {
       order: 'desc',
     })
   } catch (err) {
-    error.value = err instanceof ApiError ? err.message : String(err)
+    error.value = errorMessage(err)
   }
 }
 
@@ -58,7 +58,7 @@ async function remove(dividend: Dividend) {
     message.value = `已刪除 ${dividend.code} 派息記錄`
     await load()
   } catch (err) {
-    error.value = err instanceof ApiError ? err.message : String(err)
+    error.value = errorMessage(err)
   }
 }
 

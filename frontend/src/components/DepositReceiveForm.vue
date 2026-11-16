@@ -1,7 +1,8 @@
 <script setup lang="ts">
 import { computed, onMounted, ref } from 'vue'
-import { api, ApiError, type CashAccount, type Deposit } from '../api'
+import { api, errorMessage, type CashAccount, type Deposit } from '../api'
 import { fmtMoney, todayIso } from '../format'
+import { numOrNull } from '../parse'
 
 const props = defineProps<{
   deposit: Deposit
@@ -17,11 +18,6 @@ const cashAccounts = computed(() =>
 
 /** Bank code → the cash account label it deposits into. */
 const BANK_ASSET_LABELS: Record<string, string> = { SC: '渣打', HS: 'HS' }
-
-function numOrNull(raw: string | number): number | null {
-  const parsed = Number(raw)
-  return String(raw).trim() === '' || !Number.isFinite(parsed) ? null : parsed
-}
 
 /** The deposit's own bank row wins; otherwise the currency's default receipt
  * account, else 不存入. */
@@ -62,7 +58,7 @@ async function save() {
     })
     emit('saved', deposit)
   } catch (err) {
-    error.value = err instanceof ApiError ? err.message : String(err)
+    error.value = errorMessage(err)
   }
 }
 </script>

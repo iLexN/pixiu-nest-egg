@@ -1,6 +1,7 @@
 <script setup lang="ts">
 import { computed, onMounted, reactive, ref, watch } from 'vue'
-import { api, ApiError, type CashAccount, type Dividend } from '../api'
+import { api, ApiError, toApiError, type CashAccount, type Dividend } from '../api'
+import FieldError from './FieldError.vue'
 import { fmtMoney } from '../format'
 
 const props = defineProps<{
@@ -98,8 +99,7 @@ async function submit() {
     }
     emit('saved', saved)
   } catch (err) {
-    error.value =
-      err instanceof ApiError ? err : new ApiError(0, (err as Error).message ?? 'request failed', [])
+    error.value = toApiError(err)
   } finally {
     saving.value = false
   }
@@ -111,8 +111,7 @@ onMounted(async () => {
     form.account_id =
       receiptAccounts.value.find((account) => account.is_default_receipt)?.id ?? null
   } catch (err) {
-    error.value =
-      err instanceof ApiError ? err : new ApiError(0, (err as Error).message ?? 'request failed', [])
+    error.value = toApiError(err)
   }
 })
 </script>
@@ -126,34 +125,26 @@ onMounted(async () => {
         <label>
           派息
           <input v-model="form.gross_amount" type="number" step="any" inputmode="decimal" />
-          <small v-if="error?.fieldMessage('gross_amount')" class="error">{{
-            error.fieldMessage('gross_amount')
-          }}</small>
+          <FieldError :error="error" field="gross_amount" />
         </label>
 
         <label>
           Tax
           <input v-model="form.withholding_tax" type="number" step="any" inputmode="decimal" />
-          <small v-if="error?.fieldMessage('withholding_tax')" class="error">{{
-            error.fieldMessage('withholding_tax')
-          }}</small>
+          <FieldError :error="error" field="withholding_tax" />
         </label>
       </template>
 
       <label v-else>
         實收派息
         <input v-model="form.received_amount" type="number" step="any" inputmode="decimal" />
-        <small v-if="error?.fieldMessage('received_amount')" class="error">{{
-          error.fieldMessage('received_amount')
-        }}</small>
+        <FieldError :error="error" field="received_amount" />
       </label>
 
       <label>
         當時現價
         <input v-model="form.received_price" type="number" step="any" inputmode="decimal" />
-        <small v-if="error?.fieldMessage('received_price')" class="error">{{
-          error.fieldMessage('received_price')
-        }}</small>
+        <FieldError :error="error" field="received_price" />
       </label>
     </div>
 

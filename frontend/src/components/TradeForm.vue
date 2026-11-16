@@ -1,6 +1,7 @@
 <script setup lang="ts">
 import { computed, reactive, ref, watch } from 'vue'
-import { api, ApiError, type Market, type Stock, type Trade, type TradeType } from '../api'
+import { api, ApiError, toApiError, type Market, type Stock, type Trade, type TradeType } from '../api'
+import FieldError from './FieldError.vue'
 import DateInput from './DateInput.vue'
 import { fmtMoney, fmtPrice, todayIso } from '../format'
 
@@ -143,8 +144,7 @@ async function submit() {
     }
     emit('saved', saved)
   } catch (err) {
-    error.value =
-      err instanceof ApiError ? err : new ApiError(0, (err as Error).message ?? 'request failed', [])
+    error.value = toApiError(err)
   } finally {
     saving.value = false
   }
@@ -163,9 +163,7 @@ async function submit() {
             {{ stock.code }}
           </option>
         </select>
-        <small v-if="error?.fieldMessage('code')" class="error">{{
-          error.fieldMessage('code')
-        }}</small>
+        <FieldError :error="error" field="code" />
       </label>
 
       <label>
@@ -179,41 +177,31 @@ async function submit() {
       <label>
         日期
         <DateInput v-model="form.trade_date" required />
-        <small v-if="error?.fieldMessage('trade_date')" class="error">{{
-          error.fieldMessage('trade_date')
-        }}</small>
+        <FieldError :error="error" field="trade_date" />
       </label>
 
       <label>
         股數
         <input v-model="form.shares" type="number" step="any" inputmode="decimal" required />
-        <small v-if="error?.fieldMessage('shares')" class="error">{{
-          error.fieldMessage('shares')
-        }}</small>
+        <FieldError :error="error" field="shares" />
       </label>
 
       <label>
         單價
         <input v-model="form.unit_price" type="number" step="any" inputmode="decimal" required />
-        <small v-if="error?.fieldMessage('unit_price')" class="error">{{
-          error.fieldMessage('unit_price')
-        }}</small>
+        <FieldError :error="error" field="unit_price" />
       </label>
 
       <label v-if="isHk">
         買入總額（已含手續費）
         <input v-model="form.total" type="number" step="any" inputmode="decimal" required />
-        <small v-if="error?.fieldMessage('total')" class="error">{{
-          error.fieldMessage('total')
-        }}</small>
+        <FieldError :error="error" field="total" />
       </label>
 
       <label v-else>
         手續費
         <input v-model="form.fee" type="number" step="any" inputmode="decimal" required />
-        <small v-if="error?.fieldMessage('fee')" class="error">{{
-          error.fieldMessage('fee')
-        }}</small>
+        <FieldError :error="error" field="fee" />
       </label>
 
       <label class="wide">

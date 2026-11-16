@@ -2,13 +2,14 @@
 import { computed, onMounted, ref } from 'vue'
 import {
   api,
-  ApiError,
+  errorMessage,
   type Bond,
   type BondCoupon,
   type BondSummary,
   type CashAccount,
 } from '../api'
 import { fmtMoney, fmtPercent, signClass, todayIso } from '../format'
+import { numOrNull } from '../parse'
 import DateInput from '../components/DateInput.vue'
 import RowActions from '../components/RowActions.vue'
 
@@ -37,7 +38,7 @@ async function load() {
     summary.value = summaryData
     accounts.value = accountsData
   } catch (err) {
-    error.value = err instanceof ApiError ? err.message : String(err)
+    error.value = errorMessage(err)
   }
 }
 
@@ -107,7 +108,7 @@ async function saveBond() {
     error.value = ''
     await load()
   } catch (err) {
-    error.value = err instanceof ApiError ? err.message : String(err)
+    error.value = errorMessage(err)
   }
 }
 
@@ -118,7 +119,7 @@ async function removeBond(bond: Bond) {
     message.value = `已刪除 ${bond.label}`
     await load()
   } catch (err) {
-    error.value = err instanceof ApiError ? err.message : String(err)
+    error.value = errorMessage(err)
   }
 }
 
@@ -160,11 +161,6 @@ function startCouponEdit(bondId: number, coupon: BondCoupon | 'new') {
         }
 }
 
-function numOrNull(raw: string | number): number | null {
-  const parsed = Number(raw)
-  return String(raw).trim() === '' || !Number.isFinite(parsed) ? null : parsed
-}
-
 async function saveCoupon() {
   const editing = editingCoupon.value
   if (!editing) return
@@ -191,7 +187,7 @@ async function saveCoupon() {
     error.value = ''
     await load()
   } catch (err) {
-    error.value = err instanceof ApiError ? err.message : String(err)
+    error.value = errorMessage(err)
   }
 }
 
@@ -202,7 +198,7 @@ async function removeCoupon(coupon: BondCoupon) {
     message.value = `已刪除 ${coupon.pay_date} 付息`
     await load()
   } catch (err) {
-    error.value = err instanceof ApiError ? err.message : String(err)
+    error.value = errorMessage(err)
   }
 }
 
@@ -241,7 +237,7 @@ async function saveFix() {
     error.value = ''
     await load()
   } catch (err) {
-    error.value = err instanceof ApiError ? err.message : String(err)
+    error.value = errorMessage(err)
   }
 }
 
@@ -281,7 +277,7 @@ async function saveReceive() {
     error.value = ''
     await load()
   } catch (err) {
-    error.value = err instanceof ApiError ? err.message : String(err)
+    error.value = errorMessage(err)
   }
 }
 
@@ -324,7 +320,7 @@ async function saveBondReceive() {
     error.value = ''
     await load()
   } catch (err) {
-    error.value = err instanceof ApiError ? err.message : String(err)
+    error.value = errorMessage(err)
   }
 }
 

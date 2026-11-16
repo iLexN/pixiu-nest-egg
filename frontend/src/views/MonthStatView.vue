@@ -2,7 +2,7 @@
 import { computed, onMounted, ref, watch } from 'vue'
 import {
   api,
-  ApiError,
+  errorMessage,
   type AppSettings,
   type CashAccount,
   type CashRole,
@@ -19,7 +19,8 @@ import {
   type NewCashAccount,
   type NewManualAsset,
 } from '../api'
-import { fmtMoney, fmtPercent, fmtPercentShort, signClass, todayIso } from '../format'
+import { fmtMoney, fmtMonth, fmtPercent, fmtPercentShort, signClass, todayIso } from '../format'
+import { numOrNull } from '../parse'
 
 const summary = ref<MonthSummary | null>(null)
 const months = ref<MonthStat[]>([])
@@ -96,15 +97,6 @@ const hasImportedTotal = computed(() =>
   ),
 )
 
-function numOrNull(raw: string | number): number | null {
-  const parsed = Number(raw)
-  return String(raw).trim() === '' || !Number.isFinite(parsed) ? null : parsed
-}
-
-function fmtMonth(month: string): string {
-  return month.slice(0, 7)
-}
-
 async function load() {
   error.value = ''
   try {
@@ -128,7 +120,7 @@ async function load() {
       detail.value = await api.monthDetail(selectedMonth.value)
     }
   } catch (err) {
-    error.value = err instanceof ApiError ? err.message : String(err)
+    error.value = errorMessage(err)
   }
 }
 
@@ -140,7 +132,7 @@ async function selectYear() {
       detail.value = null
     }
   } catch (err) {
-    error.value = err instanceof ApiError ? err.message : String(err)
+    error.value = errorMessage(err)
   }
 }
 
@@ -150,7 +142,7 @@ async function selectMonth(month: MonthStat) {
   try {
     detail.value = await api.monthDetail(month.month)
   } catch (err) {
-    error.value = err instanceof ApiError ? err.message : String(err)
+    error.value = errorMessage(err)
   }
   startEdit()
 }
@@ -185,7 +177,7 @@ async function addMonth() {
       startEdit()
     }
   } catch (err) {
-    error.value = err instanceof ApiError ? err.message : String(err)
+    error.value = errorMessage(err)
   }
 }
 
@@ -233,7 +225,7 @@ async function saveMonth() {
     error.value = ''
     await load()
   } catch (err) {
-    error.value = err instanceof ApiError ? err.message : String(err)
+    error.value = errorMessage(err)
   }
 }
 
@@ -245,7 +237,7 @@ async function recapture() {
     error.value = ''
     await load()
   } catch (err) {
-    error.value = err instanceof ApiError ? err.message : String(err)
+    error.value = errorMessage(err)
   }
 }
 
@@ -257,7 +249,7 @@ async function goLive() {
     error.value = ''
     await load()
   } catch (err) {
-    error.value = err instanceof ApiError ? err.message : String(err)
+    error.value = errorMessage(err)
   }
 }
 
@@ -273,7 +265,7 @@ async function removeMonth() {
     error.value = ''
     await load()
   } catch (err) {
-    error.value = err instanceof ApiError ? err.message : String(err)
+    error.value = errorMessage(err)
   }
 }
 
@@ -323,7 +315,7 @@ async function saveItem() {
     error.value = ''
     await load()
   } catch (err) {
-    error.value = err instanceof ApiError ? err.message : String(err)
+    error.value = errorMessage(err)
   }
 }
 
@@ -335,7 +327,7 @@ async function removeItem(item: MonthItem) {
     error.value = ''
     await load()
   } catch (err) {
-    error.value = err instanceof ApiError ? err.message : String(err)
+    error.value = errorMessage(err)
   }
 }
 
@@ -380,7 +372,7 @@ async function addItem() {
     error.value = ''
     await load()
   } catch (err) {
-    error.value = err instanceof ApiError ? err.message : String(err)
+    error.value = errorMessage(err)
   }
 }
 
@@ -397,7 +389,7 @@ async function acceptSuggestion(suggestion: MonthSuggestion) {
     error.value = ''
     await load()
   } catch (err) {
-    error.value = err instanceof ApiError ? err.message : String(err)
+    error.value = errorMessage(err)
   }
 }
 
@@ -409,7 +401,7 @@ async function dismissSuggestion(suggestion: MonthSuggestion) {
     error.value = ''
     await load()
   } catch (err) {
-    error.value = err instanceof ApiError ? err.message : String(err)
+    error.value = errorMessage(err)
   }
 }
 
@@ -535,7 +527,7 @@ async function saveSettings() {
     error.value = ''
     await load()
   } catch (err) {
-    error.value = err instanceof ApiError ? err.message : String(err)
+    error.value = errorMessage(err)
   }
 }
 
@@ -589,7 +581,7 @@ async function saveAsset() {
     error.value = ''
     await load()
   } catch (err) {
-    error.value = err instanceof ApiError ? err.message : String(err)
+    error.value = errorMessage(err)
   }
 }
 
@@ -601,7 +593,7 @@ async function removeAsset(asset: ManualAsset) {
     error.value = ''
     await load()
   } catch (err) {
-    error.value = err instanceof ApiError ? err.message : String(err)
+    error.value = errorMessage(err)
   }
 }
 
@@ -669,7 +661,7 @@ async function saveAccount() {
     error.value = ''
     await load()
   } catch (err) {
-    error.value = err instanceof ApiError ? err.message : String(err)
+    error.value = errorMessage(err)
   }
 }
 
@@ -682,7 +674,7 @@ async function removeAccount(account: CashAccount) {
     await load()
   } catch (err) {
     // 409 (broker rows, or other server-side refusals) surfaces the server message.
-    error.value = err instanceof ApiError ? err.message : String(err)
+    error.value = errorMessage(err)
   }
 }
 
