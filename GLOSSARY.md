@@ -112,8 +112,9 @@ _Avoid_: refresh, snapshot
 `liquid_assets` — the sheet's `Overview!B1`/`H1`).
 
 **Candidate**: an event-derived month-item suggestion carrying a stable
-`auto_key` — accept stores it as an item, dismiss records the key so it never
-reappears. Suggested only for the current month and later. A Candidate
+`auto_key` — accept stores it as an item, dismiss records the key and the row
+stays listed flagged `忽略（不計）` (uncounted) until undismissed. Listed for
+every month; actions only for the previous month and later. A Candidate
 carries its expected amount until 收訖; at 收訖 the stored item takes the
 received amount — what actually landed — whichever way it got stored.
 _Avoid_: suggestion, auto-item

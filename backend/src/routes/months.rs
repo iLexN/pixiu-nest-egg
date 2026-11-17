@@ -10,7 +10,7 @@ use super::patch::merge_text;
 use super::{AppState, parse_ym};
 use crate::calc::{
     FieldError, MonthRunningAverages, MonthYearSummary, PoolTotals, build_suggestions,
-    interest_components, pool_totals, suggestions_enabled,
+    interest_components, pool_totals, suggestion_actions_enabled,
 };
 use crate::error::{ApiError, ErrorBody};
 use crate::models::{
@@ -101,9 +101,13 @@ pub async fn summary(
 pub struct MonthDetailResponse {
     pub month: MonthStat,
     pub items: Vec<MonthItem>,
-    /// Computed candidates for the current/future month; never stored until
-    /// accepted. Empty for past months.
+    /// Computed candidates for the month; never stored until accepted.
+    /// Dismissed ones stay listed, flagged `dismissed`.
     pub suggestions: Vec<MonthSuggestion>,
+    /// Whether the month offers candidate actions (accept/dismiss/undismiss) —
+    /// the previous month and later. Older months' suggestions are
+    /// informational only.
+    pub suggestions_actionable: bool,
     /// The auto 利息 components: deposits ending + received coupons + received
     /// HK dividends dated in the month. `month.interest` = Σ these + Σ
     /// `interest` items.
@@ -134,21 +138,18 @@ pub async fn show(
 
     let items = store::load_items(&state.pool, &month_key).await?;
     let events = crate::service::months::load_events(&state.pool, month, stat.pool_input).await?;
-    let suggestions = if suggestions_enabled(&month_key, today()) {
-        let stored_keys: HashSet<String> = items
-            .iter()
-            .filter_map(|item| item.auto_key.clone())
-            .collect();
-        let dismissed = store::dismissed_keys(&state.pool, &month_key).await?;
-        build_suggestions(&month_key, &events, &stored_keys, &dismissed)
-    } else {
-        Vec::new()
-    };
+    let stored_keys: HashSet<String> = items
+        .iter()
+        .filter_map(|item| item.auto_key.clone())
+        .collect();
+    let dismissed = store::dismissed_keys(&state.pool, &month_key).await?;
+    let suggestions = build_suggestions(&month_key, &events, &stored_keys, &dismissed);
 
     Ok(Json(MonthDetailResponse {
         month: stat,
         items,
         suggestions,
+        suggestions_actionable: suggestion_actions_enabled(&month_key, today()),
         interest_auto: interest_components(&month_key, &events),
     }))
 }
@@ -303,18 +304,18 @@ pub async fn remove_item(
 }
 
 #[derive(Debug, Deserialize, utoipa::ToSchema, utoipa::IntoParams)]
-pub struct DismissBody {
+pub struct AutoKeyBody {
     pub auto_key: String,
 }
 
-/// Tombstone a suggestion key so it never reappears for the month.
+/// Tombstone a suggestion key so it stays listed flagged `dismissed`.
 #[utoipa::path(
     operation_id = "months_dismiss_item",
     post,
     path = "/api/months/{ym}/items/dismiss",
     tag = "months",
     params(("ym" = String, Path, description = "Month key YYYY-MM")),
-    request_body = DismissBody,
+    request_body = AutoKeyBody,
     responses(
         (status = 204, description = "Suggestion dismissed (tombstone written)"),
         (status = 400, description = "Invalid month key or empty auto_key", body = ErrorBody),
@@ -323,7 +324,7 @@ pub struct DismissBody {
 pub async fn dismiss_item(
     State(state): State<AppState>,
     Path(ym): Path<String>,
-    Json(body): Json<DismissBody>,
+    Json(body): Json<AutoKeyBody>,
 ) -> Result<StatusCode, ApiError> {
     let month_key = parse_ym(&ym)?.to_string();
     let auto_key = body.auto_key.trim();
@@ -331,6 +332,33 @@ pub async fn dismiss_item(
         return Err(ApiError::field("auto_key", "auto_key is required"));
     }
     store::dismiss_item(&state.pool, &month_key, auto_key).await?;
+    Ok(StatusCode::NO_CONTENT)
+}
+
+/// Remove a dismissal tombstone so the candidate is pending again.
+#[utoipa::path(
+    operation_id = "months_undismiss_item",
+    post,
+    path = "/api/months/{ym}/items/undismiss",
+    tag = "months",
+    params(("ym" = String, Path, description = "Month key YYYY-MM")),
+    request_body = AutoKeyBody,
+    responses(
+        (status = 204, description = "Dismissal removed (candidate pending again)"),
+        (status = 400, description = "Invalid month key or empty auto_key", body = ErrorBody),
+    )
+)]
+pub async fn undismiss_item(
+    State(state): State<AppState>,
+    Path(ym): Path<String>,
+    Json(body): Json<AutoKeyBody>,
+) -> Result<StatusCode, ApiError> {
+    let month_key = parse_ym(&ym)?.to_string();
+    let auto_key = body.auto_key.trim();
+    if auto_key.is_empty() {
+        return Err(ApiError::field("auto_key", "auto_key is required"));
+    }
+    store::undismiss_item(&state.pool, &month_key, auto_key).await?;
     Ok(StatusCode::NO_CONTENT)
 }
 
@@ -501,6 +529,83 @@ mod tests {
         assert_eq!(suggestion.category, MonthItemCategory::Adjustment);
         assert_eq!(suggestion.label.as_deref(), Some("iBond"));
         assert_eq!(suggestion.amount, 50000.0);
+        assert!(!suggestion.dismissed);
+        assert!(response.suggestions_actionable);
+    }
+
+    /// A history month lists its candidates read-only — pending or dismissed,
+    /// they stay in the response with `suggestions_actionable` false — and
+    /// undismiss flips a dismissed one back to pending.
+    #[tokio::test]
+    async fn history_month_lists_dismissed_candidates_and_undismiss_restores() {
+        let pool = connect_memory().await.expect("memory db");
+        let month = "2020-01".to_string();
+        sqlx::query("INSERT INTO month_stats (month, created_at, updated_at) VALUES (?, ?, ?)")
+            .bind(format!("{month}-01"))
+            .bind("2020-01-01T00:00:00")
+            .bind("2020-01-01T00:00:00")
+            .execute(&pool)
+            .await
+            .unwrap();
+        let bond: i64 = sqlx::query_scalar(
+            "INSERT INTO bonds (label, issue_no, principal, maturity_date, sort_order, \
+             created_at, updated_at) VALUES ('iBond', 'x', 50000, ?, 1, \
+             '2020-01-01T00:00:00', '2020-01-01T00:00:00') RETURNING id",
+        )
+        .bind(format!("{month}-15"))
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+        let key = format!("bond-end:{bond}");
+
+        let suggestion_of = async |pool: &sqlx::SqlitePool| {
+            show(State(AppState { pool: pool.clone() }), Path(month.clone()))
+                .await
+                .expect("show")
+                .0
+        };
+        let response = suggestion_of(&pool).await;
+        assert!(!response.suggestions_actionable);
+        let suggestion = response
+            .suggestions
+            .iter()
+            .find(|s| s.auto_key == key)
+            .expect("bond-end suggestion");
+        assert!(!suggestion.dismissed);
+
+        dismiss_item(
+            State(AppState { pool: pool.clone() }),
+            Path(month.clone()),
+            Json(AutoKeyBody {
+                auto_key: key.clone(),
+            }),
+        )
+        .await
+        .unwrap();
+        let response = suggestion_of(&pool).await;
+        let suggestion = response
+            .suggestions
+            .iter()
+            .find(|s| s.auto_key == key)
+            .expect("dismissed stays listed");
+        assert!(suggestion.dismissed);
+
+        undismiss_item(
+            State(AppState { pool: pool.clone() }),
+            Path(month.clone()),
+            Json(AutoKeyBody {
+                auto_key: key.clone(),
+            }),
+        )
+        .await
+        .unwrap();
+        let response = suggestion_of(&pool).await;
+        let suggestion = response
+            .suggestions
+            .iter()
+            .find(|s| s.auto_key == key)
+            .expect("undismissed pending again");
+        assert!(!suggestion.dismissed);
     }
 
     #[tokio::test]

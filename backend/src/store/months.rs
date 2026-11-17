@@ -401,7 +401,7 @@ pub(crate) async fn delete_item(pool: &SqlitePool, id: i64) -> Result<u64, Store
         .rows_affected())
 }
 
-/// Tombstone a suggestion key so it never reappears for the month.
+/// Tombstone a suggestion key so it stays listed flagged `dismissed`.
 pub(crate) async fn dismiss_item(
     pool: &SqlitePool,
     month: &str,
@@ -416,6 +416,20 @@ pub(crate) async fn dismiss_item(
     .bind(now_timestamp())
     .execute(pool)
     .await?;
+    Ok(())
+}
+
+/// Remove a dismissal tombstone so the candidate is pending again.
+pub(crate) async fn undismiss_item(
+    pool: &SqlitePool,
+    month: &str,
+    auto_key: &str,
+) -> Result<(), StoreError> {
+    sqlx::query("DELETE FROM month_item_dismissals WHERE month = ? AND auto_key = ?")
+        .bind(month)
+        .bind(auto_key)
+        .execute(pool)
+        .await?;
     Ok(())
 }
 

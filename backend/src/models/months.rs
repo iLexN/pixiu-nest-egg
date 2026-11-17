@@ -288,6 +288,8 @@ pub struct MonthSuggestion {
     pub amount: f64,
     /// Which app event produced it: deposit, trade, dividend, coupon, aia, pool.
     pub source: String,
+    /// The key carries a dismissal tombstone — an ignored, never-counted row.
+    pub dismissed: bool,
 }
 
 /// One auto interest component of a month: a 定期 ending, a received bond

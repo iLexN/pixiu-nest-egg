@@ -88,16 +88,21 @@ pub struct SuggestionEvents {
     pub usd_hkd_rate: Option<f64>,
 }
 
-/// Suggestions exist only for the current month and later: imported history
-/// already carries its 調整 as single items, so suggesting auto items there
-/// would double-count.
-pub fn suggestions_enabled(month: &str, today: chrono::NaiveDate) -> bool {
-    parse_month(month).is_some_and(|month| month >= first_of_month(today))
+/// Suggestion actions exist only from the previous month on: candidates are
+/// listed for every month, but accept/dismiss/undismiss applies only while
+/// the month is recent enough to still be settled. Older months' ghost rows
+/// are informational — imported history already carries its 調整 as single
+/// items, so acting on a candidate there would double-count.
+pub fn suggestion_actions_enabled(month: &str, today: chrono::NaiveDate) -> bool {
+    let previous_month = first_of_month(today) - chrono::Months::new(1);
+    parse_month(month).is_some_and(|month| month >= previous_month)
 }
 
-/// The candidate items for one month, minus keys already stored or dismissed.
-/// Every event kind builds its Candidate through `calc::candidates` — the
-/// same definitions the write paths record through `record_candidate`.
+/// The candidate items for one month, minus keys already stored (an accepted
+/// candidate is a real item, not a ghost). Dismissed keys stay listed,
+/// flagged `dismissed` — an ignored, never-counted row. Every event kind
+/// builds its Candidate through `calc::candidates` — the same definitions
+/// the write paths record through `record_candidate`.
 /// `month` is 'YYYY-MM-01'.
 pub fn build_suggestions(
     month: &str,
@@ -145,17 +150,18 @@ pub fn build_suggestions(
         .into_iter()
         .flatten()
         .filter(|candidate| candidate.month == month)
-        .map(|candidate| MonthSuggestion {
-            auto_key: candidate.key.to_string(),
-            category: candidate.category,
-            label: Some(candidate.label),
-            amount: candidate.amount,
-            source: candidate.key.source().to_string(),
+        .map(|candidate| {
+            let auto_key = candidate.key.to_string();
+            MonthSuggestion {
+                dismissed: dismissed_keys.contains(&auto_key),
+                auto_key,
+                category: candidate.category,
+                label: Some(candidate.label),
+                amount: candidate.amount,
+                source: candidate.key.source().to_string(),
+            }
         })
-        .filter(|suggestion| {
-            !stored_keys.contains(&suggestion.auto_key)
-                && !dismissed_keys.contains(&suggestion.auto_key)
-        })
+        .filter(|suggestion| !stored_keys.contains(&suggestion.auto_key))
         .collect()
 }
 
@@ -411,8 +417,10 @@ mod tests {
         assert!(approx_eq(bond.amount, 49500.0));
     }
 
+    /// Stored keys drop out (the accepted candidate is a real item); dismissed
+    /// keys stay listed, flagged — the ignored row the editor renders.
     #[test]
-    fn suggestions_exclude_stored_and_dismissed_keys() {
+    fn suggestions_exclude_stored_keys_and_flag_dismissed_ones() {
         let events = suggestion_events();
         let stored = HashSet::from([
             "dep-end:2".to_string(),
@@ -421,15 +429,15 @@ mod tests {
         ]);
         let dismissed = HashSet::from(["trade:3".to_string()]);
         let suggestions = build_suggestions("2026-10-01", &events, &stored, &dismissed);
-        let keys: HashSet<&str> = suggestions
+        let by_key: HashMap<&str, &MonthSuggestion> = suggestions
             .iter()
-            .map(|suggestion| suggestion.auto_key.as_str())
+            .map(|suggestion| (suggestion.auto_key.as_str(), suggestion))
             .collect();
-        assert!(!keys.contains("dep-end:2"));
-        assert!(!keys.contains("pool-input"));
-        assert!(!keys.contains("trade:3"));
-        assert!(!keys.contains("ibkr:11"));
-        assert!(keys.contains("dep-start:1"));
+        assert!(!by_key.contains_key("dep-end:2"));
+        assert!(!by_key.contains_key("pool-input"));
+        assert!(!by_key.contains_key("ibkr:11"));
+        assert!(by_key["trade:3"].dismissed);
+        assert!(!by_key["dep-start:1"].dismissed);
     }
 
     #[test]
@@ -455,12 +463,13 @@ mod tests {
     }
 
     #[test]
-    fn suggestions_are_cut_off_before_the_current_month() {
+    fn suggestion_actions_open_at_the_previous_month() {
         let today = ym("2026-10-23");
-        assert!(suggestions_enabled("2026-10-01", today));
-        assert!(suggestions_enabled("2026-11-01", today));
-        assert!(!suggestions_enabled("2026-09-01", today));
-        assert!(!suggestions_enabled("not-a-month", today));
+        assert!(suggestion_actions_enabled("2026-10-01", today));
+        assert!(suggestion_actions_enabled("2026-09-01", today));
+        assert!(suggestion_actions_enabled("2026-11-01", today));
+        assert!(!suggestion_actions_enabled("2026-08-01", today));
+        assert!(!suggestion_actions_enabled("not-a-month", today));
     }
 
     #[test]

@@ -760,8 +760,25 @@ export interface paths {
         };
         get?: never;
         put?: never;
-        /** Tombstone a suggestion key so it never reappears for the month. */
+        /** Tombstone a suggestion key so it stays listed flagged `dismissed`. */
         post: operations["months_dismiss_item"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/months/{ym}/items/undismiss": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Remove a dismissal tombstone so the candidate is pending again. */
+        post: operations["months_undismiss_item"];
         delete?: never;
         options?: never;
         head?: never;
@@ -1422,6 +1439,9 @@ export interface components {
              */
             semi_liquid_target?: number | null;
         };
+        AutoKeyBody: {
+            auto_key: string;
+        };
         /** @description One bank row of the 定期 rollup (sheet labels them SC, HS). */
         BankRollup: {
             bank: string;
@@ -1748,9 +1768,6 @@ export interface components {
             upcoming: components["schemas"]["Deposit"][];
             /** @description Per-year month tables over every deposit ending that year. */
             years: components["schemas"]["YearRollup"][];
-        };
-        DismissBody: {
-            auto_key: string;
         };
         /**
          * @description A 派息 record. `shares_held`, `buy_cost` and `received_price` are
@@ -2699,10 +2716,16 @@ export interface components {
             items: components["schemas"]["MonthItem"][];
             month: components["schemas"]["MonthStat"];
             /**
-             * @description Computed candidates for the current/future month; never stored until
-             *     accepted. Empty for past months.
+             * @description Computed candidates for the month; never stored until accepted.
+             *     Dismissed ones stay listed, flagged `dismissed`.
              */
             suggestions: components["schemas"]["MonthSuggestion"][];
+            /**
+             * @description Whether the month offers candidate actions (accept/dismiss/undismiss) —
+             *     the previous month and later. Older months' suggestions are
+             *     informational only.
+             */
+            suggestions_actionable: boolean;
         };
         /** @description One labeled line item of a month. */
         MonthItem: {
@@ -2904,6 +2927,8 @@ export interface components {
             amount: number;
             auto_key: string;
             category: components["schemas"]["MonthItemCategory"];
+            /** @description The key carries a dismissal tombstone — an ignored, never-counted row. */
+            dismissed: boolean;
             label: string | null;
             /** @description Which app event produced it: deposit, trade, dividend, coupon, aia, pool. */
             source: string;
@@ -6563,11 +6588,45 @@ export interface operations {
         };
         requestBody: {
             content: {
-                "application/json": components["schemas"]["DismissBody"];
+                "application/json": components["schemas"]["AutoKeyBody"];
             };
         };
         responses: {
             /** @description Suggestion dismissed (tombstone written) */
+            204: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Invalid month key or empty auto_key */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorBody"];
+                };
+            };
+        };
+    };
+    months_undismiss_item: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description Month key YYYY-MM */
+                ym: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["AutoKeyBody"];
+            };
+        };
+        responses: {
+            /** @description Dismissal removed (candidate pending again) */
             204: {
                 headers: {
                     [name: string]: unknown;

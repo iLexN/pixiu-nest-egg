@@ -142,6 +142,8 @@ export interface MonthDetail {
   month: MonthStat
   items: MonthItem[]
   suggestions: MonthSuggestion[]
+  /** The month offers candidate actions — the previous month and later. */
+  suggestions_actionable: boolean
   interest_auto: InterestComponent[]
 }
 
@@ -568,6 +570,12 @@ export const api = {
   },
   dismissMonthItem(ym: string, autoKey: string): Promise<void> {
     return request(`/months/${ym}/items/dismiss`, {
+      method: 'POST',
+      body: JSON.stringify({ auto_key: autoKey }),
+    })
+  },
+  undismissMonthItem(ym: string, autoKey: string): Promise<void> {
+    return request(`/months/${ym}/items/undismiss`, {
       method: 'POST',
       body: JSON.stringify({ auto_key: autoKey }),
     })

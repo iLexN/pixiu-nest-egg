@@ -75,7 +75,8 @@ function itemsOf(category: MonthItemCategory): MonthItem[] {
 }
 
 function suggestionsOf(category: MonthItemCategory): MonthSuggestion[] {
-  return (detail.value?.suggestions ?? []).filter((s) => s.category === category)
+  const all = (detail.value?.suggestions ?? []).filter((s) => s.category === category)
+  return [...all.filter((s) => !s.dismissed), ...all.filter((s) => s.dismissed)]
 }
 
 /** 生活按年: spending less than last year is green, >2% inflation is red. */
@@ -401,6 +402,18 @@ async function dismissSuggestion(suggestion: MonthSuggestion) {
   }
 }
 
+async function undismissSuggestion(suggestion: MonthSuggestion) {
+  if (!selectedMonth.value) return
+  try {
+    await api.undismissMonthItem(selectedMonth.value, suggestion.auto_key)
+    message.value = '已取消忽略'
+    error.value = ''
+    await load()
+  } catch (err) {
+    error.value = errorMessage(err)
+  }
+}
+
 function onPanelSaved(text: string) {
   message.value = text
   error.value = ''
@@ -677,6 +690,7 @@ onMounted(load)
               v-for="suggestion in suggestionsOf(category)"
               :key="suggestion.auto_key"
               class="suggestion-row"
+              :class="{ dismissed: suggestion.dismissed }"
             >
               <td>
                 {{ suggestion.label ?? suggestion.auto_key }}
@@ -685,14 +699,29 @@ onMounted(load)
               <td class="num" :class="signClass(suggestion.amount)">
                 {{ fmtMoney(suggestion.amount) }}
               </td>
-              <td class="muted">建議</td>
+              <td class="muted">{{ suggestion.dismissed ? '忽略（不計）' : '建議' }}</td>
               <td class="row-actions">
-                <button type="button" class="link" @click="acceptSuggestion(suggestion)">
-                  接受
-                </button>
-                <button type="button" class="link" @click="dismissSuggestion(suggestion)">
-                  忽略
-                </button>
+                <template v-if="detail.suggestions_actionable">
+                  <button type="button" class="link" @click="acceptSuggestion(suggestion)">
+                    接受
+                  </button>
+                  <button
+                    v-if="suggestion.dismissed"
+                    type="button"
+                    class="link"
+                    @click="undismissSuggestion(suggestion)"
+                  >
+                    取消忽略
+                  </button>
+                  <button
+                    v-else
+                    type="button"
+                    class="link"
+                    @click="dismissSuggestion(suggestion)"
+                  >
+                    忽略
+                  </button>
+                </template>
               </td>
             </tr>
             <template v-if="category === 'interest'">
@@ -835,6 +864,9 @@ onMounted(load)
 .pending-interest td {
   border-style: dashed;
   color: var(--muted);
+}
+.suggestion-row.dismissed td {
+  opacity: 0.55;
 }
 /* Pending interest components (deposit not yet 收訖): preview only. */
 .pending-interest td {

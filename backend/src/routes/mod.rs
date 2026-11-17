@@ -96,6 +96,7 @@ pub fn api_router(state: AppState) -> (Router, utoipa::openapi::OpenApi) {
         ))
         .routes(utoipa_axum::routes!(months::create_item))
         .routes(utoipa_axum::routes!(months::dismiss_item))
+        .routes(utoipa_axum::routes!(months::undismiss_item))
         .routes(utoipa_axum::routes!(
             months::update_item,
             months::remove_item
@@ -323,6 +324,7 @@ mod tests {
             ("/api/months/{ym}", "patch"),
             ("/api/months/{ym}/items", "post"),
             ("/api/months/{ym}/items/dismiss", "post"),
+            ("/api/months/{ym}/items/undismiss", "post"),
             ("/api/mpf", "get"),
             ("/api/mpf/accounts", "post"),
             ("/api/mpf/accounts/{id}", "delete"),
