@@ -137,7 +137,7 @@ pub async fn show(
         .ok_or_else(|| ApiError::NotFound(format!("month {month_key} not found")))?;
 
     let items = store::load_items(&state.pool, &month_key).await?;
-    let events = crate::service::months::load_events(&state.pool, month, stat.pool_input).await?;
+    let events = crate::service::months::load_events(&state.pool, month).await?;
     let stored_keys: HashSet<String> = items
         .iter()
         .filter_map(|item| item.auto_key.clone())

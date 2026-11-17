@@ -288,7 +288,7 @@ fn live_tail(rows: &[crate::calc::MonthStatRow], live: Option<LiveTotals>) -> Op
 
 /// Deposits whose start or end date falls in `range` (`[first, next)`); `None`
 /// loads them all — the derived 利息 needs every month at once.
-pub async fn load_deposit_events(
+async fn load_deposit_events(
     pool: &SqlitePool,
     range: Option<(String, String)>,
 ) -> Result<Vec<SuggestionDeposit>, StoreError> {
@@ -296,7 +296,7 @@ pub async fn load_deposit_events(
 }
 
 /// Received HK dividends paid in `range`, or all of them when `None`.
-pub async fn load_dividend_events(
+async fn load_dividend_events(
     pool: &SqlitePool,
     range: Option<(String, String)>,
 ) -> Result<Vec<SuggestionReceipt>, StoreError> {
@@ -305,7 +305,7 @@ pub async fn load_dividend_events(
 
 /// Bond coupons paid in `range`, or all of them when `None` — received ones
 /// carry their amount, pending ones the expected figure (None while 待定).
-pub async fn load_coupon_events(
+async fn load_coupon_events(
     pool: &SqlitePool,
     range: Option<(String, String)>,
 ) -> Result<Vec<SuggestionReceipt>, StoreError> {
@@ -316,7 +316,9 @@ pub async fn load_coupon_events(
 /// `end_date`), all received coupons, all received HK dividends. The other
 /// `SuggestionEvents` fields stay empty — `interest_components` reads only
 /// these three.
-pub async fn load_interest_events(pool: &SqlitePool) -> Result<SuggestionEvents, StoreError> {
+pub(crate) async fn load_interest_events(
+    pool: &SqlitePool,
+) -> Result<SuggestionEvents, StoreError> {
     Ok(SuggestionEvents {
         deposits: load_deposit_events(pool, None).await?,
         trades: Vec::new(),
@@ -330,17 +332,22 @@ pub async fn load_interest_events(pool: &SqlitePool) -> Result<SuggestionEvents,
     })
 }
 
-/// The suggestion sources for one month, loaded fresh on each read.
-pub async fn load_events(
+/// The suggestion sources for one month, loaded fresh on each read. The
+/// stored month's `pool_input` feeds the pool candidate; a month with no row
+/// contributes `0.0`.
+pub(crate) async fn load_events(
     pool: &SqlitePool,
     month: chrono::NaiveDate,
-    pool_input: f64,
 ) -> Result<SuggestionEvents, StoreError> {
     let range = Some((
         month.to_string(),
         (month + chrono::Months::new(1)).to_string(),
     ));
     let (first, next) = range.clone().expect("just built");
+    let pool_input = crate::store::months::load_month(pool, &first)
+        .await?
+        .map(|stored| stored.pool_input)
+        .unwrap_or(0.0);
 
     let trades: Vec<SuggestionTrade> =
         crate::store::trades::hk_suggestion_trades(pool, &first, &next).await?;

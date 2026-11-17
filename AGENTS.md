@@ -64,7 +64,7 @@ cd frontend && pnpm gen:api   # export_openapi dumps openapi.json, openapi-types
 pnpm build                    # vue-tsc is the drift check
 ```
 
-Never hand-edit the `components['schemas']` aliases or `api-types.ts`; the `api` object, `request()`, and frontend-only types in `api.ts` stay hand-written. `frontend/openapi.json` is gitignored — regenerated from source on every run, so codegen never types a stale server.
+Never hand-edit the `components['schemas']` aliases or `api-types.ts`; the `api` object, `request()`, and frontend-only types in `api.ts` stay hand-written. Server response/body shapes in `api.ts` are always `S['…']` aliases — never re-declared interfaces; only frontend-only types (filters, convenience wrappers) stay hand-written. `frontend/openapi.json` is gitignored — regenerated from source on every run, so codegen never types a stale server.
 
 ## Verification
 

@@ -389,7 +389,7 @@ mod tests {
         let created = create_transfer(&pool, &body(50000.0)).await.unwrap();
         assert_eq!(item_count(&pool, &format!("ibkr:{}", created.id)).await, 0);
         let month = chrono::NaiveDate::parse_from_str(&first, "%Y-%m-%d").unwrap();
-        let events = crate::service::months::load_events(&pool, month, 0.0)
+        let events = crate::service::months::load_events(&pool, month)
             .await
             .unwrap();
         let suggestions = build_suggestions(&first, &events, &HashSet::new(), &HashSet::new());
@@ -439,7 +439,7 @@ mod tests {
 
         seed_month(&pool, &first).await;
         let month = chrono::NaiveDate::parse_from_str(&first, "%Y-%m-%d").unwrap();
-        let events = crate::service::months::load_events(&pool, month, 0.0)
+        let events = crate::service::months::load_events(&pool, month)
             .await
             .unwrap();
         let suggestions = build_suggestions(&first, &events, &HashSet::new(), &HashSet::new());

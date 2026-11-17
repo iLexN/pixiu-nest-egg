@@ -2,33 +2,12 @@ import type { components } from './api-types'
 
 type S = components['schemas']
 
-export interface SummaryStock extends Stock {
-  shares_held: number
-  total_buy_cost: number
-  weighted_avg_buy_price: number
-  current_price: number | null
-  market_value: number | null
-  unrealized_amount: number | null
-  unrealized_return: number | null
-  dividends_received: number
-  dividend_return: number | null
-  net_invested: number
-  net_diluted_price: number | null
-  real_total_return: number | null
-  trade_count: number
-}
+export type SummaryStock = S['StockRow']
 
 /** The PATCH/freeze response: the snapshot row keyed by market + year. */
-export interface YearSnapshotRow extends YearSnapshot {
-  market: Market
-  year: number
-}
+export type YearSnapshotRow = S['YearSnapshot']
 
-export interface YearlySummary {
-  market: Market
-  today: string
-  years: YearRow[]
-}
+export type YearlySummary = S['YearlyResponse']
 
 export interface TradeFilters {
   market?: Market
@@ -39,26 +18,9 @@ export interface TradeFilters {
   order?: 'asc' | 'desc'
 }
 
-export interface ReceiveDepositBody {
-  /** 收訖日; defaults to today server-side. */
-  received_at?: string
-  /** Corrects the stored interest to the amount actually received. */
-  interest?: number
-  /** Bank principal+interest into a cash account. Defaults to true. */
-  bank_in?: boolean
-  /** The receipt cash_accounts id; falls back to the HKD default. */
-  account_id?: number
-}
+export type ReceiveDepositBody = S['ReceiveDeposit']
 
-export interface DepositSummary {
-  today: string
-  upcoming: Deposit[]
-  active_totals: { principal: number; interest: number; total: number }
-  months: ActiveMonthBucket[]
-  banks: BankRollup[]
-  years: YearRollup[]
-  history_years: number[]
-}
+export type DepositSummary = S['DepositSummaryResponse']
 
 export interface DepositFilters {
   status?: 'active' | 'ended'
@@ -66,12 +28,7 @@ export interface DepositFilters {
   order?: 'asc' | 'desc'
 }
 
-export interface ReceiveFamilyDepositBody {
-  /** 收訖日; defaults to today server-side. */
-  received_at?: string
-  /** Corrects the stored interest to the amount actually received. */
-  interest?: number
-}
+export type ReceiveFamilyDepositBody = S['ReceiveFamilyDeposit']
 
 export interface FamilyDepositFilters {
   status?: 'active' | 'ended'
@@ -80,12 +37,7 @@ export interface FamilyDepositFilters {
   order?: 'asc' | 'desc'
 }
 
-export interface DividendSummary {
-  today: string
-  pending: Dividend[]
-  years: DividendYearRollup[]
-  history_years: number[]
-}
+export type DividendSummary = S['DividendSummaryResponse']
 
 export interface DividendFilters {
   market?: Market
@@ -95,66 +47,19 @@ export interface DividendFilters {
   order?: 'asc' | 'desc'
 }
 
-export interface ReceiveBondBody {
-  /** 收訖日; defaults to today server-side. */
-  received_at?: string
-  /** Bank the returned principal into a cash account. Defaults to true. */
-  bank_in?: boolean
-  /** The receipt cash_accounts id; falls back to the HKD default. */
-  account_id?: number
-  /** Amount credited; defaults to the bond's principal. */
-  credit_amount?: number
-}
+export type ReceiveBondBody = S['ReceiveBond']
 
-export interface BondSummary {
-  today: string
-  totals: { active_principal: number }
-  active: BondWithCoupons[]
-  matured: BondWithCoupons[]
-  upcoming_coupons: UpcomingCoupon[]
-}
+export type BondSummary = S['BondSummaryResponse']
 
-export interface MpfOverview {
-  today: string
-  accounts: MpfAccount[]
-  totals: MpfTotals
-  note: string | null
-  history: MpfHistoryRow[]
-}
+export type MpfOverview = S['MpfResponse']
 
-export interface AiaPolicyWithEvents extends AiaPolicy {
-  events: AiaEvent[]
-}
+export type AiaPolicyWithEvents = S['PolicyWithEvents']
 
-export interface AiaSummary {
-  today: string
-  /** Manual USD→HKD rate; HKD figures are null while unset. */
-  rate: number | null
-  /** Earliest premium-due date still ahead. */
-  next_premium_due: string | null
-  /** Section free-text note. */
-  note: string | null
-  totals: AiaTotals
-  policies: AiaPolicyWithEvents[]
-}
+export type AiaSummary = S['AiaSummaryResponse']
 
-export interface MonthDetail {
-  month: MonthStat
-  items: MonthItem[]
-  suggestions: MonthSuggestion[]
-  /** The month offers candidate actions — the previous month and later. */
-  suggestions_actionable: boolean
-  interest_auto: InterestComponent[]
-}
+export type MonthDetail = S['MonthDetailResponse']
 
-export interface MonthSummary {
-  years: MonthYearSummary[]
-  running: MonthRunningAverages
-  pool_balance: number
-  pool_totals: PoolTotals
-  pool_rate: number | null
-  pool_rate_year: number
-}
+export type MonthSummary = S['MonthSummaryResponse']
 
 export type Market = S['Market']
 export type TradeType = S['TradeType']

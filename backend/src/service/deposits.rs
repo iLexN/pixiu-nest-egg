@@ -270,7 +270,7 @@ mod tests {
         month: chrono::NaiveDate,
         auto_key: &str,
     ) -> crate::models::MonthSuggestion {
-        let events = crate::service::months::load_events(pool, month, 0.0)
+        let events = crate::service::months::load_events(pool, month)
             .await
             .unwrap();
         let suggestions = crate::calc::build_suggestions(

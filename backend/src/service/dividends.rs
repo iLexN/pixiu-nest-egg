@@ -207,7 +207,7 @@ mod tests {
         let pay_date = format!("{}-05", &month.to_string()[..7]);
         let id = seed_dividend(&pool, stock_id, &pay_date, Some(500.0)).await;
 
-        let events = crate::service::months::load_events(&pool, month, 0.0)
+        let events = crate::service::months::load_events(&pool, month)
             .await
             .unwrap();
         let suggestions = crate::calc::build_suggestions(
