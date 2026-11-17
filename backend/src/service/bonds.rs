@@ -3,7 +3,7 @@ use sqlx::SqlitePool;
 
 use crate::calc::{CandidateKey, ValidatedCoupon, bond_end, coupon};
 use crate::models::{Bond, BondCoupon, BondStatus, Currency};
-use crate::service::{ServiceError, receipts};
+use crate::service::{ServiceError, cash_movement};
 use crate::store::{StoreError, bonds, months, now_timestamp, today};
 
 /// 債券!B1: Σ principal over active bonds, over already-loaded rows.
@@ -132,7 +132,7 @@ pub async fn receive(pool: &SqlitePool, id: i64, input: &ReceiveInput) -> Result
     }
     let now = now_timestamp();
     let mut tx = pool.begin().await.map_err(StoreError::from)?;
-    let credit = receipts::credit(
+    let credit = cash_movement::credit(
         &mut tx,
         Currency::Hkd,
         input.credit_amount,
@@ -191,7 +191,7 @@ pub async fn update_coupon(
     let credited_before = bonds::coupon_credit(&mut tx, id).await?;
     match (input.existing_received, input.validated.received_amount) {
         (None, Some(amount)) => {
-            let credit = receipts::credit(
+            let credit = cash_movement::credit(
                 &mut tx,
                 Currency::Hkd,
                 amount,
@@ -208,7 +208,7 @@ pub async fn update_coupon(
             }
         }
         (Some(_), None) => {
-            receipts::reverse(&mut tx, credited_before, &now).await?;
+            cash_movement::reverse(&mut tx, credited_before, &now).await?;
             bonds::set_coupon_credit(&mut tx, id, None).await?;
             months::retire_candidate(&mut tx, &CandidateKey::Coupon(id)).await?;
         }

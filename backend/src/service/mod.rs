@@ -25,6 +25,7 @@ impl From<sqlx::Error> for ServiceError {
 pub mod aia;
 pub mod bonds;
 pub mod cash_accounts;
+pub mod cash_movement;
 pub mod deposits;
 pub mod dividends;
 pub mod family;
@@ -34,7 +35,6 @@ pub mod manual_assets;
 pub mod months;
 pub mod mpf;
 pub mod overview;
-pub mod receipts;
 pub mod settings;
 pub mod summary;
 pub mod trades;

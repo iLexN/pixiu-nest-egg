@@ -10,12 +10,12 @@ use sqlx::SqlitePool;
 
 use crate::calc::{
     ActiveMonthBucket, ActiveTotals, BankRollup, CandidateKey, DepositFacts, DepositInput,
-    FieldError, ValidatedDeposit, YearRollup, active_month_rollup, active_totals, bank_rollup,
-    dep_end, dep_start, history_years, validate_deposit, year_rollups,
+    ValidatedDeposit, YearRollup, active_month_rollup, active_totals, bank_rollup, dep_end,
+    dep_start, history_years, validate_deposit, year_rollups,
 };
-use crate::models::{CashRole, Currency, Deposit, NewDeposit};
-use crate::service::{ServiceError, receipts};
-use crate::store::{StoreError, cash_accounts, deposits, forecast, months, now_timestamp, today};
+use crate::models::{Currency, Deposit, NewDeposit};
+use crate::service::{ServiceError, cash_movement};
+use crate::store::{StoreError, deposits, forecast, months, now_timestamp, today};
 
 /// The shared placement write, inside the caller's transaction: the row
 /// insert, the optional 活期 debit of the principal from
@@ -41,23 +41,16 @@ async fn place(
         && principal > 0.0
         && !deposits::is_received(&mut *conn, id).await?
     {
-        let account = cash_accounts::load_one(&mut *conn, account_id).await?;
-        if account.role != CashRole::Bank || account.currency != Currency::Hkd {
-            return Err(ServiceError::Validation(vec![FieldError::new(
-                "debit_account_id",
-                "must be an HKD bank account",
-            )]));
-        }
-        // The overdraft check reads the account inside the transaction so
-        // the check and the debit see the same balance.
-        if account.amount < principal {
-            return Err(ServiceError::Validation(vec![FieldError::new(
-                "debit_account_id",
-                format!("{} holds only {}", account.label, account.amount),
-            )]));
-        }
         let now = now_timestamp();
-        cash_accounts::add_amount(&mut *conn, account.id, -principal, &now).await?;
+        let account = cash_movement::debit_bank(
+            &mut *conn,
+            account_id,
+            principal,
+            "debit_account_id",
+            "debit_account_id",
+            &now,
+        )
+        .await?;
         deposits::set_debit(&mut *conn, id, account.id, principal, &now).await?;
     }
     if deposit.principal.is_some_and(|principal| principal != 0.0)
@@ -149,7 +142,7 @@ pub async fn receive(pool: &SqlitePool, id: i64, input: &ReceiveInput) -> Result
     let amount = deposit.principal.unwrap_or(0.0) + input.interest.unwrap_or(0.0);
     let now = now_timestamp();
     let mut tx = pool.begin().await.map_err(StoreError::from)?;
-    let credit = receipts::credit(
+    let credit = cash_movement::credit(
         &mut tx,
         Currency::Hkd,
         amount,
@@ -246,7 +239,7 @@ pub async fn delete(pool: &SqlitePool, id: i64) -> Result<(), ServiceError> {
     let now = now_timestamp();
     let mut tx = pool.begin().await.map_err(StoreError::from)?;
     let debit = deposits::load_debit(&mut tx, id).await?;
-    receipts::refund(&mut tx, debit, &now).await?;
+    cash_movement::refund(&mut tx, debit, &now).await?;
     months::retire_candidate(&mut tx, &CandidateKey::DepStart(id)).await?;
     deposits::delete_deposit(&mut tx, id).await?;
     tx.commit().await?;
@@ -256,6 +249,7 @@ pub async fn delete(pool: &SqlitePool, id: i64) -> Result<(), ServiceError> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::store::cash_accounts;
     use chrono::Datelike;
     use std::collections::HashSet;
 

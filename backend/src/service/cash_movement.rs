@@ -1,8 +1,10 @@
-//! The shared receipt-credit rule used by every source: pick the cash account
-//! a received amount banks into, apply it, and reverse it exactly.
+//! The shared **Cash movement** rule used by every money event: pick the cash
+//! account a received amount banks into, debit a bank account for a
+//! placement/轉入, settle the broker leg, and reverse any recorded move
+//! exactly — an undo skips an account that no longer exists.
 
 use crate::calc::FieldError;
-use crate::models::Currency;
+use crate::models::{CashAccount, CashRole, Currency};
 use crate::service::ServiceError;
 use crate::store::cash_accounts;
 use crate::store::{Credit, StoreError};
@@ -91,6 +93,72 @@ pub async fn refund(
         Err(StoreError::NotFound(_)) => Ok(()),
         Err(error) => Err(error),
     }
+}
+
+/// Apply a delta to an account while it still exists — the tolerant-undo
+/// rule for raw `(account_id, delta)` legs like a 轉入 reversal: a `None`
+/// leg or a since-deleted account is a no-op.
+pub async fn shift(
+    conn: &mut sqlx::SqliteConnection,
+    account_id: Option<i64>,
+    delta: f64,
+    now: &str,
+) -> Result<(), StoreError> {
+    let Some(account_id) = account_id else {
+        return Ok(());
+    };
+    match cash_accounts::load_one(&mut *conn, account_id).await {
+        Ok(_) => cash_accounts::add_amount(conn, account_id, delta, now).await,
+        Err(StoreError::NotFound(_)) => Ok(()),
+        Err(error) => Err(error),
+    }
+}
+
+/// Debit an HKD bank account for a placement or 轉入 source: the account must
+/// exist, be a `bank` in HKD, and hold at least `amount` — the overdraft
+/// check reads it inside the transaction so the check and the debit see the
+/// same balance. Validation errors name `field` (role/currency) and
+/// `amount_field` (overdraft), matching each caller's payload. Returns the
+/// account so the caller can record its id.
+pub async fn debit_bank(
+    conn: &mut sqlx::SqliteConnection,
+    account_id: i64,
+    amount: f64,
+    field: &str,
+    amount_field: &str,
+    now: &str,
+) -> Result<CashAccount, ServiceError> {
+    let account = cash_accounts::load_one(&mut *conn, account_id).await?;
+    if account.role != CashRole::Bank || account.currency != Currency::Hkd {
+        return Err(ServiceError::Validation(vec![FieldError::new(
+            field,
+            "must be an HKD bank account",
+        )]));
+    }
+    if account.amount < amount {
+        return Err(ServiceError::Validation(vec![FieldError::new(
+            amount_field,
+            format!("{} holds only {}", account.label, account.amount),
+        )]));
+    }
+    cash_accounts::add_amount(conn, account.id, -amount, now).await?;
+    Ok(account)
+}
+
+/// Apply a delta to the currency's `broker` account — a trade settlement or
+/// the broker leg of a 轉入 — and return it so the caller can record its id.
+/// `Err(Conflict)` while the currency has no broker row.
+pub async fn apply_to_broker(
+    conn: &mut sqlx::SqliteConnection,
+    currency: Currency,
+    delta: f64,
+    now: &str,
+) -> Result<CashAccount, ServiceError> {
+    let broker = cash_accounts::broker(&mut *conn, currency)
+        .await?
+        .ok_or_else(|| ServiceError::Conflict(format!("no IBKR {} account", currency.as_str())))?;
+    cash_accounts::add_amount(conn, broker.id, delta, now).await?;
+    Ok(broker)
 }
 
 #[cfg(test)]
@@ -266,5 +334,101 @@ mod tests {
         assert!(credit.is_none());
         drop(conn);
         assert_eq!(amount(&pool, hs).await, 100.0);
+    }
+
+    /// A placement debit subtracts and returns the account for the record.
+    #[tokio::test]
+    async fn debit_bank_debits_and_returns_the_account() {
+        let pool = connect_memory().await.expect("memory db");
+        let hs = seed_account(&pool, "HS", Currency::Hkd, 100.0, true).await;
+        let mut conn = pool.acquire().await.unwrap();
+
+        let account = debit_bank(
+            &mut conn,
+            hs,
+            60.0,
+            "debit_account_id",
+            "debit_account_id",
+            NOW,
+        )
+        .await
+        .unwrap();
+        assert_eq!(account.id, hs);
+        drop(conn);
+        assert_eq!(amount(&pool, hs).await, 40.0);
+    }
+
+    /// A broker account and an overdraft both `Err(Validation)`; the balance
+    /// is untouched.
+    #[tokio::test]
+    async fn debit_bank_validates_role_and_balance() {
+        let pool = connect_memory().await.expect("memory db");
+        let hs = seed_account(&pool, "HS", Currency::Hkd, 100.0, true).await;
+        let broker: i64 = sqlx::query_scalar(
+            "SELECT id FROM cash_accounts WHERE role = 'broker' AND currency = 'HKD'",
+        )
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+        let mut conn = pool.acquire().await.unwrap();
+
+        let err = debit_bank(
+            &mut conn,
+            broker,
+            50.0,
+            "debit_account_id",
+            "debit_account_id",
+            NOW,
+        )
+        .await
+        .expect_err("broker rejected");
+        assert!(matches!(err, ServiceError::Validation(_)));
+        let err = debit_bank(&mut conn, hs, 150.0, "debit_account_id", "amount", NOW)
+            .await
+            .expect_err("overdraft rejected");
+        assert!(matches!(err, ServiceError::Validation(_)));
+        drop(conn);
+        assert_eq!(amount(&pool, hs).await, 100.0);
+    }
+
+    /// `shift` applies the delta while the account exists and skips a `None`
+    /// leg or a since-deleted account.
+    #[tokio::test]
+    async fn shift_applies_or_skips() {
+        let pool = connect_memory().await.expect("memory db");
+        let hs = seed_account(&pool, "HS", Currency::Hkd, 100.0, true).await;
+        let sc = seed_account(&pool, "渣打", Currency::Hkd, 0.0, false).await;
+        let mut conn = pool.acquire().await.unwrap();
+
+        shift(&mut conn, Some(hs), -30.0, NOW).await.unwrap();
+        shift(&mut conn, None, -30.0, NOW).await.unwrap();
+        shift(&mut conn, Some(9999), -30.0, NOW).await.unwrap();
+        drop(conn);
+        cash_accounts::delete(&pool, sc).await.unwrap();
+        let mut conn = pool.acquire().await.unwrap();
+        shift(&mut conn, Some(sc), -30.0, NOW).await.unwrap();
+        drop(conn);
+        assert_eq!(amount(&pool, hs).await, 70.0);
+    }
+
+    /// `apply_to_broker` moves the currency's broker cash and returns the
+    /// account for the caller's record.
+    #[tokio::test]
+    async fn apply_to_broker_moves_the_broker_cash() {
+        let pool = connect_memory().await.expect("memory db");
+        let usd: i64 = sqlx::query_scalar(
+            "SELECT id FROM cash_accounts WHERE role = 'broker' AND currency = 'USD'",
+        )
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+        let mut conn = pool.acquire().await.unwrap();
+
+        let broker = apply_to_broker(&mut conn, Currency::Usd, -42.0, NOW)
+            .await
+            .unwrap();
+        assert_eq!(broker.id, usd);
+        drop(conn);
+        assert_eq!(amount(&pool, usd).await, -42.0);
     }
 }

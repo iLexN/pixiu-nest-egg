@@ -5,8 +5,8 @@
 use sqlx::SqlitePool;
 
 use crate::calc::{CandidateKey, FieldError};
-use crate::models::{CashRole, Currency, IbkrTransfer, NewIbkrTransfer};
-use crate::service::ServiceError;
+use crate::models::{Currency, IbkrTransfer, NewIbkrTransfer};
+use crate::service::{ServiceError, cash_movement};
 use crate::store::{StoreError, cash_accounts, ibkr as ibkr_store, months, now_timestamp, today};
 
 /// `POST /api/ibkr/transfers`: in one transaction, append the log row,
@@ -47,34 +47,31 @@ pub async fn create_transfer(
 
     let now = now_timestamp();
     let mut tx = pool.begin().await.map_err(StoreError::from)?;
-    let source = match body.from_account_id {
-        Some(id) => cash_accounts::load_one(&mut *tx, id).await?,
-        None => cash_accounts::bank_by_label(&mut *tx, "HS")
-            .await?
-            .ok_or_else(|| {
-                ServiceError::Validation(vec![FieldError::new(
-                    "from_account_id",
-                    "no HS bank account",
-                )])
-            })?,
+    let source_id = match body.from_account_id {
+        Some(id) => id,
+        None => {
+            cash_accounts::bank_by_label(&mut *tx, "HS")
+                .await?
+                .ok_or_else(|| {
+                    ServiceError::Validation(vec![FieldError::new(
+                        "from_account_id",
+                        "no HS bank account",
+                    )])
+                })?
+                .id
+        }
     };
-    if source.role != CashRole::Bank || source.currency != Currency::Hkd {
-        return Err(ServiceError::Validation(vec![FieldError::new(
-            "from_account_id",
-            "source must be an HKD bank account",
-        )]));
-    }
-    // The overdraft check reads the source inside the transaction so the
-    // check and the debit see the same balance.
-    if source.amount < body.amount_hkd {
-        return Err(ServiceError::Validation(vec![FieldError::new(
-            "amount_hkd",
-            format!("{} holds only {}", source.label, source.amount),
-        )]));
-    }
-    let broker = cash_accounts::broker(&mut *tx, Currency::Hkd)
-        .await?
-        .ok_or_else(|| ServiceError::Conflict("no IBKR HKD account".to_string()))?;
+    let source = cash_movement::debit_bank(
+        &mut tx,
+        source_id,
+        body.amount_hkd,
+        "from_account_id",
+        "amount_hkd",
+        &now,
+    )
+    .await?;
+    let broker =
+        cash_movement::apply_to_broker(&mut tx, Currency::Hkd, body.amount_hkd, &now).await?;
 
     let id = ibkr_store::insert_transfer(
         &mut *tx,
@@ -84,8 +81,6 @@ pub async fn create_transfer(
         Some(broker.id),
     )
     .await?;
-    cash_accounts::add_amount(&mut tx, source.id, -body.amount_hkd, &now).await?;
-    cash_accounts::add_amount(&mut tx, broker.id, body.amount_hkd, &now).await?;
     // The ibkr:<id> Candidate rebuilds from the stored row — same event
     // shape the suggestion read.
     if let Some(event) = ibkr_store::transfer_event(&mut *tx, id).await?
@@ -112,13 +107,7 @@ pub async fn delete_transfer(pool: &SqlitePool, id: i64) -> Result<(), ServiceEr
         (transfer.from_account_id, transfer.amount_hkd),
         (transfer.broker_account_id, -transfer.amount_hkd),
     ] {
-        if let Some(account_id) = account_id {
-            match cash_accounts::load_one(&mut *tx, account_id).await {
-                Ok(_) => cash_accounts::add_amount(&mut tx, account_id, delta, &now).await?,
-                Err(StoreError::NotFound(_)) => {}
-                Err(error) => return Err(error.into()),
-            }
-        }
+        cash_movement::shift(&mut tx, account_id, delta, &now).await?;
     }
     months::retire_candidate(&mut tx, &CandidateKey::Ibkr(id)).await?;
     ibkr_store::delete_transfer(&mut tx, id).await?;

@@ -11,7 +11,7 @@ use crate::calc::{
     dividend_year_rollups, history_years,
 };
 use crate::models::{Currency, Dividend, Market};
-use crate::service::{ServiceError, receipts};
+use crate::service::{ServiceError, cash_movement};
 use crate::store::{StoreError, dividends, months, now_timestamp, today};
 
 /// The credit currency a dividend banks in: HK stocks credit HKD, US stocks
@@ -102,7 +102,7 @@ pub async fn update(
     let credited_before = dividends::credit(&mut tx, id).await?;
     match (input.existing_received, input.validated.received_amount) {
         (None, Some(amount)) => {
-            let credit = receipts::credit(
+            let credit = cash_movement::credit(
                 &mut tx,
                 credit_currency(input.market),
                 amount,
@@ -119,7 +119,7 @@ pub async fn update(
             }
         }
         (Some(_), None) => {
-            receipts::reverse(&mut tx, credited_before, &now).await?;
+            cash_movement::reverse(&mut tx, credited_before, &now).await?;
             dividends::set_credit(&mut tx, id, None).await?;
             months::retire_candidate(&mut tx, &CandidateKey::Div(id)).await?;
         }

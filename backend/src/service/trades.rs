@@ -3,7 +3,7 @@ use sqlx::SqlitePool;
 use crate::calc::ValidatedTrade;
 use crate::models::{Currency, Market, TradeType};
 use crate::service::ServiceError;
-use crate::store::{StoreError, cash_accounts, now_timestamp, trades as store};
+use crate::store::{StoreError, now_timestamp, trades as store};
 
 /// Resolve the stock a trade or dividend refers to — by `stock_id`, or by
 /// market + 股票代碼 when the caller only has the code.
@@ -57,16 +57,6 @@ fn settlement(trade: &ValidatedTrade, market: Market) -> Option<f64> {
     })
 }
 
-async fn usd_broker_id<'e, E>(exec: E) -> Result<i64, ServiceError>
-where
-    E: sqlx::Executor<'e, Database = sqlx::Sqlite>,
-{
-    cash_accounts::broker(exec, Currency::Usd)
-        .await?
-        .map(|account| account.id)
-        .ok_or_else(|| ServiceError::Conflict("no IBKR USD account".to_string()))
-}
-
 /// Create a trade and, in the same transaction, apply its settlement to the
 /// USD broker account when the rule applies — recording the applied amount
 /// on the row so a later edit or delete reverses exactly it.
@@ -82,8 +72,7 @@ pub async fn create(
     let mut tx = pool.begin().await.map_err(StoreError::from)?;
     let id = store::insert_trade(&mut *tx, stock_id, trade, note, applied).await?;
     if let Some(amount) = applied {
-        let broker = usd_broker_id(&mut *tx).await?;
-        cash_accounts::add_amount(&mut tx, broker, amount, &now).await?;
+        super::cash_movement::apply_to_broker(&mut tx, Currency::Usd, amount, &now).await?;
     }
     tx.commit().await?;
     Ok(id)
@@ -106,13 +95,11 @@ pub async fn update(
     let recorded = store::settled_amount(&mut *tx, id).await?;
     let applied = recorded.and_then(|_| settlement(validated, market));
     if let Some(amount) = recorded {
-        let broker = usd_broker_id(&mut *tx).await?;
-        cash_accounts::add_amount(&mut tx, broker, -amount, &now).await?;
+        super::cash_movement::apply_to_broker(&mut tx, Currency::Usd, -amount, &now).await?;
     }
     store::update_trade(&mut *tx, id, stock_id, validated, note, applied).await?;
     if let Some(amount) = applied {
-        let broker = usd_broker_id(&mut *tx).await?;
-        cash_accounts::add_amount(&mut tx, broker, amount, &now).await?;
+        super::cash_movement::apply_to_broker(&mut tx, Currency::Usd, amount, &now).await?;
     }
     tx.commit().await?;
     Ok(())
@@ -128,8 +115,7 @@ pub async fn remove(pool: &SqlitePool, id: i64) -> Result<bool, ServiceError> {
         return Ok(false);
     }
     if let Some(amount) = recorded {
-        let broker = usd_broker_id(&mut *tx).await?;
-        cash_accounts::add_amount(&mut tx, broker, -amount, &now).await?;
+        super::cash_movement::apply_to_broker(&mut tx, Currency::Usd, -amount, &now).await?;
     }
     tx.commit().await?;
     Ok(true)
@@ -140,6 +126,7 @@ mod tests {
     use super::*;
     use crate::db::connect_memory;
     use crate::models::InputMode;
+    use crate::store::cash_accounts;
 
     async fn seed_stock(pool: &SqlitePool, market: Market, code: &str) -> i64 {
         sqlx::query_scalar("INSERT INTO stocks (market, code) VALUES (?, ?) RETURNING id")
