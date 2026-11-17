@@ -12,6 +12,7 @@ use crate::calc::{
 use crate::models::{
     MonthItem, MonthItemCategory, MonthItemPatch, MonthStat, MonthStatPatch, NewMonthItem,
 };
+use crate::patch::merge_text;
 use crate::service::ServiceError;
 use crate::store::months::StoredMonth;
 use crate::store::{StoreError, now_timestamp, today};
@@ -367,16 +368,6 @@ pub(crate) async fn load_events(
         ibkr_transfers,
         pool_input,
         usd_hkd_rate: crate::store::fx::usd_rate(pool).await?,
-    })
-}
-
-/// `None` keeps `existing`; a present value is trimmed and `null`/blank
-/// clears it — the shared PATCH-merge rule for nullable text.
-fn merge_text(patch: Option<Option<String>>, existing: Option<String>) -> Option<String> {
-    patch.map_or(existing, |value| {
-        value
-            .map(|value| value.trim().to_string())
-            .filter(|value| !value.is_empty())
     })
 }
 

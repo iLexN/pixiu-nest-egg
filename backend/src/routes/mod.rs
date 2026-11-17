@@ -6,10 +6,10 @@ pub mod dividends;
 pub mod family;
 pub mod forecast;
 pub mod fx;
+pub mod manual_assets;
 pub mod months;
 pub mod mpf;
 pub mod overview;
-pub mod patch;
 pub mod settings;
 pub mod stocks;
 pub mod summary;
@@ -102,12 +102,12 @@ pub fn api_router(state: AppState) -> (Router, utoipa::openapi::OpenApi) {
             months::remove_item
         ))
         .routes(utoipa_axum::routes!(
-            months::list_assets,
-            months::create_asset
+            manual_assets::list,
+            manual_assets::create
         ))
         .routes(utoipa_axum::routes!(
-            months::update_asset,
-            months::remove_asset
+            manual_assets::update,
+            manual_assets::remove
         ))
         .routes(utoipa_axum::routes!(fx::list))
         .routes(utoipa_axum::routes!(fx::update))

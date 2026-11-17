@@ -6,6 +6,7 @@ use crate::calc::{
     validate_mpf_account,
 };
 use crate::models::{MpfAccount, MpfAccountPatch, MpfHistoryRow};
+use crate::patch::merge_text;
 use crate::service::ServiceError;
 use crate::store::mpf::{self, StoredAccount};
 use crate::store::{StoreError, today};
@@ -42,16 +43,6 @@ pub async fn overview(pool: &SqlitePool) -> Result<MpfResponse, StoreError> {
         totals,
         note,
         history,
-    })
-}
-
-/// `None` keeps `existing`; a present value is trimmed and `null`/blank
-/// clears it — the shared PATCH-merge rule for nullable text.
-fn merge_text(patch: Option<Option<String>>, existing: Option<String>) -> Option<String> {
-    patch.map_or(existing, |value| {
-        value
-            .map(|value| value.trim().to_string())
-            .filter(|value| !value.is_empty())
     })
 }
 

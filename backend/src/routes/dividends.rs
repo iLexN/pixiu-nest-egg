@@ -4,11 +4,11 @@ use axum::http::StatusCode;
 use serde::Deserialize;
 use sqlx::SqlitePool;
 
-use super::patch::{merge_num, merge_text};
 use super::{AppState, parse_order, parse_status};
 use crate::calc::{DividendInput, holdings_snapshot, net_from_gross, validate_dividend};
 use crate::error::{ApiError, ErrorBody};
 use crate::models::{Dividend, DividendPatch, NewDividend};
+use crate::patch::{merge_num, merge_text};
 use crate::store::dividends as store;
 
 pub use crate::service::dividends::DividendSummaryResponse;

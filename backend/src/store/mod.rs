@@ -11,6 +11,7 @@ pub mod family;
 pub mod forecast;
 pub mod fx;
 pub mod ibkr;
+pub mod manual_assets;
 pub mod market_history;
 pub mod months;
 pub mod mpf;

@@ -637,9 +637,9 @@ export interface paths {
             path?: never;
             cookie?: never;
         };
-        get: operations["months_list_assets"];
+        get: operations["manual_assets_list"];
         put?: never;
-        post: operations["months_create_asset"];
+        post: operations["manual_assets_create"];
         delete?: never;
         options?: never;
         head?: never;
@@ -656,10 +656,10 @@ export interface paths {
         get?: never;
         put?: never;
         post?: never;
-        delete: operations["months_remove_asset"];
+        delete: operations["manual_assets_remove"];
         options?: never;
         head?: never;
-        patch: operations["months_update_asset"];
+        patch: operations["manual_assets_update"];
         trace?: never;
     };
     "/api/month-items/{id}": {
@@ -6169,7 +6169,7 @@ export interface operations {
             };
         };
     };
-    months_list_assets: {
+    manual_assets_list: {
         parameters: {
             query?: never;
             header?: never;
@@ -6189,7 +6189,7 @@ export interface operations {
             };
         };
     };
-    months_create_asset: {
+    manual_assets_create: {
         parameters: {
             query?: never;
             header?: never;
@@ -6222,7 +6222,7 @@ export interface operations {
             };
         };
     };
-    months_remove_asset: {
+    manual_assets_remove: {
         parameters: {
             query?: never;
             header?: never;
@@ -6252,7 +6252,7 @@ export interface operations {
             };
         };
     };
-    months_update_asset: {
+    manual_assets_update: {
         parameters: {
             query?: never;
             header?: never;

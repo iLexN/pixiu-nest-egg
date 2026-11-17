@@ -38,7 +38,7 @@ pub async fn totals_input(pool: &SqlitePool) -> Result<LiveTotalsInput, StoreErr
         .collect();
     let mpf_balance = mpf_totals(&mpf_facts, today, None, None).now;
 
-    let manual_assets_sum = crate::store::months::manual_asset_sum(pool).await?;
+    let manual_assets_sum = crate::store::manual_assets::sum(pool).await?;
     let cash_sum = crate::store::cash_accounts::bank_sum(pool).await?;
 
     // The 開心Pool chain reads stored figures only — no live fill (which is

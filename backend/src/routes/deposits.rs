@@ -3,11 +3,11 @@ use axum::extract::{Path, Query, State};
 use axum::http::StatusCode;
 use serde::Deserialize;
 
-use super::patch::{merge_num, merge_text};
 use super::{AppState, finite_or, parse_order, parse_received_at, parse_status};
 use crate::calc::{DepositInput, validate_deposit};
 use crate::error::{ApiError, ErrorBody};
 use crate::models::{Deposit, DepositPatch, NewDeposit};
+use crate::patch::{merge_num, merge_text};
 use crate::store::deposits as store;
 
 pub use crate::service::deposits::DepositSummaryResponse;

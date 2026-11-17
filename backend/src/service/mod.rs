@@ -30,6 +30,7 @@ pub mod dividends;
 pub mod family;
 pub mod forecast;
 pub mod ibkr;
+pub mod manual_assets;
 pub mod months;
 pub mod mpf;
 pub mod overview;

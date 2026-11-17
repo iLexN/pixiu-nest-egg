@@ -22,7 +22,7 @@ The backend SHALL serve an OpenAPI document at `GET /api-docs/openapi.json` that
 
 ### Requirement: Complete `/api` coverage
 
-The OpenAPI document SHALL describe every endpoint mounted under `/api`: each operation's HTTP method and path, path and query parameters, request body schema where the endpoint accepts one, success response schema, and error responses. Endpoint tags SHALL group operations by domain (stocks, trades, summary, deposits, family deposits, dividends, bonds, MPF, AIA, months, overview/IBKR, year review).
+The OpenAPI document SHALL describe every endpoint mounted under `/api`: each operation's HTTP method and path, path and query parameters, request body schema where the endpoint accepts one, success response schema, and error responses. Endpoint tags SHALL group operations by domain (stocks, trades, summary, deposits, family deposits, dividends, bonds, MPF, AIA, months, manual assets, overview/IBKR, year review).
 
 #### Scenario: Every route is documented
 

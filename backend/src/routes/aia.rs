@@ -5,10 +5,10 @@ use serde::Deserialize;
 
 use super::AppState;
 use super::mpf::NoteResponse;
-use super::patch::{merge_num, merge_text};
 use crate::calc::{AiaEventInput, AiaPolicyInput, validate_aia_event, validate_aia_policy};
 use crate::error::{ApiError, ErrorBody};
 use crate::models::{AiaEvent, AiaNotePatch, AiaPolicy, AiaPolicyPatch, NewAiaEvent, NewAiaPolicy};
+use crate::patch::{merge_num, merge_text};
 use crate::store::aia as store;
 use crate::store::now_timestamp;
 

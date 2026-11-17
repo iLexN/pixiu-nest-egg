@@ -111,7 +111,7 @@ pub async fn build(pool: &SqlitePool) -> Result<OverviewResponse, StoreError> {
     let stored = settings::Settings::load(pool).await?;
     let salary = stored.salary;
     let semi_target = super::settings::semi_liquid_target(pool).await?;
-    let manual = crate::store::months::load_assets(pool).await?;
+    let manual = crate::store::manual_assets::load_all(pool).await?;
     let bank_accounts = cash_accounts::load_all(pool).await?;
 
     let aia_hkd = input.usd_hkd_rate.map(|rate| input.aia_value_usd * rate);
