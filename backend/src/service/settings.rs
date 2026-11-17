@@ -187,21 +187,32 @@ pub const DEFAULT_SEMI_LIQUID_TARGET: f64 = 0.25;
 
 /// The effective 3rd-target/Final-Target constants — the sheet literals
 /// (`1.07`, `30`, `0.7`) while unset.
-pub async fn goal_constants(pool: &SqlitePool) -> Result<(f64, f64, f64), StoreError> {
-    let stored = settings::Settings::load(pool).await?;
-    Ok((
+pub fn goal_constants_of(stored: &settings::Settings) -> (f64, f64, f64) {
+    (
         stored.goal3_inflation.unwrap_or(DEFAULT_GOAL3_INFLATION),
         stored.goal3_years.unwrap_or(DEFAULT_GOAL3_YEARS),
         stored
             .final_replacement
             .unwrap_or(DEFAULT_FINAL_REPLACEMENT),
-    ))
+    )
+}
+
+/// The effective 3rd-target/Final-Target constants — the sheet literals
+/// (`1.07`, `30`, `0.7`) while unset.
+pub async fn goal_constants(pool: &SqlitePool) -> Result<(f64, f64, f64), StoreError> {
+    Ok(goal_constants_of(&settings::Settings::load(pool).await?))
+}
+
+/// The configured 半流動資金 target share of 流動資產 — `0.25` while unset.
+pub fn semi_liquid_target_of(stored: &settings::Settings) -> f64 {
+    stored
+        .semi_liquid_target
+        .unwrap_or(DEFAULT_SEMI_LIQUID_TARGET)
 }
 
 /// The configured 半流動資金 target share of 流動資產 — `0.25` while unset.
 pub async fn semi_liquid_target(pool: &SqlitePool) -> Result<f64, StoreError> {
-    Ok(settings::Settings::load(pool)
-        .await?
-        .semi_liquid_target
-        .unwrap_or(DEFAULT_SEMI_LIQUID_TARGET))
+    Ok(semi_liquid_target_of(
+        &settings::Settings::load(pool).await?,
+    ))
 }

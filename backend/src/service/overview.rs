@@ -1,7 +1,7 @@
 use chrono::Datelike;
 use sqlx::SqlitePool;
 
-use crate::calc::{FieldError, liquidity_tiers, live_totals};
+use crate::calc::{FieldError, liquidity_tiers};
 use crate::models::{
     Currency, IbkrBlock, IbkrPatch, ManualAssetLiquidity, OverviewAssetRow, OverviewResponse,
     SemiLiquid, TwelveMonthAverages,
@@ -13,18 +13,43 @@ use crate::store::{StoreError, cash_accounts, ibkr as ibkr_store, settings, toda
 /// The cash figures are the `broker` cash_accounts rows; the reported total
 /// is the `ibkr.reported_value` setting; the rate is the fx_rates USD row.
 pub async fn ibkr_block(pool: &SqlitePool) -> Result<IbkrBlock, StoreError> {
+    let reads = super::wealth::ibkr_reads(pool).await?;
     let transferred_hkd = ibkr_store::transferred_hkd(pool).await?;
     let now_value = settings::Settings::load(pool).await?.ibkr_reported_value;
-    let hkd_cash = cash_accounts::broker(pool, Currency::Hkd)
-        .await?
-        .map(|account| account.amount);
-    let usd_cash = cash_accounts::broker(pool, Currency::Usd)
-        .await?
-        .map(|account| account.amount);
-    let rate = crate::store::fx::usd_rate(pool).await?;
-    let stock_value_usd =
-        super::summary::market_value_only(pool, crate::models::Market::Us).await?;
+    Ok(compose_ibkr_block(
+        transferred_hkd,
+        now_value,
+        reads.hkd_cash,
+        reads.usd_cash,
+        reads.us_market_value,
+        crate::store::fx::usd_rate(pool).await?,
+    ))
+}
 
+/// `ibkr_block` for a caller already holding the `LiveContext` — only the
+/// transferred sum is loaded; every other read comes from the context.
+async fn ibkr_block_from(
+    pool: &SqlitePool,
+    ctx: &super::wealth::LiveContext,
+) -> Result<IbkrBlock, StoreError> {
+    Ok(compose_ibkr_block(
+        ibkr_store::transferred_hkd(pool).await?,
+        ctx.stored.ibkr_reported_value,
+        ctx.reads.hkd_cash,
+        ctx.reads.usd_cash,
+        ctx.reads.us_market_value,
+        ctx.input.usd_hkd_rate,
+    ))
+}
+
+fn compose_ibkr_block(
+    transferred_hkd: Option<f64>,
+    now_value: Option<f64>,
+    hkd_cash: Option<f64>,
+    usd_cash: Option<f64>,
+    stock_value_usd: Option<f64>,
+    rate: Option<f64>,
+) -> IbkrBlock {
     // 美股!B7 `manual cal now`; the sheet cannot produce it without N3 either.
     let computed_total_hkd = rate.map(|rate| {
         (stock_value_usd.unwrap_or(0.0) + usd_cash.unwrap_or(0.0)) * rate + hkd_cash.unwrap_or(0.0)
@@ -41,7 +66,7 @@ pub async fn ibkr_block(pool: &SqlitePool) -> Result<IbkrBlock, StoreError> {
         (Some(computed), Some(now)) => Some(computed - now),
         _ => None,
     };
-    Ok(IbkrBlock {
+    IbkrBlock {
         transferred_hkd,
         now_value,
         hkd_cash,
@@ -51,7 +76,7 @@ pub async fn ibkr_block(pool: &SqlitePool) -> Result<IbkrBlock, StoreError> {
         net,
         net_pct,
         vs_now_value,
-    })
+    }
 }
 
 /// `PATCH /api/ibkr`: validate the patch, then one transaction stores the
@@ -105,12 +130,13 @@ pub async fn update_ibkr(pool: &SqlitePool, patch: &IbkrPatch) -> Result<IbkrBlo
 
 /// `Overview!A3:C18` plus the B1/H1/J1 headline, derived on read.
 pub async fn build(pool: &SqlitePool) -> Result<OverviewResponse, StoreError> {
-    let input = super::wealth::totals_input(pool).await?;
-    let totals = live_totals(&input);
-    let ibkr = ibkr_block(pool).await?;
-    let stored = settings::Settings::load(pool).await?;
+    let ctx = super::wealth::LiveContext::open(pool).await?;
+    let input = &ctx.input;
+    let totals = ctx.totals;
+    let ibkr = ibkr_block_from(pool, &ctx).await?;
+    let stored = &ctx.stored;
     let salary = stored.salary;
-    let semi_target = super::settings::semi_liquid_target(pool).await?;
+    let semi_target = ctx.semi_liquid_target();
     let manual = crate::store::manual_assets::load_all(pool).await?;
     let bank_accounts = cash_accounts::load_all(pool).await?;
 
@@ -170,8 +196,7 @@ pub async fn build(pool: &SqlitePool) -> Result<OverviewResponse, StoreError> {
 
     // F3:G10 + H6 — live-filled totals feed the window's edge (e.g. the last
     // completed month's Changed needs the live current row's 總數).
-    let book = super::months::MonthBook::open_with_live(pool, totals).await?;
-    let trailing = book.trailing_averages();
+    let trailing = ctx.book.trailing_averages();
     // The 預測 floor: budget is red below 流動資產 × 0.01% × 30 + 9000.
     let living_budget_floor = totals.liquid_assets * 0.0001 * 30.0 + 9000.0;
     let averages = TwelveMonthAverages {
@@ -213,7 +238,7 @@ pub async fn build(pool: &SqlitePool) -> Result<OverviewResponse, StoreError> {
     // J10:M20 + N13:P16 目標 — the milestone amounts are stored settings;
     // everything else derives. N4 = the latest completed year's
     // income_value_rate from the year-review rows.
-    let running = book.running_averages();
+    let running = ctx.book.running_averages();
     let n4_year = today().year() - 1;
     let n4 = review
         .years
@@ -221,7 +246,7 @@ pub async fn build(pool: &SqlitePool) -> Result<OverviewResponse, StoreError> {
         .find(|row| row.year == n4_year)
         .and_then(|row| row.assets.income_value_rate.map(|rate| (row.year, rate)));
     let (goal3_inflation, goal3_years, final_replacement) =
-        super::settings::goal_constants(pool).await?;
+        super::settings::goal_constants_of(stored);
     let goals = crate::calc::overview_goals(&crate::calc::OverviewGoalsInput {
         // K13 = 港股 + 債券 + IBKR — absent while the rate-derived B9 is.
         current_invest: ibkr

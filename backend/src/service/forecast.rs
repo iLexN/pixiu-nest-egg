@@ -12,14 +12,15 @@ use crate::store::StoreError;
 /// The seven-month 預測 grid, fully derived on read. A stored item month
 /// that does not parse is `Err(Corrupt)`.
 pub async fn build(pool: &SqlitePool) -> Result<ForecastResponse, StoreError> {
-    let input = super::wealth::totals_input(pool).await?;
-    let totals = calc::live_totals(&input);
-    let stored = crate::store::settings::Settings::load(pool).await?;
+    let ctx = super::wealth::LiveContext::open(pool).await?;
+    let input = &ctx.input;
+    let totals = ctx.totals;
+    let stored = &ctx.stored;
     let salary = stored.salary;
     let bill_amount = stored
         .bill_amount
         .unwrap_or(crate::store::months::DEFAULT_BILL_AMOUNT);
-    let semi_liquid_target = super::settings::semi_liquid_target(pool).await?;
+    let semi_liquid_target = ctx.semi_liquid_target();
     let first = super::months::live_from();
     // The first column anchors on the current month's 月初(出糧後); while it is
     // unset the live 活期 sum stands in.
@@ -28,9 +29,7 @@ pub async fn build(pool: &SqlitePool) -> Result<ForecastResponse, StoreError> {
         .and_then(|stored| stored.start_cash)
         .or(Some(input.cash_sum));
 
-    let trailing = super::months::MonthBook::open_with_live(pool, totals)
-        .await?
-        .trailing_averages();
+    let trailing = ctx.book.trailing_averages();
     let spend = trailing.living_budget.map(|budget| -budget);
     let events = super::months::load_interest_events(pool).await?;
     // HK trades inside the window move 活期 in their month; US trades settle

@@ -7,16 +7,44 @@ use sqlx::SqlitePool;
 use crate::calc::{LiveTotals, LiveTotalsInput, active_totals, aia_totals, mpf_totals};
 use crate::store::{StoreError, today};
 
+/// The Option-preserving reads `totals_input` collapses to `0.0` — the IBKR
+/// block reports each verbatim, so a missing row must stay `None`, not `0.0`.
+pub(crate) struct IbkrReads {
+    pub us_market_value: Option<f64>,
+    pub hkd_cash: Option<f64>,
+    pub usd_cash: Option<f64>,
+}
+
+/// The reads the IBKR block reports: US market value and both broker cashes.
+pub(crate) async fn ibkr_reads(pool: &SqlitePool) -> Result<IbkrReads, StoreError> {
+    Ok(IbkrReads {
+        us_market_value: super::summary::market_value_only(pool, crate::models::Market::Us).await?,
+        hkd_cash: crate::store::cash_accounts::broker(pool, crate::models::Currency::Hkd)
+            .await?
+            .map(|account| account.amount),
+        usd_cash: crate::store::cash_accounts::broker(pool, crate::models::Currency::Usd)
+            .await?
+            .map(|account| account.amount),
+    })
+}
+
 /// The components of `Overview!B1`/`H1`, resolved from the current DB — the
 /// same aggregation the later Overview endpoint reuses.
 pub async fn totals_input(pool: &SqlitePool) -> Result<LiveTotalsInput, StoreError> {
+    totals_input_with(pool, &ibkr_reads(pool).await?).await
+}
+
+/// `totals_input` given the already-loaded IBKR reads, so a caller holding
+/// them does not pay for the same three queries again.
+pub(crate) async fn totals_input_with(
+    pool: &SqlitePool,
+    reads: &IbkrReads,
+) -> Result<LiveTotalsInput, StoreError> {
     let today = today();
     let hk = super::summary::market_value_only(pool, crate::models::Market::Hk)
         .await?
         .unwrap_or(0.0);
-    let us = super::summary::market_value_only(pool, crate::models::Market::Us)
-        .await?
-        .unwrap_or(0.0);
+    let us = reads.us_market_value.unwrap_or(0.0);
     let rate = crate::store::fx::usd_rate(pool).await?;
 
     let facts = crate::store::deposits::active_facts(pool).await?;
@@ -62,14 +90,8 @@ pub async fn totals_input(pool: &SqlitePool) -> Result<LiveTotalsInput, StoreErr
         mpf_balance,
         manual_assets_sum,
         cash_sum,
-        ibkr_hkd_cash: crate::store::cash_accounts::broker(pool, crate::models::Currency::Hkd)
-            .await?
-            .map(|account| account.amount)
-            .unwrap_or(0.0),
-        ibkr_usd_cash: crate::store::cash_accounts::broker(pool, crate::models::Currency::Usd)
-            .await?
-            .map(|account| account.amount)
-            .unwrap_or(0.0),
+        ibkr_hkd_cash: reads.hkd_cash.unwrap_or(0.0),
+        ibkr_usd_cash: reads.usd_cash.unwrap_or(0.0),
         pool_balance,
     })
 }
@@ -78,4 +100,38 @@ pub async fn totals_input(pool: &SqlitePool) -> Result<LiveTotalsInput, StoreErr
 pub async fn live_totals(pool: &SqlitePool) -> Result<LiveTotals, StoreError> {
     let input = totals_input(pool).await?;
     Ok(crate::calc::live_totals(&input))
+}
+
+/// The read context the 總覽 and 預測 page builds share: what everything is
+/// worth now, the stored settings, and the month book with its live tail —
+/// loaded once so the pages stop restating the same preamble.
+pub struct LiveContext {
+    pub input: LiveTotalsInput,
+    pub totals: LiveTotals,
+    pub stored: crate::store::settings::Settings,
+    pub book: super::months::MonthBook,
+    pub(crate) reads: IbkrReads,
+}
+
+impl LiveContext {
+    /// Load the shared plan: totals input, settings, and the live-filled book.
+    pub async fn open(pool: &SqlitePool) -> Result<Self, StoreError> {
+        let reads = ibkr_reads(pool).await?;
+        let input = totals_input_with(pool, &reads).await?;
+        let totals = crate::calc::live_totals(&input);
+        let stored = crate::store::settings::Settings::load(pool).await?;
+        let book = super::months::MonthBook::open_with_live(pool, totals).await?;
+        Ok(Self {
+            input,
+            totals,
+            stored,
+            book,
+            reads,
+        })
+    }
+
+    /// The configured 半流動資金 target share of 流動資產 — `0.25` while unset.
+    pub fn semi_liquid_target(&self) -> f64 {
+        super::settings::semi_liquid_target_of(&self.stored)
+    }
 }
