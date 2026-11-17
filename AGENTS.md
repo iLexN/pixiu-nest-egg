@@ -12,7 +12,7 @@ Local Rust + SQLite + Vue app that replaced the stock-trade and other sections o
 
 ## Change workflow
 
-- Behavior changes (new capability, changed rule, new endpoint/table) go through OpenSpec: `openspec propose` creates `openspec/changes/<name>/` with proposal, design, delta specs, and tasks; `openspec apply` implements the tasks; `openspec archive` merges the delta specs into `openspec/specs/`. The `.devin/skills/openspec-*` skills wrap these steps.
+- Behavior changes (new capability, changed rule, new endpoint/table) go through OpenSpec: `openspec propose` creates `openspec/changes/<name>/` with proposal, design, delta specs, and tasks; `openspec apply` implements the tasks; `openspec archive` merges the delta specs into `openspec/specs/`. The `.agents/skills/openspec-*` skills wrap these steps.
 - When archiving a change (`openspec-archive-change`), always sync delta specs into `openspec/specs/` without asking — treat "Sync now" as the standing answer. Only stop and ask when a capability is sync-blocked or the post-sync verification fails. After the archive completes, suggest a one-line commit message for the change.
 - Bug fixes and refactors that keep specified behavior unchanged also go through OpenSpec — `openspec/changes/archive/` is kept as the complete change history. Still update `docs/` if wiring changed.
 
