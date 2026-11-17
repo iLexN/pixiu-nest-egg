@@ -1,23 +1,15 @@
-use std::collections::HashSet;
-
 use axum::Json;
 use axum::extract::{Path, Query, State};
 use axum::http::StatusCode;
-use chrono::Datelike;
-use serde::{Deserialize, Serialize};
+use serde::Deserialize;
 
 use super::{AppState, parse_ym};
-use crate::calc::{
-    FieldError, MonthRunningAverages, MonthYearSummary, PoolTotals, build_suggestions,
-    interest_components, pool_totals, suggestion_actions_enabled,
-};
+use crate::calc::FieldError;
 use crate::error::{ApiError, ErrorBody};
-use crate::models::{
-    InterestComponent, MonthItem, MonthItemPatch, MonthStat, MonthStatPatch, MonthSuggestion,
-    NewMonthItem,
-};
+use crate::models::{MonthItem, MonthItemPatch, MonthStat, MonthStatPatch, NewMonthItem};
 use crate::store::months as store;
-use crate::store::today;
+
+pub use crate::service::months::{MonthDetailResponse, MonthSummaryResponse};
 
 #[derive(Debug, Deserialize, utoipa::ToSchema, utoipa::IntoParams)]
 pub struct ListQuery {
@@ -39,33 +31,9 @@ pub async fn list(
     State(state): State<AppState>,
     Query(query): Query<ListQuery>,
 ) -> Result<Json<Vec<MonthStat>>, ApiError> {
-    let book = crate::service::months::MonthBook::open(&state.pool).await?;
-    let months: Vec<MonthStat> = book
-        .months()
-        .into_iter()
-        .filter(|month| {
-            query
-                .year
-                .is_none_or(|year| month.month.starts_with(&format!("{year:04}-")))
-        })
-        .collect();
-    Ok(Json(months))
-}
-
-#[derive(Debug, Serialize, utoipa::ToSchema)]
-pub struct MonthSummaryResponse {
-    /// The sheet's rows 2–4, one per year present.
-    pub years: Vec<MonthYearSummary>,
-    /// The sheet's row-8 running averages.
-    pub running: MonthRunningAverages,
-    /// The running 開心Pool balance through the latest stored month's year.
-    pub pool_balance: f64,
-    /// The all-years 開心Pool contribution totals (iLex input, Irene input,
-    /// Irene payable) and per-active-year averages.
-    pub pool_totals: PoolTotals,
-    /// The current year's effective pool rate (incl. earlier-year fallback).
-    pub pool_rate: Option<f64>,
-    pub pool_rate_year: i32,
+    Ok(Json(
+        crate::service::months::list(&state.pool, query.year).await?,
+    ))
 }
 
 #[utoipa::path(
@@ -80,37 +48,7 @@ pub struct MonthSummaryResponse {
 pub async fn summary(
     State(state): State<AppState>,
 ) -> Result<Json<MonthSummaryResponse>, ApiError> {
-    let book = crate::service::months::MonthBook::open(&state.pool).await?;
-    // 投資純利 = Σ interest + the year's stored HK sold P/L (absent while a
-    // year has none stored).
-    let years = book.year_summaries();
-    let pool_rate_year = today().year();
-    let pool_totals = pool_totals(&years);
-    Ok(Json(MonthSummaryResponse {
-        years,
-        running: book.running_averages(),
-        pool_balance: book.pool_balance(),
-        pool_totals,
-        pool_rate: book.pool_rate(pool_rate_year),
-        pool_rate_year,
-    }))
-}
-
-#[derive(Debug, Serialize, utoipa::ToSchema)]
-pub struct MonthDetailResponse {
-    pub month: MonthStat,
-    pub items: Vec<MonthItem>,
-    /// Computed candidates for the month; never stored until accepted.
-    /// Dismissed ones stay listed, flagged `dismissed`.
-    pub suggestions: Vec<MonthSuggestion>,
-    /// Whether the month offers candidate actions (accept/dismiss/undismiss) —
-    /// the previous month and later. Older months' suggestions are
-    /// informational only.
-    pub suggestions_actionable: bool,
-    /// The auto 利息 components: deposits ending + received coupons + received
-    /// HK dividends dated in the month. `month.interest` = Σ these + Σ
-    /// `interest` items.
-    pub interest_auto: Vec<InterestComponent>,
+    Ok(Json(crate::service::months::summary(&state.pool).await?))
 }
 
 #[utoipa::path(
@@ -128,29 +66,9 @@ pub async fn show(
     State(state): State<AppState>,
     Path(ym): Path<String>,
 ) -> Result<Json<MonthDetailResponse>, ApiError> {
-    let month = parse_ym(&ym)?;
-    let month_key = month.to_string();
-    let stat = crate::service::months::MonthBook::open(&state.pool)
-        .await?
-        .month(&month_key)
-        .ok_or_else(|| ApiError::NotFound(format!("month {month_key} not found")))?;
-
-    let items = store::load_items(&state.pool, &month_key).await?;
-    let events = crate::service::months::load_events(&state.pool, month).await?;
-    let stored_keys: HashSet<String> = items
-        .iter()
-        .filter_map(|item| item.auto_key.clone())
-        .collect();
-    let dismissed = store::dismissed_keys(&state.pool, &month_key).await?;
-    let suggestions = build_suggestions(&month_key, &events, &stored_keys, &dismissed);
-
-    Ok(Json(MonthDetailResponse {
-        month: stat,
-        items,
-        suggestions,
-        suggestions_actionable: suggestion_actions_enabled(&month_key, today()),
-        interest_auto: interest_components(&month_key, &events),
-    }))
+    Ok(Json(
+        crate::service::months::detail(&state.pool, parse_ym(&ym)?).await?,
+    ))
 }
 
 /// Validate the figures a patch may carry; absent fields skip the check.
@@ -366,6 +284,7 @@ mod tests {
     use super::*;
     use crate::db::connect_memory;
     use crate::models::MonthItemCategory;
+    use crate::store::today;
 
     /// A bond maturing in the current month suggests its `bond-end:<id>`
     /// adjustment through the month read.
