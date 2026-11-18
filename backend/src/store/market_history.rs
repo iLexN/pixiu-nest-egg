@@ -8,7 +8,7 @@ use sqlx::{Row, SqlitePool};
 
 use crate::calc::MpfPoint;
 use crate::models::Market;
-use crate::store::StoreError;
+use crate::store::{StoreError, stored_date};
 
 /// Record the market's totals for `today` when they differ from the latest
 /// stored row: write one row for a new day, or replace today's row so
@@ -70,8 +70,7 @@ pub async fn load(pool: &SqlitePool, market: Market) -> Result<Vec<MpfPoint>, St
     for row in &rows {
         let recorded_on: String = row.try_get("recorded_on")?;
         points.push(MpfPoint {
-            recorded_on: NaiveDate::parse_from_str(&recorded_on, "%Y-%m-%d")
-                .map_err(|err| sqlx::Error::Decode(Box::new(err)))?,
+            recorded_on: stored_date("recorded_on", &recorded_on)?,
             contributions: row.try_get("buy_cost_priced")?,
             balance: row.try_get("market_value")?,
         });

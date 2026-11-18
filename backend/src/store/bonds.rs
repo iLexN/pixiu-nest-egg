@@ -7,7 +7,7 @@ use crate::calc::{
     coupon_expected, coupon_status, coupon_variance,
 };
 use crate::models::{Bond, BondCoupon, BondStatus, NewBond, NewBondCoupon};
-use crate::store::{Credit, StoreError, now_timestamp, today};
+use crate::store::{Credit, StoreError, now_timestamp, stored_date, today};
 
 /// `next_pay_date` comes from a scalar subquery on non-received coupons.
 pub const BOND_SELECT: &str = "SELECT b.id, b.label, b.issue_no, b.principal, b.maturity_date, \
@@ -17,9 +17,7 @@ pub const BOND_SELECT: &str = "SELECT b.id, b.label, b.issue_no, b.principal, b.
 
 pub fn row_to_bond(row: &SqliteRow) -> Result<Bond, StoreError> {
     let maturity_date: String = row.try_get("maturity_date")?;
-    chrono::NaiveDate::parse_from_str(&maturity_date, "%Y-%m-%d").map_err(|_| {
-        StoreError::Corrupt(format!("stored maturity_date {maturity_date} is not valid"))
-    })?;
+    stored_date("maturity_date", &maturity_date)?;
     let received_at: Option<String> = row.try_get("received_at")?;
     let status = if bond_active(received_at.as_deref()) {
         BondStatus::Active
@@ -384,9 +382,7 @@ fn row_to_suggestion_bond(row: &SqliteRow) -> Result<SuggestionBond, StoreError>
     let maturity_date: String = row.try_get("maturity_date")?;
     Ok(SuggestionBond {
         id: row.try_get("id")?,
-        maturity_date: chrono::NaiveDate::parse_from_str(&maturity_date, "%Y-%m-%d").map_err(
-            |_| StoreError::Corrupt(format!("stored maturity_date {maturity_date} is not valid")),
-        )?,
+        maturity_date: stored_date("maturity_date", &maturity_date)?,
         principal: row.try_get("principal")?,
         credited_amount: row.try_get("credited_amount")?,
         label: row.try_get("label")?,
@@ -438,8 +434,7 @@ fn row_to_coupon_receipt(row: &SqliteRow) -> Result<SuggestionReceipt, StoreErro
     let pay_date: String = row.try_get("pay_date")?;
     Ok(SuggestionReceipt {
         id: row.try_get("id")?,
-        pay_date: chrono::NaiveDate::parse_from_str(&pay_date, "%Y-%m-%d")
-            .map_err(|_| StoreError::Corrupt(format!("stored date {pay_date} is not valid")))?,
+        pay_date: stored_date("pay_date", &pay_date)?,
         amount: received_amount.or(coupon_expected(per_10k, principal)),
         label: row.try_get("label")?,
         received: received_amount.is_some(),
@@ -500,20 +495,14 @@ pub async fn year_facts(pool: &SqlitePool) -> Result<Vec<BondYearFacts>, StoreEr
             facts.push(BondYearFacts {
                 principal: row.try_get("principal")?,
                 first_coupon_year: None,
-                maturity_date: chrono::NaiveDate::parse_from_str(&maturity_date, "%Y-%m-%d")
-                    .map_err(|_| {
-                        StoreError::Corrupt(format!(
-                            "stored maturity_date {maturity_date} is not valid"
-                        ))
-                    })?,
+                maturity_date: stored_date("maturity_date", &maturity_date)?,
                 received: Vec::new(),
             });
             last_id = Some(id);
         }
         let pay_date: Option<String> = row.try_get("pay_date")?;
         let Some(pay_date) = pay_date else { continue };
-        let parsed = chrono::NaiveDate::parse_from_str(&pay_date, "%Y-%m-%d")
-            .map_err(|_| StoreError::Corrupt(format!("stored pay_date {pay_date} is not valid")))?;
+        let parsed = stored_date("pay_date", &pay_date)?;
         let fact = facts.last_mut().expect("just pushed");
         let year = chrono::Datelike::year(&parsed);
         fact.first_coupon_year = Some(fact.first_coupon_year.map_or(year, |first| first.min(year)));

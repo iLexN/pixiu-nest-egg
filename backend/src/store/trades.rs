@@ -4,7 +4,7 @@ use sqlx::sqlite::SqliteRow;
 
 use crate::calc::{SuggestionTrade, TradeFacts, ValidatedTrade, unit_price_incl_fee};
 use crate::models::{InputMode, Market, Trade, TradeType};
-use crate::store::{StoreError, now_timestamp};
+use crate::store::{StoreError, now_timestamp, stored_date};
 
 pub const TRADE_SELECT: &str = "SELECT t.id, t.stock_id, s.market, s.code, t.trade_type, \
      t.trade_date, t.shares, t.unit_price, t.fee, t.total, t.input_mode, t.note \
@@ -253,9 +253,7 @@ pub async fn market_dated_trade_facts(
     let mut facts = Vec::with_capacity(rows.len());
     for row in &rows {
         let trade_date: String = row.try_get("trade_date")?;
-        let parsed = chrono::NaiveDate::parse_from_str(&trade_date, "%Y-%m-%d").map_err(|_| {
-            StoreError::Corrupt(format!("stored trade_date {trade_date} is not valid"))
-        })?;
+        let parsed = stored_date("trade_date", &trade_date)?;
         let trade_type: String = row.try_get("trade_type")?;
         facts.push((
             parsed,
@@ -293,9 +291,7 @@ pub async fn hk_suggestion_trades(
         let trade_date: String = row.try_get("trade_date")?;
         trades.push(SuggestionTrade {
             id: row.try_get("id")?,
-            date: chrono::NaiveDate::parse_from_str(&trade_date, "%Y-%m-%d").map_err(|_| {
-                StoreError::Corrupt(format!("stored date {trade_date} is not valid"))
-            })?,
+            date: stored_date("trade_date", &trade_date)?,
             kind: TradeType::parse(&trade_type).ok_or_else(|| {
                 StoreError::Corrupt(format!("stored trade type {trade_type} is not valid"))
             })?,

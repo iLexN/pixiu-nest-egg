@@ -4,7 +4,7 @@ use sqlx::sqlite::SqliteRow;
 
 use crate::calc::{AiaPolicyFacts, SuggestionAiaPayment, ValidatedAiaPolicy, aia_balance_pct};
 use crate::models::{AiaEvent, AiaEventKind, AiaPolicy};
-use crate::store::{StoreError, now_timestamp};
+use crate::store::{StoreError, now_timestamp, stored_date};
 
 pub const AIA_SELECT: &str = "SELECT p.id, p.label, p.policy_no, p.next_pay_date, \
      p.premium_usd, p.value_usd, p.value_updated_at, p.remaining_years, \
@@ -356,9 +356,7 @@ pub async fn suggestion_payments(
         let event_date: String = row.try_get("event_date")?;
         aia_payments.push(SuggestionAiaPayment {
             id: row.try_get("id")?,
-            date: chrono::NaiveDate::parse_from_str(&event_date, "%Y-%m-%d").map_err(|_| {
-                StoreError::Corrupt(format!("stored date {event_date} is not valid"))
-            })?,
+            date: stored_date("event_date", &event_date)?,
             amount_usd: row.try_get("amount_usd")?,
             policy: row.try_get("label")?,
         });

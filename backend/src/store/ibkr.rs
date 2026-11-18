@@ -10,7 +10,7 @@ use sqlx::sqlite::SqliteRow;
 
 use crate::calc::SuggestionIbkrTransfer;
 use crate::models::IbkrTransfer;
-use crate::store::{StoreError, now_timestamp};
+use crate::store::{StoreError, now_timestamp, stored_date};
 
 /// Σ amount over the whole `ibkr_transfers` log (the B1 cumulative figure).
 pub async fn transferred_hkd<'e, E>(exec: E) -> Result<Option<f64>, StoreError>
@@ -110,9 +110,7 @@ fn row_to_suggestion_transfer(row: &SqliteRow) -> Result<SuggestionIbkrTransfer,
     let transfer_date: String = row.try_get("transfer_date")?;
     Ok(SuggestionIbkrTransfer {
         id: row.try_get("id")?,
-        date: chrono::NaiveDate::parse_from_str(&transfer_date, "%Y-%m-%d").map_err(|_| {
-            StoreError::Corrupt(format!("stored date {transfer_date} is not valid"))
-        })?,
+        date: stored_date("transfer_date", &transfer_date)?,
         amount: row.try_get("amount_hkd")?,
     })
 }
