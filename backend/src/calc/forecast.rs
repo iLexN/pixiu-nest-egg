@@ -1,11 +1,117 @@
 use super::*;
 
 use chrono::Datelike;
+use serde::Serialize;
+use utoipa::ToSchema;
 
-use crate::models::{
-    ForecastCell, ForecastIbkrTransfer, ForecastItem, ForecastItemKind, ForecastMonth,
-    ForecastPlacement, ForecastTrade, TradeType,
-};
+use crate::models::{ForecastItem, ForecastItemKind, InterestComponent, TradeType};
+
+/// A real deposit placed in the month (`start_date` inside it) — shown
+/// read-only in its bank's plan row alongside the editable `plan_items`.
+#[derive(Debug, Clone, Serialize, ToSchema)]
+pub struct ForecastPlacement {
+    /// The `deposits` row id.
+    pub deposit_id: i64,
+    /// The deposit's label (`SC-9632`-style), absent while unset.
+    pub label: Option<String>,
+    /// The deposit's bank; `HS` maps to the 定期 HS row, anything else to
+    /// SC高息馬拉松.
+    pub bank: Option<String>,
+    pub principal: f64,
+    /// `YYYY-MM-DD` — the day the money left 活期.
+    pub start_date: String,
+}
+
+/// A real HK trade dated in the month — a read-only `已交易` line in the
+/// 股票 row alongside the editable `plan_items`. US trades never reach the
+/// forecast (they settle inside IBKR).
+#[derive(Debug, Clone, Serialize, ToSchema)]
+pub struct ForecastTrade {
+    /// The `trades` row id.
+    pub trade_id: i64,
+    /// The traded stock's code.
+    pub code: String,
+    pub trade_type: TradeType,
+    /// `YYYY-MM-DD` — the day the trade moved 活期.
+    pub trade_date: String,
+    /// Signed cash flow: −`total` for BUY, +`total` for SELL.
+    pub amount: f64,
+}
+
+/// An IBKR transfer dated in the month — a read-only `已轉帳` line in the
+/// 股票 row beside the trade lines. Log-only legacy rows appear too: they
+/// moved cash the same way.
+#[derive(Debug, Clone, Serialize, ToSchema)]
+pub struct ForecastIbkrTransfer {
+    /// The `ibkr_transfers` row id.
+    pub transfer_id: i64,
+    /// `YYYY-MM-DD` — the day the money left the bank account.
+    pub transfer_date: String,
+    /// Signed cash flow: −`amount_hkd`.
+    pub amount: f64,
+}
+
+/// One (month, plan row) cell of the 預測 grid: the lines it lists and the
+/// figure the grid shows for it.
+#[derive(Debug, Clone, Serialize, ToSchema)]
+pub struct ForecastCell {
+    pub kind: ForecastItemKind,
+    /// `bill` → the month's `bill`; `interest` → the month's `interest`;
+    /// every other row → Σ plan items + Σ −principal of placements + Σ trade
+    /// and IBKR line amounts, absent while the cell lists nothing.
+    pub figure: Option<f64>,
+    /// The month's stored forecast items of this kind — the editable lines.
+    pub plan_items: Vec<ForecastItem>,
+    /// Real deposits placed in the month (`start_date` inside it), on the
+    /// `hs_deposit` cell for bank `HS` and the `sc_deposit` cell otherwise.
+    pub placements: Vec<ForecastPlacement>,
+    /// Real HK trades dated in the month — `stock` cell only.
+    pub trade_lines: Vec<ForecastTrade>,
+    /// IBKR transfers dated in the month — `stock` cell only.
+    pub ibkr_lines: Vec<ForecastIbkrTransfer>,
+}
+
+/// One month column of the Overview 預測 grid (sheet columns B:H).
+#[derive(Debug, Clone, Serialize, ToSchema)]
+pub struct ForecastMonth {
+    /// `YYYY-MM-01`, the first of the projected month.
+    pub month: String,
+    /// Row 25 start: the first column's 月初(出糧後), later the prior column's
+    /// `cash`.
+    pub start: Option<f64>,
+    /// Row 26: `overview.salary`; absent while unset.
+    pub salary: Option<f64>,
+    /// Row 27 支出: −生活預算; absent while the trailing window is empty.
+    pub spend: Option<f64>,
+    /// Row 28 定期 finish: Σ principal of deposits ending in the month.
+    pub deposit_finish: f64,
+    /// Row 31 利息: deposit interest ending + expected/received HK dividends
+    /// and bond coupons in the month + `interest` items.
+    pub interest: f64,
+    /// The auto receipts behind `interest` (deposit/coupon/dividend) — unlike
+    /// the month stat's breakdown, pending components DO count here at their
+    /// expected figure; `received` marks confirmed ones.
+    pub interest_components: Vec<InterestComponent>,
+    /// Row 34 繳費: −bill_amount on Jan/Apr/Jul/Oct, or Σ `bill` items when
+    /// any exist; absent otherwise.
+    pub bill: Option<f64>,
+    /// One cell per plan row in sheet order (`ForecastItemKind::ALL`): the
+    /// month's plan items, placements, trade and IBKR lines bucketed by row,
+    /// each with the figure the grid shows.
+    pub cells: Vec<ForecastCell>,
+    /// Row 35 TBC - 定期 end: Σ principal returning from earlier plans.
+    pub deposit_return: f64,
+    /// Row 23 活期 = Σ(start..deposit_return) − deposit placements + trade
+    /// and IBKR transfer lines; absent while `start` is.
+    pub cash: Option<f64>,
+    /// Row 24 定期+SC: prior `locked` − finish − plans + placements − returns,
+    /// anchored on the deposits held on the window's first day.
+    pub locked: Option<f64>,
+    /// Row 21 半流動 = `cash` + `locked`.
+    pub semi_liquid: Option<f64>,
+    /// Row 20 = `semi_liquid` − 流動資產 ÷ 4; absent while either side is.
+    pub ref_check: Option<f64>,
+}
 
 /// The forecast window: the current month plus six ahead (sheet columns B:H).
 pub const FORECAST_MONTHS: u32 = 7;

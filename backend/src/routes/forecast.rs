@@ -7,9 +7,9 @@ use super::{AppState, parse_ym};
 use crate::calc::FieldError;
 use crate::error::{ApiError, ErrorBody};
 use crate::models::{
-    Deposit, ForecastItem, ForecastItemKind, ForecastItemPatch, ForecastResponse, NewDeposit,
-    NewForecastItem,
+    Deposit, ForecastItem, ForecastItemKind, ForecastItemPatch, NewDeposit, NewForecastItem,
 };
+pub use crate::service::forecast::ForecastResponse;
 use crate::store::forecast as store;
 
 async fn load_item(pool: &SqlitePool, id: i64) -> Result<ForecastItem, ApiError> {

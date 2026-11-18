@@ -11,4 +11,4 @@ Source: `openspec/changes/archive/2026-10-08-layered-backend-architecture`, `202
 
 ### Amendment (2026-11-16)
 
-Page read models (`GET …/summary`) live in `service/`; routes only parse the query and call it.
+Page read models (`GET …/summary`) live in `service/`; routes only parse the query and call it. The read model's types split three ways: the envelope (and components `service/` builds literally) lives next to its builder, `calc`-produced projections live next to their producer in `calc/`, and stored rows/patch bodies/domain enums stay in `models/`.

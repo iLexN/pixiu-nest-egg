@@ -4,7 +4,8 @@ use axum::http::StatusCode;
 
 use super::AppState;
 use crate::error::{ApiError, ErrorBody};
-use crate::models::{IbkrBlock, IbkrPatch, IbkrTransfer, NewIbkrTransfer, OverviewResponse};
+use crate::models::{IbkrPatch, IbkrTransfer, NewIbkrTransfer};
+pub use crate::service::overview::{IbkrBlock, OverviewResponse};
 
 #[utoipa::path(
     operation_id = "overview_ibkr",

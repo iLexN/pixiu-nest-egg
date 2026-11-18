@@ -1,13 +1,133 @@
 use chrono::Datelike;
+use serde::Serialize;
 use sqlx::SqlitePool;
+use utoipa::ToSchema;
 
 use crate::calc::{FieldError, liquidity_tiers};
-use crate::models::{
-    Currency, IbkrBlock, IbkrPatch, ManualAssetLiquidity, OverviewAssetRow, OverviewResponse,
-    SemiLiquid, TwelveMonthAverages,
-};
+use crate::models::{CashAccount, Currency, IbkrPatch, ManualAssetLiquidity};
 use crate::service::ServiceError;
 use crate::store::{StoreError, cash_accounts, ibkr as ibkr_store, settings, today};
+
+/// The 美股 sheet's IBKR account block (A1:B5 + B7): four manual inputs plus
+/// the derived cross-checks. `now_value` is the account total as the IBKR app
+/// displays it — its implied FX rate differs from `aia.usd_hkd_rate`.
+#[derive(Debug, Clone, Serialize, ToSchema)]
+pub struct IbkrBlock {
+    /// 美股!B1: cumulative bank→IBKR transfers — Σ `ibkr_transfers`.
+    pub transferred_hkd: Option<f64>,
+    /// 美股!B2: the account total shown in the IBKR app.
+    pub now_value: Option<f64>,
+    /// 美股!B4/B5: the account's cash positions.
+    pub hkd_cash: Option<f64>,
+    pub usd_cash: Option<f64>,
+    /// US stock market value in USD (美股!E2).
+    pub stock_value_usd: Option<f64>,
+    /// 美股!B7 = (stock_value_usd + usd_cash) × rate + hkd_cash — the figure
+    /// Overview!B9 links to.
+    pub computed_total_hkd: Option<f64>,
+    /// C1 = now_value − transferred_hkd; C2 = net ÷ transferred.
+    pub net: Option<f64>,
+    pub net_pct: Option<f64>,
+    /// computed_total_hkd − now_value: the FX-gap cross-check.
+    pub vs_now_value: Option<f64>,
+}
+
+/// One row of the 總覽 asset table (Overview!A3:C9): a module total or a
+/// manual `asset` row, with its share of the sum (the C column).
+#[derive(Debug, Clone, Serialize, ToSchema)]
+pub struct OverviewAssetRow {
+    pub key: String,
+    pub label: String,
+    /// The row's HKD amount; absent while rate-dependent and no rate is set.
+    pub amount: Option<f64>,
+    /// amount ÷ assets_sum.
+    pub share: Option<f64>,
+    /// Set when the row is a manual balance, enabling inline edits.
+    pub manual_asset_id: Option<i64>,
+    /// The manual row's note, shown as a hover tooltip on 總覽.
+    pub note: Option<String>,
+}
+
+/// The Overview!A14:C18 半流動資金 block plus the A13 ratio.
+#[derive(Debug, Clone, Serialize, ToSchema)]
+pub struct SemiLiquid {
+    /// 已定期 (B15): Σ principal over active deposits.
+    pub deposits: f64,
+    /// The bank `cash` accounts (B16/B17).
+    pub cash_rows: Vec<CashAccount>,
+    /// 活期 (B18) = Σ cash rows.
+    pub cash_sum: f64,
+    /// 半流動資金 (B14) = deposits + cash_sum.
+    pub total: f64,
+    /// C14 = total − `overview.semi_liquid_target` × liquid_assets (25%
+    /// while unset).
+    pub vs_quarter_liquid: f64,
+    /// A13 = total ÷ (港股 + 債券 + total + IBKR); absent while a term is missing.
+    pub share: Option<f64>,
+}
+
+/// `Overview!F3:G10` (+`H6`): trailing averages over the 12 completed months
+/// before the current one, the live pool balance, and the living budget with
+/// its 預測 red-flag floor.
+#[derive(Debug, Clone, Serialize, ToSchema)]
+pub struct TwelveMonthAverages {
+    /// G4 總數增加.
+    pub total_change: Option<f64>,
+    /// G5 支出.
+    pub month_spend: Option<f64>,
+    /// G6 生活支出.
+    pub living_spend: Option<f64>,
+    /// H6 生活預算 = ROUNDUP(living_spend × 1.05, −2).
+    pub living_budget: Option<f64>,
+    /// The 預測 check: true while `living_budget < living_budget_floor`.
+    pub living_budget_low: bool,
+    /// `liquid_assets × 0.0001 × 30 + 9000` — the floor the budget is
+    /// compared against.
+    pub living_budget_floor: f64,
+    /// G7 存.
+    pub saved: Option<f64>,
+    /// G8 利息.
+    pub interest: Option<f64>,
+    /// G10 開心Pool — the live balance.
+    pub pool_balance: f64,
+    /// The window's first/last months (e.g. "2025-09-01").
+    pub window_start: Option<String>,
+    pub window_end: Option<String>,
+}
+
+/// `GET /api/overview`: the sheet's A3:C18 block plus the B1/H1/J1 headline.
+#[derive(Debug, Clone, Serialize, ToSchema)]
+pub struct OverviewResponse {
+    pub today: String,
+    /// `aia.usd_hkd_rate`; absent while unset.
+    pub rate: Option<f64>,
+    /// `overview.salary`; feeds J1.
+    pub salary: Option<f64>,
+    /// B1 總數 = assets_sum + 半流動資金.
+    pub total_assets: f64,
+    /// H1 流動資產 = 港股 + 半流動資金 + 債券 + IBKR − 開心Pool.
+    pub liquid_assets: f64,
+    /// J1 = liquid_assets ÷ (salary × 100); absent without a salary.
+    pub liquid_ratio: Option<f64>,
+    pub assets: Vec<OverviewAssetRow>,
+    /// B10 Sum = Σ present asset rows.
+    pub assets_sum: f64,
+    pub semi_liquid: SemiLiquid,
+    /// `overview.semi_liquid_target` — the effective buffer ratio (0.25 while
+    /// unset), so the view can label the C14 percent.
+    pub semi_liquid_target: f64,
+    pub ibkr: IbkrBlock,
+    /// F3:G10 + H6.
+    pub averages: TwelveMonthAverages,
+    /// J22:N27.
+    pub invest_targets: crate::calc::InvestTargets,
+    /// J3:K7.
+    pub liquidity_tiers: crate::calc::LiquidityTiers,
+    /// J29:N35.
+    pub money_master: crate::calc::MoneyMaster,
+    /// J10:M20 + N13:P16.
+    pub goals: crate::calc::OverviewGoals,
+}
 
 /// The IBKR block: stored inputs plus the derived 美股!B7/C1/C2 figures.
 /// The cash figures are the `broker` cash_accounts rows; the reported total
@@ -175,7 +295,7 @@ pub async fn build(pool: &SqlitePool) -> Result<OverviewResponse, StoreError> {
     }
 
     // The bank accounts only — broker cash lives in the IBKR block.
-    let cash_rows: Vec<crate::models::CashAccount> = bank_accounts
+    let cash_rows: Vec<CashAccount> = bank_accounts
         .into_iter()
         .filter(|account| account.role == crate::models::CashRole::Bank)
         .collect();

@@ -2,6 +2,142 @@ use chrono::Datelike;
 use serde::Serialize;
 use utoipa::ToSchema;
 
+/// The Overview `J3:K7` 策略 block: 總數 re-partitioned into liquidity tiers.
+#[derive(Debug, Clone, Default, Serialize, ToSchema)]
+pub struct LiquidityTiers {
+    /// K4 可動用 = 半流動資金 − `cannot_use`; absent without a stored salary.
+    pub can_use: Option<f64>,
+    /// K5 不可動用 = salary × 6 (the sheet's `N6`); absent without a salary.
+    pub cannot_use: Option<f64>,
+    /// K6 短期可取回 = 港股 + 債券 + IBKR + `short` manual asset rows;
+    /// absent while `aia.usd_hkd_rate` is unset.
+    pub short_term: Option<f64>,
+    /// K7 長期可取回 = 基金 + MPF + `long` manual asset rows; absent while
+    /// `aia.usd_hkd_rate` is unset.
+    pub long_term: Option<f64>,
+}
+
+/// The `Overview!J29:N35` Money Master challenge block: the bank app's
+/// stored figures, the effective month/coming-save (override or derived),
+/// and the sheet's progress/pace derivations.
+#[derive(Debug, Clone, Default, Serialize, ToSchema)]
+pub struct MoneyMaster {
+    /// `money_master.start_date` — the challenge start `YYYY-MM-DD`.
+    pub start_date: Option<String>,
+    /// K31: override or `full months elapsed since start_date + 1` (the
+    /// bank's 1-indexed month counter).
+    pub month_now: Option<f64>,
+    /// Months left counting the current challenge month, floored at 1.
+    pub months_left: Option<f64>,
+    /// L31: the bank app's saved figure.
+    pub saved: Option<f64>,
+    /// K32/L32: the challenge parameters.
+    pub target_months: Option<f64>,
+    pub target_amount: Option<f64>,
+    /// K34: override or `salary + (target_amount − saved) ÷ months_left`;
+    /// negative while ahead of target.
+    pub coming_save: Option<f64>,
+    /// M31 = saved ÷ month_now.
+    pub avg_per_month: Option<f64>,
+    /// N31 = avg_per_month × 12.
+    pub yearly_rate: Option<f64>,
+    /// K33 = month_now ÷ target_months.
+    pub time_progress: Option<f64>,
+    /// L33 = saved ÷ target_amount.
+    pub saved_progress: Option<f64>,
+    /// M33 = saved_progress − time_progress.
+    pub progress_gap: Option<f64>,
+    /// K35 = salary − coming_save; may exceed salary while coming_save < 0.
+    pub can_use: Option<f64>,
+}
+
+/// One `J10:M20` milestone (the sheet's 1st/2nd 目標): a fixed stored target
+/// and its derived remain/years/ETA. Every figure is absent while its inputs
+/// are missing; `years`/`eta` are also absent once `remain ≤ 0` (已達成).
+#[derive(Debug, Clone, Default, Serialize, ToSchema)]
+pub struct GoalMilestone {
+    /// K12/K18: the target amount (`overview.goal1_amount`/`goal2_amount`).
+    pub target: Option<f64>,
+    /// K14/K20 = target − current_invest.
+    pub remain: Option<f64>,
+    /// L14/L20 = remain ÷ saving_year.
+    pub years: Option<f64>,
+    /// J11/J17 = today + round(365 × years) days, `YYYY-MM-DD`.
+    pub eta: Option<String>,
+}
+
+/// One `N13:P16` formula goal (the sheet's 3rd target / Final Target): the
+/// target is a formula, not a stored amount.
+#[derive(Debug, Clone, Default, Serialize, ToSchema)]
+pub struct FormulaGoal {
+    /// O14/P14: the formula target.
+    pub target: Option<f64>,
+    /// O15/P15 = target − 流動資產 (3rd) / 總數 (final).
+    pub remain: Option<f64>,
+    /// O16/P16 = remain ÷ the goal's yearly pace; absent once `remain ≤ 0`.
+    pub years: Option<f64>,
+    /// The yearly pace `years` divides by — 3rd: `(saved_avg + interest_avg)
+    /// × 12`; Final: `total_change_avg × 12`. Absent while its inputs are.
+    pub pace: Option<f64>,
+    /// today + round(365 × years) days, `YYYY-MM-DD` — absent while `years`
+    /// is absent, including once the goal is reached.
+    pub eta: Option<String>,
+}
+
+/// The five yearly 存/年 (L12) terms — each absent while its inputs are;
+/// `saving_year` is the mean of the present ones.
+#[derive(Debug, Clone, Default, Serialize, ToSchema)]
+pub struct SavingYearTerms {
+    /// G7 × 12: the trailing 12-month saved average, annualized.
+    pub saved_year: Option<f64>,
+    /// J22: the 3-year invested average.
+    pub avg_invested: Option<f64>,
+    /// M31 × 12: the Money Master monthly average, annualized.
+    pub mm_year: Option<f64>,
+    /// L8 × 12: the running saved average, annualized.
+    pub running_saved_year: Option<f64>,
+    /// (L8 + N8) × 12: running saved + interest averages, annualized.
+    pub running_combined_year: Option<f64>,
+}
+
+/// The `Overview!J10:M20` + `N13:P16` 目標 block: the shared saving/return
+/// figures, the two stored-amount milestones, and the two formula targets.
+#[derive(Debug, Clone, Default, Serialize, ToSchema)]
+pub struct OverviewGoals {
+    /// N4 = `income_value_rate` of the latest completed year (today's − 1);
+    /// both absent while that year's row or rate is missing.
+    pub n4_rate: Option<f64>,
+    pub n4_year: Option<i32>,
+    /// K13 = 港股 + 債券 + IBKR; absent while the IBKR HKD total is absent.
+    pub current_invest: Option<f64>,
+    /// L12 = the sheet's AVERAGE over the five saving sources, absent terms
+    /// skipped; M12 = L12 ÷ 12.
+    pub saving_year: Option<f64>,
+    pub saving_month: Option<f64>,
+    /// The five yearly L12 terms `saving_year` averages.
+    pub saving_terms: SavingYearTerms,
+    /// L13 = K13 × N4; M13 = L13 ÷ 12.
+    pub passive_return_year: Option<f64>,
+    pub passive_return_month: Option<f64>,
+    /// The 1st/2nd 目標 rows, in order.
+    pub milestones: Vec<GoalMilestone>,
+    /// O14:O16 3rd target = 生活預算 × inflation × 12 × years vs 流動資產.
+    pub third: FormulaGoal,
+    /// P14:P16 Final Target = salary × replacement × 12 ÷ N4 vs 總數.
+    pub final_goal: FormulaGoal,
+    /// The effective formula constants (`1.07`/`30`/`0.7` while unset) —
+    /// echoed so the card can expand O14/P14 without a settings fetch.
+    pub goal3_inflation: f64,
+    pub goal3_years: f64,
+    pub final_replacement: f64,
+    /// 'Month Stat' running averages (L8/N8/C8, monthly) — the last two L12
+    /// terms plus the Final goal's pace base, echoed so the card can expand
+    /// 存/年 and label each goal's pace.
+    pub saved_avg: Option<f64>,
+    pub interest_avg: Option<f64>,
+    pub total_change_avg: Option<f64>,
+}
+
 /// The components of `Overview!B1`/`H1`, already resolved by the caller.
 #[derive(Debug, Clone, Copy)]
 pub struct LiveTotalsInput {
@@ -84,9 +220,9 @@ pub fn liquidity_tiers(
     mpf: f64,
     manual_short: f64,
     manual_long: f64,
-) -> crate::models::LiquidityTiers {
+) -> LiquidityTiers {
     let cannot_use = salary.map(|salary| salary * 6.0);
-    crate::models::LiquidityTiers {
+    LiquidityTiers {
         can_use: cannot_use.map(|cannot_use| semi_total - cannot_use),
         cannot_use,
         short_term: ibkr.map(|ibkr| hk + bonds + ibkr + manual_short),
@@ -123,7 +259,7 @@ pub struct MoneyMasterInput {
 /// whole gap. `coming_save` is the bank's `salary + (target − saved) ÷
 /// months_left` — negative while ahead of target — or its override; `can_use`
 /// = `salary − coming_save` then equals the over-target excess.
-pub fn money_master(input: &MoneyMasterInput) -> crate::models::MoneyMaster {
+pub fn money_master(input: &MoneyMasterInput) -> MoneyMaster {
     let month_now = input.month_now_override.or_else(|| {
         input
             .start_date
@@ -153,7 +289,7 @@ pub fn money_master(input: &MoneyMasterInput) -> crate::models::MoneyMaster {
         (Some(saved), Some(target)) if target != 0.0 => Some(saved / target),
         _ => None,
     };
-    crate::models::MoneyMaster {
+    MoneyMaster {
         start_date: input.start_date.map(|date| date.to_string()),
         month_now,
         months_left,
@@ -240,13 +376,13 @@ fn formula_goal(
     assets: f64,
     pace: Option<f64>,
     today: chrono::NaiveDate,
-) -> crate::models::FormulaGoal {
+) -> FormulaGoal {
     let remain = target.map(|target| target - assets);
     let years = match (remain, pace) {
         (Some(remain), Some(pace)) if pace != 0.0 && remain > 0.0 => Some(remain / pace),
         _ => None,
     };
-    crate::models::FormulaGoal {
+    FormulaGoal {
         target,
         remain,
         years,
@@ -264,9 +400,7 @@ fn formula_goal(
 /// `living_budget × inflation × 12 × years`, remain vs 流動資產, paced by
 /// `(L8 + N8) × 12`. Final `P14` = `salary × replacement × 12 ÷ N4`, remain
 /// vs 總數, paced by `C8 × 12`.
-pub fn overview_goals(input: &OverviewGoalsInput) -> crate::models::OverviewGoals {
-    use crate::models::{GoalMilestone, OverviewGoals, SavingYearTerms};
-
+pub fn overview_goals(input: &OverviewGoalsInput) -> OverviewGoals {
     // L12: the sheet's AVERAGE skips absent terms.
     let combined_running = match (input.saved_avg, input.interest_avg) {
         (Some(saved), Some(interest)) => Some((saved + interest) * 12.0),

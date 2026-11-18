@@ -285,7 +285,11 @@ are absent while it is unset.
 **Page read model**: the response behind a page's `GET …/summary`-style
 endpoint (`service::<domain>::summary`, `service::mpf::overview`,
 `service::summary::build`) — owned by `service/`, called once by the route,
-and `pub use`-re-exported from it so the OpenAPI schema is unchanged.
+and `pub use`-re-exported from it so the OpenAPI schema is unchanged. Its
+types split three ways: the envelope (and anything `service/` builds
+literally) lives next to its builder; `calc`-produced projections live next
+to their producer in `calc/`; stored rows, patch bodies, and domain enums
+stay in `models/`.
 _Avoid_: view model, DTO
 
 ## Frontend structure

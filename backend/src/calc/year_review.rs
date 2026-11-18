@@ -504,6 +504,58 @@ pub fn year_review_rows(
     rows
 }
 
+/// The 投資目標 block (Overview!J22:N27): the J22 three-year invested average
+/// plus one row per year-review year under the unified target formula.
+#[derive(Debug, Clone, Default, Serialize, ToSchema)]
+pub struct InvestTargets {
+    /// J22: mean `invested` over the last three completed years, skip-absent.
+    pub avg_invested: Option<f64>,
+    pub rows: Vec<InvestTargetRow>,
+}
+
+/// One 投資目標 row (J:N): invested, the effective raise, and the derived
+/// target/remain/growth.
+#[derive(Debug, Clone, Serialize, ToSchema)]
+pub struct InvestTargetRow {
+    pub year: i32,
+    /// K column: the year-review `invested`; absent while none.
+    pub invested: Option<f64>,
+    /// The year's effective 月薪增幅 (override or salary-derived).
+    pub raise: Option<f64>,
+    /// The year-review 利息回報 feeding the target formula (0 when none).
+    pub interest: f64,
+    /// The year-review 開心Pool支出 feeding the target formula (0 when none).
+    pub pool_spend: f64,
+    /// L column: the year's target; absent without a prior-year `invested`.
+    pub target: Option<f64>,
+    /// M column: target − invested, on the current year only.
+    pub remain: Option<f64>,
+    /// N column: invested YoY for completed years; target vs last invested
+    /// for the current year.
+    pub growth: Option<f64>,
+    /// The six contributions `target` sums — the footnote's terms.
+    pub terms: InvestTargetTerms,
+}
+
+/// The 投資目標 formula's terms for one row: `target = prior_invested −
+/// prior_interest − prior_pool + raise_term + interest + pool` whenever
+/// `prior_invested` is present.
+#[derive(Debug, Clone, Serialize, ToSchema)]
+pub struct InvestTargetTerms {
+    /// The prior year's `invested`; absent while it is.
+    pub prior_invested: Option<f64>,
+    /// The prior year's 利息回報; absent while no prior-year row exists.
+    pub prior_interest: Option<f64>,
+    /// The prior year's 開心Pool支出 × 0.7; absent while no prior-year row.
+    pub prior_pool: Option<f64>,
+    /// 月薪增幅 × 0.5 × 12; an absent raise counts as 0.
+    pub raise_term: f64,
+    /// This year's 利息回報.
+    pub interest: f64,
+    /// This year's 開心Pool支出 × 0.7.
+    pub pool: f64,
+}
+
 /// The Overview J22:N27 投資目標 block, projected from the year-review rows:
 ///
 /// `target(Y) = invested(Y-1) − interest(Y-1) − pool_spend(Y-1)×0.7
@@ -514,8 +566,7 @@ pub fn year_review_rows(
 /// returns reinvested, plus 70% of the YoY increase in entertainment spend.
 /// `avg_invested` is the sheet's J22: the mean of `invested` over the last
 /// three completed years.
-pub fn invest_targets(rows: &[YearReviewRow], current_year: i32) -> crate::models::InvestTargets {
-    use crate::models::{InvestTargetRow, InvestTargetTerms, InvestTargets};
+pub fn invest_targets(rows: &[YearReviewRow], current_year: i32) -> InvestTargets {
     use std::collections::HashMap;
 
     let by_year: HashMap<i32, &YearReviewRow> = rows.iter().map(|row| (row.year, row)).collect();

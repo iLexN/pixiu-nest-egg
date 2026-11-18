@@ -3,11 +3,20 @@
 //! plan-row cells — the whole grid is derived on read; only
 //! `forecast_items` is stored.
 
+use serde::Serialize;
 use sqlx::SqlitePool;
+use utoipa::ToSchema;
 
 use crate::calc;
-use crate::models::ForecastResponse;
 use crate::store::StoreError;
+
+/// `GET /api/forecast`: seven columns from the current month.
+#[derive(Debug, Clone, Serialize, ToSchema)]
+pub struct ForecastResponse {
+    /// The effective quarterly bill amount (`forecast.bill_amount` or 2158).
+    pub bill_amount: f64,
+    pub months: Vec<calc::ForecastMonth>,
+}
 
 /// The seven-month 預測 grid, fully derived on read. A stored item month
 /// that does not parse is `Err(Corrupt)`.
@@ -76,10 +85,11 @@ pub async fn build(pool: &SqlitePool) -> Result<ForecastResponse, StoreError> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::calc::{ForecastCell, ForecastIbkrTransfer, ForecastMonth};
     use crate::db::connect_memory;
-    use crate::models::{ForecastIbkrTransfer, ForecastItemKind, ForecastMonth};
+    use crate::models::ForecastItemKind;
 
-    fn stock_cell(month: &ForecastMonth) -> &crate::models::ForecastCell {
+    fn stock_cell(month: &ForecastMonth) -> &ForecastCell {
         month
             .cells
             .iter()
