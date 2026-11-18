@@ -1,8 +1,9 @@
 <script setup lang="ts">
 import { computed, onMounted, reactive, ref, watch } from 'vue'
-import { api, ApiError, toApiError, type CashAccount, type Dividend } from '../api'
+import { api, type CashAccount, type Dividend } from '../api'
 import FieldError from './FieldError.vue'
 import { fmtMoney } from '../format'
+import { usePage } from '../page'
 
 const props = defineProps<{
   dividend: Dividend
@@ -27,9 +28,13 @@ const form = reactive<FormState>({
   also_update_price: false,
   account_id: null,
 })
-const error = ref<ApiError | null>(null)
-const saving = ref(false)
 const accounts = ref<CashAccount[]>([])
+
+const { error, busy, reload, run } = usePage(async () => {
+  accounts.value = await api.listCashAccounts()
+  form.account_id =
+    receiptAccounts.value.find((account) => account.is_default_receipt)?.id ?? null
+})
 
 /** Accounts of the dividend's currency: HKD for HK, USD for US. */
 const receiptAccounts = computed(() => {
@@ -68,10 +73,8 @@ const netPreview = computed(() => {
   return gross - (num(form.withholding_tax) ?? 0)
 })
 
-async function submit() {
-  error.value = null
-  saving.value = true
-  try {
+function submit() {
+  run(async () => {
     const receivedPrice = num(form.received_price)
     const saved = await api.updateDividend(
       props.dividend.id,
@@ -98,22 +101,10 @@ async function submit() {
       await api.updateStock(props.dividend.stock_id, { manual_price: receivedPrice })
     }
     emit('saved', saved)
-  } catch (err) {
-    error.value = toApiError(err)
-  } finally {
-    saving.value = false
-  }
+  }, { reload: false })
 }
 
-onMounted(async () => {
-  try {
-    accounts.value = await api.listCashAccounts()
-    form.account_id =
-      receiptAccounts.value.find((account) => account.is_default_receipt)?.id ?? null
-  } catch (err) {
-    error.value = toApiError(err)
-  }
-})
+onMounted(reload)
 </script>
 
 <template>
@@ -174,7 +165,7 @@ onMounted(async () => {
     <p v-if="error && error.fields.length === 0" class="error">{{ error.message }}</p>
 
     <div class="actions">
-      <button type="submit" :disabled="saving">確認收訖</button>
+      <button type="submit" :disabled="busy">確認收訖</button>
       <button type="button" class="secondary" @click="emit('cancelled')">取消</button>
     </div>
   </form>

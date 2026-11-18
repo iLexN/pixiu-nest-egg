@@ -2,7 +2,6 @@
 import { computed, onMounted, ref, watch } from 'vue'
 import {
   api,
-  errorMessage,
   type IbkrBlock,
   type Market,
   type SummaryResponse,
@@ -22,13 +21,13 @@ import {
   fmtShares,
   signClass,
 } from '../format'
+import { usePage } from '../page'
 
 const props = defineProps<{ market: Market }>()
 
 const summary = ref<SummaryResponse | null>(null)
 const yearly = ref<YearlySummary | null>(null)
 const ibkr = ref<IbkrBlock | null>(null)
-const error = ref('')
 const editingPrice = ref<number | null>(null)
 const priceDraft = ref('')
 const expandedNotes = ref(new Set<number>())
@@ -37,13 +36,10 @@ const noteDraft = ref('')
 let notesInitialized = false
 const draggingId = ref<number | null>(null)
 const dragOverId = ref<number | null>(null)
-const savingOrder = ref(false)
 const priceFileInput = ref<HTMLInputElement | null>(null)
-const uploadingPrices = ref(false)
 const uploadMessage = ref('')
 
-async function load() {
-  error.value = ''
+const { error, busy, reload, run } = usePage(async () => {
   try {
     const [nextSummary, nextYearly, nextIbkr] = await Promise.all([
       api.summary(props.market),
@@ -66,9 +62,9 @@ async function load() {
     summary.value = null
     yearly.value = null
     ibkr.value = null
-    error.value = errorMessage(err)
+    throw err
   }
-}
+})
 
 // Hidden stocks stay in summary.stocks so totals, rollups and reorder are
 // unaffected; only the table rows are filtered.
@@ -85,20 +81,16 @@ function startEdit(id: number, current: number | null) {
   priceDraft.value = current === null ? '' : String(current)
 }
 
-async function savePrice(id: number) {
-  const text = String(priceDraft.value).trim()
-  const parsed = Number(text)
-  if (text === '' || !Number.isFinite(parsed)) {
-    error.value = '現價必須是數字'
-    return
-  }
-  try {
+function savePrice(id: number) {
+  run(async () => {
+    const text = String(priceDraft.value).trim()
+    const parsed = Number(text)
+    if (text === '' || !Number.isFinite(parsed)) {
+      throw new Error('現價必須是數字')
+    }
     await api.updateStock(id, { manual_price: parsed })
     editingPrice.value = null
-    await load()
-  } catch (err) {
-    error.value = errorMessage(err)
-  }
+  })
 }
 
 const allNotesExpanded = computed(
@@ -129,14 +121,11 @@ function startNoteEdit(stock: SummaryStock) {
   noteDraft.value = stock.note ?? ''
 }
 
-async function saveNote(id: number) {
-  try {
+function saveNote(id: number) {
+  run(async () => {
     await api.updateStock(id, { note: noteDraft.value.trim() || null })
     editingNote.value = null
-    await load()
-  } catch (err) {
-    error.value = errorMessage(err)
-  }
+  })
 }
 
 function onDragStart(id: number, event: DragEvent) {
@@ -154,7 +143,7 @@ function onDragOver(id: number, event: DragEvent) {
   dragOverId.value = id
 }
 
-async function onDrop(targetId: number, event: DragEvent) {
+function onDrop(targetId: number, event: DragEvent) {
   event.preventDefault()
   const sourceId = draggingId.value
   draggingId.value = null
@@ -170,28 +159,26 @@ async function onDrop(targetId: number, event: DragEvent) {
   rows.splice(to, 0, moved)
   summary.value.stocks = rows
 
-  savingOrder.value = true
-  error.value = ''
-  try {
-    await api.reorderStocks(props.market, rows.map((stock) => stock.id))
-  } catch (err) {
-    error.value = errorMessage(err)
-    await load()
-  } finally {
-    savingOrder.value = false
-  }
+  // Optimistic reorder: the success path keeps it (no reload); a failure
+  // reloads to revert to the server order before the error is reported.
+  run(async () => {
+    try {
+      await api.reorderStocks(props.market, rows.map((stock) => stock.id))
+    } catch (err) {
+      await reload()
+      throw err
+    }
+  }, { reload: false })
 }
 
-async function onPriceFile(event: Event) {
+function onPriceFile(event: Event) {
   const input = event.target as HTMLInputElement
   const file = input.files?.[0]
   input.value = ''
   if (!file) return
 
-  uploadingPrices.value = true
-  error.value = ''
-  uploadMessage.value = ''
-  try {
+  run(async () => {
+    uploadMessage.value = ''
     const report = await api.uploadPrices(await file.text())
     const parts = [`已更新 ${report.updated.length} 支股票現價`]
     if (report.unmatched.length > 0) {
@@ -204,12 +191,7 @@ async function onPriceFile(event: Event) {
       parts.push(`未更新：${report.not_updated.join('、')}`)
     }
     uploadMessage.value = parts.join('；')
-    await load()
-  } catch (err) {
-    error.value = errorMessage(err)
-  } finally {
-    uploadingPrices.value = false
-  }
+  })
 }
 
 function onDragEnd() {
@@ -220,7 +202,6 @@ function onDragEnd() {
 type YearField = 'invested' | 'cost' | 'market_value' | 'sold_pl'
 const editingYearCell = ref<string | null>(null)
 const yearDraft = ref('')
-const freezing = ref(false)
 
 /** A cell counts as frozen when the snapshot carries a value for it. */
 function frozen(row: YearRow, field: YearField): boolean {
@@ -237,39 +218,25 @@ function startYearEdit(row: YearRow, field: YearField) {
   yearDraft.value = current === null ? '' : String(current)
 }
 
-async function saveYearEdit(row: YearRow, field: YearField) {
-  const text = String(yearDraft.value).trim()
-  const parsed = text === '' ? null : Number(text)
-  // 賣出損益 may be negative; the other figures cannot.
-  if (parsed !== null && (!Number.isFinite(parsed) || (parsed < 0 && field !== 'sold_pl'))) {
-    error.value = field === 'sold_pl' ? '數值必須是數字' : '數值必須是非負數字'
-    return
-  }
-  try {
+function saveYearEdit(row: YearRow, field: YearField) {
+  run(async () => {
+    const text = String(yearDraft.value).trim()
+    const parsed = text === '' ? null : Number(text)
+    // 賣出損益 may be negative; the other figures cannot.
+    if (parsed !== null && (!Number.isFinite(parsed) || (parsed < 0 && field !== 'sold_pl'))) {
+      throw new Error(field === 'sold_pl' ? '數值必須是數字' : '數值必須是非負數字')
+    }
     await api.updateYearly(props.market, row.year, { [field]: parsed })
     editingYearCell.value = null
-    await load()
-  } catch (err) {
-    error.value = errorMessage(err)
-  }
+  })
 }
 
-async function freezeYear(row: YearRow) {
-  if (
-    row.snapshot &&
-    !window.confirm(`${row.year} 已有凍結數值，確定用現在的計算值覆蓋？`)
-  ) {
-    return
-  }
-  freezing.value = true
-  try {
-    await api.freezeYearly(props.market, row.year)
-    await load()
-  } catch (err) {
-    error.value = errorMessage(err)
-  } finally {
-    freezing.value = false
-  }
+function freezeYear(row: YearRow) {
+  run(() => api.freezeYearly(props.market, row.year), {
+    confirm: row.snapshot
+      ? `${row.year} 已有凍結數值，確定用現在的計算值覆蓋？`
+      : undefined,
+  })
 }
 
 function resetAndLoad() {
@@ -277,10 +244,10 @@ function resetAndLoad() {
   editingNote.value = null
   noteDraft.value = ''
   notesInitialized = false
-  load()
+  reload()
 }
 
-onMounted(load)
+onMounted(reload)
 watch(() => props.market, resetAndLoad)
 </script>
 
@@ -288,7 +255,7 @@ watch(() => props.market, resetAndLoad)
   <section v-if="summary" class="card">
     <h3>{{ props.market === 'HK' ? '港股' : '美股' }}持倉總覽</h3>
     <div class="summary-actions">
-      <button type="button" :disabled="uploadingPrices" @click="priceFileInput?.click()">
+      <button type="button" :disabled="busy" @click="priceFileInput?.click()">
         匯入現價 JSON
       </button>
       <input
@@ -300,7 +267,7 @@ watch(() => props.market, resetAndLoad)
       />
       <span v-if="uploadMessage" class="muted">{{ uploadMessage }}</span>
     </div>
-    <p v-if="error" class="error">{{ error }}</p>
+    <p v-if="error" class="error">{{ error?.message }}</p>
 
     <div class="totals-grid" aria-label="市場合計">
       <div class="total-card">
@@ -631,7 +598,7 @@ watch(() => props.market, resetAndLoad)
                 v-if="row.year === Number(yearly.today.slice(0, 4))"
                 type="button"
                 class="link"
-                :disabled="freezing"
+                :disabled="busy"
                 title="把現在的成本與總市值存為今年的凍結值"
                 @click="freezeYear(row)"
               >

@@ -1,10 +1,11 @@
 <script setup lang="ts">
 import { computed, onMounted, ref } from 'vue'
-import { api, errorMessage, type ForecastResponse, type OverviewResponse } from '../api'
+import { api, type ForecastResponse, type OverviewResponse } from '../api'
 import ForecastGrid from '../components/ForecastGrid.vue'
 import IbkrCard from '../components/IbkrCard.vue'
 import { fmtMoney, fmtPercent, fmtPercentShort, fmtPrice, signClass } from '../format'
 import { numOrNull } from '../parse'
+import { usePage } from '../page'
 
 /** `remain ≤ 0` means the goal is already reached — show 已達成, not years. */
 function reached(remain: number | null): boolean {
@@ -17,8 +18,12 @@ function fmtYears(value: number | null): string {
 
 const data = ref<OverviewResponse | null>(null)
 const forecast = ref<ForecastResponse | null>(null)
-const message = ref('')
-const error = ref('')
+
+const { message, error, reload, run } = usePage(async () => {
+  const [overviewData, forecastData] = await Promise.all([api.overview(), api.forecast()])
+  data.value = overviewData
+  forecast.value = forecastData
+})
 
 // Inline amount edit for manual asset/cash rows (PATCH /api/manual-assets).
 const editingId = ref<number | null>(null)
@@ -26,26 +31,10 @@ const editingId = ref<number | null>(null)
 const editingTarget = ref<'cash' | 'asset'>('asset')
 const editDraft = ref<number | ''>('')
 
-async function load() {
-  try {
-    const [overviewData, forecastData] = await Promise.all([api.overview(), api.forecast()])
-    data.value = overviewData
-    forecast.value = forecastData
-    error.value = ''
-  } catch (err) {
-    error.value = errorMessage(err)
-  }
-}
-
-/** The grid reports a write; the view owns the feedback line and reloads. */
-function onForecastSaved(msg: string) {
-  message.value = msg
-  error.value = ''
-  void load()
-}
-
-function onForecastFailed(msg: string) {
-  error.value = msg
+/** The grid's 轉為定期 finished — the form did the write, the page reports. */
+function onForecastConverted() {
+  message.value = '已轉為定期'
+  reload()
 }
 
 function startEdit(id: number, current: number | null, target: 'cash' | 'asset' = 'asset') {
@@ -54,15 +43,14 @@ function startEdit(id: number, current: number | null, target: 'cash' | 'asset' 
   editDraft.value = current ?? ''
 }
 
-async function saveEdit() {
-  const id = editingId.value
-  if (id === null) return
-  const amount = numOrNull(editDraft.value)
-  if (amount === null) {
-    error.value = '金額必須是數字'
-    return
-  }
-  try {
+function saveEdit() {
+  run(async () => {
+    const id = editingId.value
+    if (id === null) return
+    const amount = numOrNull(editDraft.value)
+    if (amount === null) {
+      throw new Error('金額必須是數字')
+    }
     // 活期 cash rows are cash_accounts; asset rows are manual_assets.
     if (editingTarget.value === 'cash') {
       await api.updateCashAccount(id, { amount })
@@ -70,12 +58,7 @@ async function saveEdit() {
       await api.updateManualAsset(id, { amount })
     }
     editingId.value = null
-    message.value = '已更新'
-    error.value = ''
-    await load()
-  } catch (err) {
-    error.value = errorMessage(err)
-  }
+  }, { message: '已更新' })
 }
 
 // ----- 投資目標 formula footnote -----
@@ -143,11 +126,11 @@ const formulaGoalRows = computed(() => {
   ]
 })
 
-onMounted(load)
+onMounted(reload)
 </script>
 
 <template>
-  <p v-if="error" class="error">{{ error }}</p>
+  <p v-if="error" class="error">{{ error?.message }}</p>
   <p v-if="message" class="ok">{{ message }}</p>
 
   <template v-if="data">
@@ -381,8 +364,7 @@ onMounted(load)
     <ForecastGrid
       v-if="forecast"
       :forecast="forecast"
-      @saved="onForecastSaved"
-      @failed="onForecastFailed"
+      :run="run" @converted="onForecastConverted"
     />
     <div class="card invest-targets">
       <h3>投資目標</h3>
@@ -617,7 +599,7 @@ onMounted(load)
       <p class="muted">於 總覽 → 月結 → 設定 更新 Money Master 數字</p>
     </div>
 
-    <IbkrCard class="ibkr-card" :ibkr="data.ibkr" @saved="load" />
+    <IbkrCard class="ibkr-card" :ibkr="data.ibkr" @saved="reload" />
     </div>
   </template>
 </template>

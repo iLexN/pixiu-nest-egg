@@ -3,14 +3,13 @@ import { onMounted, ref, watch } from 'vue'
 import DateInput from '../components/DateInput.vue'
 import TradeForm from '../components/TradeForm.vue'
 import TradeTable from '../components/TradeTable.vue'
-import { api, errorMessage, type Market, type Stock, type Trade } from '../api'
+import { api, type Market, type Stock, type Trade } from '../api'
+import { usePage } from '../page'
 
 const props = defineProps<{ market: Market }>()
 
 const stocks = ref<Stock[]>([])
 const trades = ref<Trade[]>([])
-const message = ref('')
-const error = ref('')
 const editing = ref<Trade | null>(null)
 
 const showForm = ref(false)
@@ -22,36 +21,27 @@ const order = ref<'asc' | 'desc'>('desc')
 
 const ISO_DATE = /^\d{4}-\d{2}-\d{2}$/
 
-async function load() {
-  error.value = ''
-  try {
-    stocks.value = await api.listStocks(props.market)
-    trades.value = await api.listTrades({
-      market: props.market,
-      code: filterCode.value || undefined,
-      from: ISO_DATE.test(from.value) ? from.value : undefined,
-      to: ISO_DATE.test(to.value) ? to.value : undefined,
-      order: order.value,
-    })
-  } catch (err) {
-    error.value = errorMessage(err)
-  }
-}
+const { message, error, reload, run } = usePage(async () => {
+  stocks.value = await api.listStocks(props.market)
+  trades.value = await api.listTrades({
+    market: props.market,
+    code: filterCode.value || undefined,
+    from: ISO_DATE.test(from.value) ? from.value : undefined,
+    to: ISO_DATE.test(to.value) ? to.value : undefined,
+    order: order.value,
+  })
+})
 
 function toggleOrder() {
   order.value = order.value === 'asc' ? 'desc' : 'asc'
-  void load()
+  reload()
 }
 
-async function remove(trade: Trade) {
-  if (!window.confirm(`刪除 ${trade.trade_date} ${trade.code} 的交易？`)) return
-  try {
-    await api.deleteTrade(trade.id)
-    message.value = `已刪除交易 #${trade.id}`
-    await load()
-  } catch (err) {
-    error.value = errorMessage(err)
-  }
+function remove(trade: Trade) {
+  run(() => api.deleteTrade(trade.id), {
+    confirm: `刪除 ${trade.trade_date} ${trade.code} 的交易？`,
+    message: `已刪除交易 #${trade.id}`,
+  })
 }
 
 function toggleForm() {
@@ -72,24 +62,23 @@ function startEdit(trade: Trade) {
 
 function onSaved(trade: Trade) {
   message.value = `已儲存交易 #${trade.id}`
-  error.value = ''
   editing.value = null
   showForm.value = false
-  void load()
+  reload()
 }
 
 function clearFilters() {
   filterCode.value = ''
   from.value = ''
   to.value = ''
-  void load()
+  reload()
 }
 
-onMounted(load)
+onMounted(reload)
 watch(() => props.market, () => {
   filterCode.value = ''
   editing.value = null
-  void load()
+  reload()
 })
 </script>
 
@@ -109,7 +98,7 @@ watch(() => props.market, () => {
       <div class="filters">
         <label>
           股票代碼
-          <select v-model="filterCode" @change="load">
+          <select v-model="filterCode" @change="reload">
             <option value="">全部</option>
             <option v-for="stock in stocks" :key="stock.id" :value="stock.code">
               {{ stock.code }}
@@ -118,17 +107,17 @@ watch(() => props.market, () => {
         </label>
         <label>
           由
-          <DateInput v-model="from" @change="load" />
+          <DateInput v-model="from" @change="reload" />
         </label>
         <label>
           至
-          <DateInput v-model="to" @change="load" />
+          <DateInput v-model="to" @change="reload" />
         </label>
         <button type="button" class="secondary" @click="clearFilters">清除篩選</button>
       </div>
 
       <p v-if="message" class="ok">{{ message }}</p>
-      <p v-if="error" class="error">{{ error }}</p>
+      <p v-if="error" class="error">{{ error?.message }}</p>
 
       <TradeTable
         :trades="trades"

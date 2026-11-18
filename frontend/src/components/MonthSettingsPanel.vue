@@ -2,7 +2,6 @@
 import { ref, watch } from 'vue'
 import {
   api,
-  errorMessage,
   type AppSettings,
   type CashAccount,
   type CashRole,
@@ -15,7 +14,7 @@ import {
 } from '../api'
 import { fmtMoney, fmtPercent, fmtPercentShort } from '../format'
 import { numOrNull } from '../parse'
-
+import type { PageRun } from '../page'
 const props = defineProps<{
   settings: AppSettings | null
   summary: MonthSummary | null
@@ -23,9 +22,9 @@ const props = defineProps<{
   assets: ManualAsset[]
   /** The displayed year — labels the pool rate and becomes `pool_rate_year`. */
   year: number
+  /** The page's mutation runner — saves land on the page's message/error. */
+  run: PageRun
 }>()
-
-const emit = defineEmits<{ saved: [message: string]; failed: [message: string] }>()
 
 const settingsOpen = ref(false)
 const salaryDraft = ref<string | number>('')
@@ -69,54 +68,47 @@ function startSettingsEdit() {
   editingSettings.value = true
 }
 
-async function saveSettings() {
-  const salary = numOrNull(salaryDraft.value)
-  const ratePct = numOrNull(rateDraft.value)
-  if (ratePct !== null && (ratePct < 0 || ratePct >= 100)) {
-    emit('failed', '開心Pool 利率必須是 0–100%')
-    return
-  }
-  const bill = numOrNull(billDraft.value)
-  if (bill !== null && bill < 0) {
-    emit('failed', '繳費金額不能是負數')
-    return
-  }
-  const targetPct = numOrNull(targetDraft.value)
-  if (targetPct !== null && (targetPct < 0 || targetPct >= 100)) {
-    emit('failed', '半流動資金目標必須是 0–100%')
-    return
-  }
-  const mmTargetMonths = numOrNull(mmTargetMonthsDraft.value)
-  const mmMonthNow = numOrNull(mmMonthNowDraft.value)
-  for (const value of [mmTargetMonths, mmMonthNow]) {
-    if (value !== null && (value <= 0 || !Number.isInteger(value))) {
-      emit('failed', 'Money Master 月數必須是正整數')
-      return
+function saveSettings() {
+  props.run(async () => {
+    const salary = numOrNull(salaryDraft.value)
+    const ratePct = numOrNull(rateDraft.value)
+    if (ratePct !== null && (ratePct < 0 || ratePct >= 100)) {
+      throw new Error('開心Pool 利率必須是 0–100%')
     }
-  }
-  const mmTargetAmount = numOrNull(mmTargetAmountDraft.value)
-  if (mmTargetAmount !== null && mmTargetAmount <= 0) {
-    emit('failed', 'Money Master 目標金額必須是正數')
-    return
-  }
-  const goal1 = numOrNull(goal1Draft.value)
-  const goal2 = numOrNull(goal2Draft.value)
-  for (const amount of [goal1, goal2]) {
-    if (amount !== null && amount < 0) {
-      emit('failed', '目標金額不能是負數')
-      return
+    const bill = numOrNull(billDraft.value)
+    if (bill !== null && bill < 0) {
+      throw new Error('繳費金額不能是負數')
     }
-  }
-  const goal3Inflation = numOrNull(goal3InflationDraft.value)
-  const goal3Years = numOrNull(goal3YearsDraft.value)
-  const finalReplacement = numOrNull(finalReplacementDraft.value)
-  for (const value of [goal3Inflation, goal3Years, finalReplacement]) {
-    if (value !== null && value <= 0) {
-      emit('failed', '目標常數必須是正數')
-      return
+    const targetPct = numOrNull(targetDraft.value)
+    if (targetPct !== null && (targetPct < 0 || targetPct >= 100)) {
+      throw new Error('半流動資金目標必須是 0–100%')
     }
-  }
-  try {
+    const mmTargetMonths = numOrNull(mmTargetMonthsDraft.value)
+    const mmMonthNow = numOrNull(mmMonthNowDraft.value)
+    for (const value of [mmTargetMonths, mmMonthNow]) {
+      if (value !== null && (value <= 0 || !Number.isInteger(value))) {
+        throw new Error('Money Master 月數必須是正整數')
+      }
+    }
+    const mmTargetAmount = numOrNull(mmTargetAmountDraft.value)
+    if (mmTargetAmount !== null && mmTargetAmount <= 0) {
+      throw new Error('Money Master 目標金額必須是正數')
+    }
+    const goal1 = numOrNull(goal1Draft.value)
+    const goal2 = numOrNull(goal2Draft.value)
+    for (const amount of [goal1, goal2]) {
+      if (amount !== null && amount < 0) {
+        throw new Error('目標金額不能是負數')
+      }
+    }
+    const goal3Inflation = numOrNull(goal3InflationDraft.value)
+    const goal3Years = numOrNull(goal3YearsDraft.value)
+    const finalReplacement = numOrNull(finalReplacementDraft.value)
+    for (const value of [goal3Inflation, goal3Years, finalReplacement]) {
+      if (value !== null && value <= 0) {
+        throw new Error('目標常數必須是正數')
+      }
+    }
     await api.updateSettings({
       salary,
       pool_rate: ratePct === null ? null : ratePct / 100,
@@ -143,10 +135,7 @@ async function saveSettings() {
       calendar_private_id: privateCalendarDraft.value.trim() || null,
     })
     editingSettings.value = false
-    emit('saved', '已儲存設定')
-  } catch (err) {
-    emit('failed', errorMessage(err))
-  }
+  }, { message: '已儲存設定' })
 }
 
 const editingAsset = ref<ManualAsset | 'new' | null>(null)
@@ -175,41 +164,36 @@ function startAssetEdit(asset: ManualAsset | 'new') {
         }
 }
 
-async function saveAsset() {
-  const amount = numOrNull(assetDraft.value.amount)
-  if (assetDraft.value.label.trim() === '' || amount === null) {
-    emit('failed', '名稱及金額必填')
-    return
-  }
-  try {
+function saveAsset() {
+  const wasNew = editingAsset.value === 'new'
+  const target = editingAsset.value
+  props.run(async () => {
+    const amount = numOrNull(assetDraft.value.amount)
+    if (assetDraft.value.label.trim() === '' || amount === null) {
+      throw new Error('名稱及金額必填')
+    }
     const body: NewManualAsset = {
       label: assetDraft.value.label.trim(),
       liquidity: assetDraft.value.liquidity,
       amount,
       note: assetDraft.value.note.trim() || null,
     }
-    if (editingAsset.value === 'new') {
+    if (wasNew) {
       await api.createManualAsset(body)
-      editingAsset.value = null
-      emit('saved', '已新增結餘')
-    } else if (editingAsset.value) {
-      await api.updateManualAsset(editingAsset.value.id, body)
-      editingAsset.value = null
-      emit('saved', '已儲存結餘')
+    } else if (target && target !== 'new') {
+      await api.updateManualAsset(target.id, body)
     }
-  } catch (err) {
-    emit('failed', errorMessage(err))
-  }
+    editingAsset.value = null
+  }, {
+    message: wasNew ? '已新增結餘' : '已儲存結餘',
+  })
 }
 
-async function removeAsset(asset: ManualAsset) {
-  if (!window.confirm(`刪除結餘 ${asset.label}？`)) return
-  try {
-    await api.deleteManualAsset(asset.id)
-    emit('saved', `已刪除 ${asset.label}`)
-  } catch (err) {
-    emit('failed', errorMessage(err))
-  }
+function removeAsset(asset: ManualAsset) {
+  props.run(() => api.deleteManualAsset(asset.id), {
+    confirm: `刪除結餘 ${asset.label}？`,
+    message: `已刪除 ${asset.label}`,
+  })
 }
 
 // ----- 活期帳戶 -----
@@ -251,13 +235,14 @@ function startAccountEdit(account: CashAccount | 'new') {
         }
 }
 
-async function saveAccount() {
-  const amount = numOrNull(accountDraft.value.amount)
-  if (accountDraft.value.label.trim() === '' || amount === null) {
-    emit('failed', '名稱及金額必填')
-    return
-  }
-  try {
+function saveAccount() {
+  const wasNew = editingAccount.value === 'new'
+  const target = editingAccount.value
+  props.run(async () => {
+    const amount = numOrNull(accountDraft.value.amount)
+    if (accountDraft.value.label.trim() === '' || amount === null) {
+      throw new Error('名稱及金額必填')
+    }
     const body: NewCashAccount = {
       label: accountDraft.value.label.trim(),
       currency: accountDraft.value.currency,
@@ -265,29 +250,23 @@ async function saveAccount() {
       amount,
       is_default_receipt: accountDraft.value.is_default_receipt,
     }
-    if (editingAccount.value === 'new') {
+    if (wasNew) {
       await api.createCashAccount(body)
-      editingAccount.value = null
-      emit('saved', '已新增帳戶')
-    } else if (editingAccount.value) {
-      await api.updateCashAccount(editingAccount.value.id, body)
-      editingAccount.value = null
-      emit('saved', '已儲存帳戶')
+    } else if (target && target !== 'new') {
+      await api.updateCashAccount(target.id, body)
     }
-  } catch (err) {
-    emit('failed', errorMessage(err))
-  }
+    editingAccount.value = null
+  }, {
+    message: wasNew ? '已新增帳戶' : '已儲存帳戶',
+  })
 }
 
-async function removeAccount(account: CashAccount) {
-  if (!window.confirm(`刪除帳戶 ${account.label}？`)) return
-  try {
-    await api.deleteCashAccount(account.id)
-    emit('saved', `已刪除 ${account.label}`)
-  } catch (err) {
-    // 409 (broker rows, or other server-side refusals) surfaces the server message.
-    emit('failed', errorMessage(err))
-  }
+function removeAccount(account: CashAccount) {
+  // 409 (broker rows, or other server-side refusals) surfaces the server message.
+  props.run(() => api.deleteCashAccount(account.id), {
+    confirm: `刪除帳戶 ${account.label}？`,
+    message: `已刪除 ${account.label}`,
+  })
 }
 </script>
 

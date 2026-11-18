@@ -4,18 +4,16 @@ import DateInput from '../components/DateInput.vue'
 import RowActions from '../components/RowActions.vue'
 import {
   api,
-  errorMessage,
   type FamilyDeposit,
   type FamilyDepositSummary,
   type FamilyHolderSummary,
 } from '../api'
 import { fmtBank, fmtBankName, fmtMoney, googleCalendarUrl, todayIso } from '../format'
 import { numOrNull } from '../parse'
+import { usePage } from '../page'
 
 const summary = ref<FamilyDepositSummary | null>(null)
 const privateCalendarId = ref<string | null>(null)
-const message = ref('')
-const error = ref('')
 
 const DEFAULT_HOLDERS = ['媽媽', '爸爸', 'Irene']
 const holderOptions = computed(() => {
@@ -40,25 +38,33 @@ const upcoming = computed<FamilyDeposit[]>(() =>
     .sort((a, b) => a.end_date.localeCompare(b.end_date) || a.sort_order - b.sort_order),
 )
 
-async function load() {
-  error.value = ''
-  try {
-    const [summaryData, settingsData] = await Promise.all([
-      api.familyDepositSummary(),
-      api.getSettings(),
-    ])
-    summary.value = summaryData
-    privateCalendarId.value = settingsData.calendar_private_id
-    if (
-      selectedHolder.value !== null &&
-      !summary.value.holders.some((h) => h.holder === selectedHolder.value)
-    ) {
-      selectedHolder.value = null
-    }
-    await loadHistory()
-  } catch (err) {
-    error.value = errorMessage(err)
+async function fetchHistory() {
+  editing.value = null
+  const years = summary.value?.history_years ?? []
+  if (!years.includes(selectedYear.value)) {
+    selectedYear.value = years.at(-1) ?? selectedYear.value
   }
+  history.value = await api.listFamilyDeposits({ year: selectedYear.value, order: 'desc' })
+}
+
+const { message, error, reload, run } = usePage(async () => {
+  const [summaryData, settingsData] = await Promise.all([
+    api.familyDepositSummary(),
+    api.getSettings(),
+  ])
+  summary.value = summaryData
+  privateCalendarId.value = settingsData.calendar_private_id
+  if (
+    selectedHolder.value !== null &&
+    !summary.value.holders.some((h) => h.holder === selectedHolder.value)
+  ) {
+    selectedHolder.value = null
+  }
+  await fetchHistory()
+})
+
+function loadHistory() {
+  run(fetchHistory, { reload: false })
 }
 
 function overdue(deposit: FamilyDeposit): boolean {
@@ -110,15 +116,11 @@ function startNote(holder: FamilyHolderSummary) {
   noteDraft.value = holder.note ?? ''
 }
 
-async function saveNote(holder: string) {
-  try {
+function saveNote(holder: string) {
+  run(async () => {
     await api.updateFamilyHolderNote(holder, noteDraft.value.trim() || null)
     editingNote.value = null
-    message.value = '已儲存備註'
-    await load()
-  } catch (err) {
-    error.value = errorMessage(err)
-  }
+  }, { message: '已儲存備註' })
 }
 
 // ----- create / edit form -----
@@ -181,51 +183,43 @@ function startEdit(deposit: FamilyDeposit) {
   }
 }
 
-async function saveDeposit() {
-  const holder =
-    draft.value.holderChoice === '__other__' ? draft.value.holderOther.trim() : draft.value.holderChoice
-  if (!holder) {
-    error.value = '持有人必填'
-    return
-  }
-  const body = {
-    holder,
-    label: draft.value.label.trim() || null,
-    bank: draft.value.bank.trim() || null,
-    principal: numOrNull(draft.value.principal),
-    interest: numOrNull(draft.value.interest),
-    start_date: draft.value.start_date || null,
-    end_date: draft.value.end_date,
-    note: draft.value.note.trim() || null,
-  }
-  try {
+function saveDeposit() {
+  const wasEditing = editing.value !== null
+  run(async () => {
+    const holder =
+      draft.value.holderChoice === '__other__' ? draft.value.holderOther.trim() : draft.value.holderChoice
+    if (!holder) {
+      throw new Error('持有人必填')
+    }
+    const body = {
+      holder,
+      label: draft.value.label.trim() || null,
+      bank: draft.value.bank.trim() || null,
+      principal: numOrNull(draft.value.principal),
+      interest: numOrNull(draft.value.interest),
+      start_date: draft.value.start_date || null,
+      end_date: draft.value.end_date,
+      note: draft.value.note.trim() || null,
+    }
     if (editing.value) {
       await api.updateFamilyDeposit(editing.value.id, body)
-      message.value = '已儲存定期'
     } else {
       await api.createFamilyDeposit(body)
-      message.value = '已新增定期'
     }
     editing.value = null
     showForm.value = false
     draft.value = emptyDraft()
-    error.value = ''
-    await load()
-  } catch (err) {
-    error.value = errorMessage(err)
-  }
+  }, {
+    message: wasEditing ? '已儲存定期' : '已新增定期',
+  })
 }
 
-async function remove(deposit: FamilyDeposit) {
+function remove(deposit: FamilyDeposit) {
   const name = deposit.label ?? `#${deposit.id}`
-  if (!window.confirm(`刪除 ${deposit.holder} 的定期 ${name}（${deposit.end_date} 到期）？`)) return
-  try {
-    await api.deleteFamilyDeposit(deposit.id)
-    message.value = `已刪除定期 ${name}`
-    await load()
-  } catch (err) {
-    error.value = errorMessage(err)
-  }
+  run(() => api.deleteFamilyDeposit(deposit.id), {
+    confirm: `刪除 ${deposit.holder} 的定期 ${name}（${deposit.end_date} 到期）？`,
+    message: `已刪除定期 ${name}`,
+  })
 }
 
 // ----- 收訖 (record only — no bank-in, no month item) -----
@@ -244,26 +238,20 @@ function startReceive(deposit: FamilyDeposit) {
   }
 }
 
-async function saveReceive() {
+function saveReceive() {
   const current = receiving.value
   if (!current) return
-  const interest = numOrNull(current.interest)
-  if (current.interest !== '' && interest === null) {
-    error.value = '實收利息必須是數字'
-    return
-  }
-  try {
+  run(async () => {
+    const interest = numOrNull(current.interest)
+    if (current.interest !== '' && interest === null) {
+      throw new Error('實收利息必須是數字')
+    }
     await api.receiveFamilyDeposit(current.deposit.id, {
       received_at: current.received_at || undefined,
       interest: interest ?? undefined,
     })
     receiving.value = null
-    message.value = '已記錄收訖'
-    error.value = ''
-    await load()
-  } catch (err) {
-    error.value = errorMessage(err)
-  }
+  }, { message: '已記錄收訖' })
 }
 
 // ----- history -----
@@ -271,20 +259,7 @@ async function saveReceive() {
 const history = ref<FamilyDeposit[]>([])
 const selectedYear = ref<number>(new Date().getFullYear())
 
-async function loadHistory() {
-  editing.value = null
-  const years = summary.value?.history_years ?? []
-  if (!years.includes(selectedYear.value)) {
-    selectedYear.value = years.at(-1) ?? selectedYear.value
-  }
-  try {
-    history.value = await api.listFamilyDeposits({ year: selectedYear.value, order: 'desc' })
-  } catch (err) {
-    error.value = errorMessage(err)
-  }
-}
-
-onMounted(load)
+onMounted(reload)
 </script>
 
 <template>
@@ -524,7 +499,7 @@ onMounted(load)
     </div>
 
     <p v-if="message" class="ok">{{ message }}</p>
-    <p v-if="error" class="error">{{ error }}</p>
+    <p v-if="error" class="error">{{ error?.message }}</p>
   </section>
 </template>
 

@@ -1,25 +1,16 @@
 <script setup lang="ts">
-import { onMounted, ref, watch } from 'vue'
+import { computed, onMounted, ref, watch } from 'vue'
 import StockForm from '../components/StockForm.vue'
 import StockTable from '../components/StockTable.vue'
-import { api, errorMessage, type Market, type Stock } from '../api'
+import { api, type Market, type Stock } from '../api'
+import { usePage } from '../page'
 
 const props = defineProps<{ market: Market }>()
 
-const stocks = ref<Stock[]>([])
-const error = ref('')
-const message = ref('')
+const { data, message, error, reload, run } = usePage(() => api.listStocks(props.market))
+const stocks = computed(() => data.value ?? [])
 const showForm = ref(false)
 const editing = ref<Stock | null>(null)
-
-async function load() {
-  error.value = ''
-  try {
-    stocks.value = await api.listStocks(props.market)
-  } catch (err) {
-    error.value = errorMessage(err)
-  }
-}
 
 function toggleForm() {
   // While editing, the 新增…股票 button switches to a fresh create form instead of closing.
@@ -39,42 +30,29 @@ function startEdit(stock: Stock) {
 
 function onSaved(stock: Stock) {
   message.value = editing.value ? `已更新 ${stock.code}` : `已新增 ${stock.code}`
-  error.value = ''
   editing.value = null
   showForm.value = false
-  void load()
+  reload()
 }
 
-async function toggleHide(stock: Stock) {
-  error.value = ''
-  message.value = ''
-  try {
-    await api.updateStock(stock.id, { is_active: !stock.is_active })
-    message.value = stock.is_active ? `已隱藏 ${stock.code}` : `已顯示 ${stock.code}`
-    await load()
-  } catch (err) {
-    error.value = errorMessage(err)
-  }
+function toggleHide(stock: Stock) {
+  run(() => api.updateStock(stock.id, { is_active: !stock.is_active }), {
+    message: stock.is_active ? `已隱藏 ${stock.code}` : `已顯示 ${stock.code}`,
+  })
 }
 
-async function remove(stock: Stock) {
-  error.value = ''
-  message.value = ''
-  if (!window.confirm(`刪除 ${stock.code}？`)) return
-  try {
-    await api.deleteStock(stock.id)
-    message.value = `已刪除 ${stock.code}`
-    await load()
-  } catch (err) {
-    error.value = errorMessage(err)
-  }
+function remove(stock: Stock) {
+  run(() => api.deleteStock(stock.id), {
+    confirm: `刪除 ${stock.code}？`,
+    message: `已刪除 ${stock.code}`,
+  })
 }
 
-onMounted(load)
+onMounted(reload)
 watch(() => props.market, () => {
   editing.value = null
   showForm.value = false
-  void load()
+  reload()
 })
 </script>
 
@@ -93,7 +71,7 @@ watch(() => props.market, () => {
 
     <div class="card">
       <p v-if="message" class="ok">{{ message }}</p>
-      <p v-if="error" class="error">{{ error }}</p>
+      <p v-if="error" class="error">{{ error?.message }}</p>
 
       <StockTable :stocks="stocks" @hide="toggleHide" @edit="startEdit" @remove="remove" />
     </div>

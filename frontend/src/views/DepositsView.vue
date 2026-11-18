@@ -5,53 +5,41 @@ import DepositReceiveForm from '../components/DepositReceiveForm.vue'
 import DepositTable from '../components/DepositTable.vue'
 import {
   api,
-  errorMessage,
   type CashAccount,
   type Deposit,
   type DepositSummary,
 } from '../api'
 import { fmtBank, fmtMoney } from '../format'
+import { usePage } from '../page'
 
 const summary = ref<DepositSummary | null>(null)
 const accounts = ref<CashAccount[]>([])
 const privateCalendarId = ref<string | null>(null)
-const message = ref('')
-const error = ref('')
 const editing = ref<Deposit | null>(null)
 
-async function load() {
-  error.value = ''
-  try {
-    const [summaryData, accountsData, settingsData] = await Promise.all([
-      api.depositSummary(),
-      api.listCashAccounts(),
-      api.getSettings(),
-    ])
-    summary.value = summaryData
-    accounts.value = accountsData
-    privateCalendarId.value = settingsData.calendar_private_id
-  } catch (err) {
-    error.value = errorMessage(err)
-  }
-}
+const { message, error, reload, run } = usePage(async () => {
+  const [summaryData, accountsData, settingsData] = await Promise.all([
+    api.depositSummary(),
+    api.listCashAccounts(),
+    api.getSettings(),
+  ])
+  summary.value = summaryData
+  accounts.value = accountsData
+  privateCalendarId.value = settingsData.calendar_private_id
+})
 
-async function remove(deposit: Deposit) {
+function remove(deposit: Deposit) {
   const name = deposit.label ?? `#${deposit.id}`
-  if (!window.confirm(`刪除定期 ${name}（${deposit.end_date} 到期）？`)) return
-  try {
-    await api.deleteDeposit(deposit.id)
-    message.value = `已刪除定期 ${name}`
-    await load()
-  } catch (err) {
-    error.value = errorMessage(err)
-  }
+  run(() => api.deleteDeposit(deposit.id), {
+    confirm: `刪除定期 ${name}（${deposit.end_date} 到期）？`,
+    message: `已刪除定期 ${name}`,
+  })
 }
 
 function onSaved(deposit: Deposit) {
   message.value = `已儲存定期 #${deposit.id}`
-  error.value = ''
   editing.value = null
-  void load()
+  reload()
 }
 
 const receiving = ref<Deposit | null>(null)
@@ -59,11 +47,10 @@ const receiving = ref<Deposit | null>(null)
 function onReceived() {
   receiving.value = null
   message.value = '已記錄收訖'
-  error.value = ''
-  void load()
+  reload()
 }
 
-onMounted(load)
+onMounted(reload)
 </script>
 
 <template>
@@ -188,7 +175,7 @@ onMounted(load)
     </div>
 
     <p v-if="message" class="ok">{{ message }}</p>
-    <p v-if="error" class="error">{{ error }}</p>
+    <p v-if="error" class="error">{{ error?.message }}</p>
   </section>
 </template>
 

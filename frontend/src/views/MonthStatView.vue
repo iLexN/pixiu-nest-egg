@@ -2,7 +2,6 @@
 import { computed, onMounted, ref } from 'vue'
 import {
   api,
-  errorMessage,
   type AppSettings,
   type CashAccount,
   type ManualAsset,
@@ -13,6 +12,7 @@ import {
 import MonthDetailPanel from '../components/MonthDetailPanel.vue'
 import MonthSettingsPanel from '../components/MonthSettingsPanel.vue'
 import { fmtMoney, fmtMonth, fmtPercent, signClass, todayIso } from '../format'
+import { usePage } from '../page'
 
 const summary = ref<MonthSummary | null>(null)
 const months = ref<MonthStat[]>([])
@@ -20,12 +20,12 @@ const detail = ref<MonthDetail | null>(null)
 const settings = ref<AppSettings | null>(null)
 const assets = ref<ManualAsset[]>([])
 const accounts = ref<CashAccount[]>([])
-const message = ref('')
-const error = ref('')
 
 const currentYear = new Date().getFullYear()
 const year = ref(currentYear)
 const selectedMonth = ref<string | null>(null)
+
+const { message, error, reload, run } = usePage(load)
 
 const yearOptions = computed(() => {
   const set = new Set<number>([currentYear])
@@ -45,52 +45,42 @@ function yoyClass(value: number | null): string {
 }
 
 async function load() {
-  error.value = ''
-  try {
-    const [summaryData, monthsData, allMonths, settingsData, assetsData, accountsData] =
-      await Promise.all([
-        api.monthSummary(),
-        api.listMonths(year.value),
-        api.listMonths(),
-        api.getSettings(),
-        api.listManualAssets(),
-        api.listCashAccounts(),
-      ])
-    summary.value = summaryData
-    months.value = monthsData
-    latestStoredMonth.value = allMonths.at(-1)?.month ?? null
-    settings.value = settingsData
-    assets.value = assetsData
-    accounts.value = accountsData
-    if (!newMonth.value) newMonth.value = defaultNewMonth()
-    if (selectedMonth.value) {
-      detail.value = await api.monthDetail(selectedMonth.value)
-    }
-  } catch (err) {
-    error.value = errorMessage(err)
+  const [summaryData, monthsData, allMonths, settingsData, assetsData, accountsData] =
+    await Promise.all([
+      api.monthSummary(),
+      api.listMonths(year.value),
+      api.listMonths(),
+      api.getSettings(),
+      api.listManualAssets(),
+      api.listCashAccounts(),
+    ])
+  summary.value = summaryData
+  months.value = monthsData
+  latestStoredMonth.value = allMonths.at(-1)?.month ?? null
+  settings.value = settingsData
+  assets.value = assetsData
+  accounts.value = accountsData
+  if (!newMonth.value) newMonth.value = defaultNewMonth()
+  if (selectedMonth.value) {
+    detail.value = await api.monthDetail(selectedMonth.value)
   }
 }
 
-async function selectYear() {
-  try {
+function selectYear() {
+  run(async () => {
     months.value = await api.listMonths(year.value)
     if (selectedMonth.value && !selectedMonth.value.startsWith(`${year.value}-`)) {
       selectedMonth.value = null
       detail.value = null
     }
-  } catch (err) {
-    error.value = errorMessage(err)
-  }
+  }, { reload: false })
 }
 
-async function selectMonth(month: MonthStat) {
+function selectMonth(month: MonthStat) {
   selectedMonth.value = month.month
-  error.value = ''
-  try {
+  run(async () => {
     detail.value = await api.monthDetail(month.month)
-  } catch (err) {
-    error.value = errorMessage(err)
-  }
+  }, { reload: false })
 }
 
 // ----- 新增月份 -----
@@ -106,45 +96,33 @@ function defaultNewMonth(): string {
   return `${date.getFullYear()}-${`${date.getMonth() + 1}`.padStart(2, '0')}`
 }
 
-async function addMonth() {
+function addMonth() {
   const ym = newMonth.value || defaultNewMonth()
-  try {
+  run(async () => {
     // New months start live (即時); 重新擷取 freezes them at month close.
     await api.patchMonth(ym, { total_assets: null, liquid_assets: null })
-    message.value = `已新增 ${ym}`
-    error.value = ''
     newMonth.value = ''
-    await load()
+    await reload()
     const created = months.value.find((m) => m.month === `${ym}-01`)
-    if (created) await selectMonth(created)
-    else {
+    if (created) {
+      selectedMonth.value = created.month
+      detail.value = await api.monthDetail(created.month)
+    } else {
       selectedMonth.value = `${ym}-01`
       detail.value = await api.monthDetail(selectedMonth.value)
     }
-  } catch (err) {
-    error.value = errorMessage(err)
-  }
-}
-
-function onPanelSaved(text: string) {
-  message.value = text
-  error.value = ''
-  load()
-}
-
-function onPanelFailed(text: string) {
-  error.value = text
+  }, {
+    message: `已新增 ${ym}`,
+    reload: false,
+  })
 }
 
 function onPanelDeleted() {
-  message.value = `已刪除 ${fmtMonth(selectedMonth.value ?? '')}`
-  error.value = ''
   selectedMonth.value = null
   detail.value = null
-  load()
 }
 
-onMounted(load)
+onMounted(reload)
 </script>
 
 <template>
@@ -305,8 +283,7 @@ onMounted(load)
     <MonthDetailPanel
       v-if="detail"
       :detail="detail"
-      @saved="onPanelSaved"
-      @failed="onPanelFailed"
+      :run="run"
       @deleted="onPanelDeleted"
     />
 
@@ -316,12 +293,11 @@ onMounted(load)
       :accounts="accounts"
       :assets="assets"
       :year="year"
-      @saved="onPanelSaved"
-      @failed="onPanelFailed"
+      :run="run"
     />
 
     <p v-if="message" class="ok">{{ message }}</p>
-    <p v-if="error" class="error">{{ error }}</p>
+    <p v-if="error" class="error">{{ error?.message }}</p>
   </section>
 </template>
 

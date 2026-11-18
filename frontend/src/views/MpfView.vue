@@ -1,21 +1,12 @@
 <script setup lang="ts">
 import { computed, onMounted, ref } from 'vue'
-import { api, errorMessage, type MpfAccount, type MpfOverview } from '../api'
+import { api, type MpfAccount } from '../api'
 import { compareClass, fmtFigures, fmtMoney, fmtPercent, signClass } from '../format'
 import RowActions from '../components/RowActions.vue'
+import { usePage } from '../page'
 
-const overview = ref<MpfOverview | null>(null)
-const message = ref('')
-const error = ref('')
-
-async function load() {
-  error.value = ''
-  try {
-    overview.value = await api.mpfOverview()
-  } catch (err) {
-    error.value = errorMessage(err)
-  }
-}
+const { data, message, error, reload, run } = usePage(() => api.mpfOverview())
+const overview = computed(() => data.value)
 
 // ----- account editing -----
 
@@ -60,54 +51,46 @@ function startEdit(account: MpfAccount | 'new') {
         }
 }
 
-function parseAmount(field: 'contributions' | 'balance'): number | null {
+function parseAmount(field: 'contributions' | 'balance'): number {
   // type="number" inputs store numbers, empty ones stay ''.
   const raw = draft.value[field]
   const parsed = Number(raw)
   if (String(raw).trim() === '' || !Number.isFinite(parsed)) {
-    error.value = `${field === 'contributions' ? '總供款額' : '帳戶結存'}必須是數字`
-    return null
+    throw new Error(`${field === 'contributions' ? '總供款額' : '帳戶結存'}必須是數字`)
   }
   return parsed
 }
 
-async function saveAccount() {
-  const contributions = parseAmount('contributions')
-  const balance = parseAmount('balance')
-  if (contributions === null || balance === null) return
-  const body = {
-    label: draft.value.label.trim(),
-    trustee: draft.value.trustee.trim() || null,
-    contributions,
-    balance,
-    plan_name: draft.value.plan_name.trim() || null,
-    member_no: draft.value.member_no.trim() || null,
-  }
-  try {
-    if (editing.value === 'new') {
+function saveAccount() {
+  const wasNew = editing.value === 'new'
+  const target = editing.value
+  run(async () => {
+    const contributions = parseAmount('contributions')
+    const balance = parseAmount('balance')
+    const body = {
+      label: draft.value.label.trim(),
+      trustee: draft.value.trustee.trim() || null,
+      contributions,
+      balance,
+      plan_name: draft.value.plan_name.trim() || null,
+      member_no: draft.value.member_no.trim() || null,
+    }
+    if (wasNew) {
       await api.createMpfAccount(body)
-      message.value = '已新增 MPF 帳戶'
-    } else if (editing.value) {
-      await api.updateMpfAccount(editing.value.id, body)
-      message.value = '已儲存 MPF 帳戶'
+    } else if (target && target !== 'new') {
+      await api.updateMpfAccount(target.id, body)
     }
     editing.value = null
-    error.value = ''
-    await load()
-  } catch (err) {
-    error.value = errorMessage(err)
-  }
+  }, {
+    message: wasNew ? '已新增 MPF 帳戶' : '已儲存 MPF 帳戶',
+  })
 }
 
-async function removeAccount(account: MpfAccount) {
-  if (!window.confirm(`刪除 MPF 帳戶 ${account.label}？`)) return
-  try {
-    await api.deleteMpfAccount(account.id)
-    message.value = `已刪除 ${account.label}`
-    await load()
-  } catch (err) {
-    error.value = errorMessage(err)
-  }
+function removeAccount(account: MpfAccount) {
+  run(() => api.deleteMpfAccount(account.id), {
+    confirm: `刪除 MPF 帳戶 ${account.label}？`,
+    message: `已刪除 ${account.label}`,
+  })
 }
 
 // ----- note -----
@@ -120,15 +103,11 @@ function startNote() {
   noteLoaded.value = true
 }
 
-async function saveNote() {
-  try {
+function saveNote() {
+  run(async () => {
     await api.updateMpfNote(noteDraft.value.trim() || null)
     noteLoaded.value = false
-    message.value = '已儲存備註'
-    await load()
-  } catch (err) {
-    error.value = errorMessage(err)
-  }
+  }, { message: '已儲存備註' })
 }
 
 // ----- history -----
@@ -145,17 +124,13 @@ const historyRows = computed(() =>
   ),
 )
 
-async function removeHistory(id: number) {
-  if (!window.confirm('刪除這筆記錄？上月/最高數字會重新計算。')) return
-  try {
-    await api.deleteMpfHistory(id)
-    await load()
-  } catch (err) {
-    error.value = errorMessage(err)
-  }
+function removeHistory(id: number) {
+  run(() => api.deleteMpfHistory(id), {
+    confirm: '刪除這筆記錄？上月/最高數字會重新計算。',
+  })
 }
 
-onMounted(load)
+onMounted(reload)
 </script>
 
 <template>
@@ -346,7 +321,7 @@ onMounted(load)
     </div>
 
     <p v-if="message" class="ok">{{ message }}</p>
-    <p v-if="error" class="error">{{ error }}</p>
+    <p v-if="error" class="error">{{ error?.message }}</p>
   </section>
 </template>
 

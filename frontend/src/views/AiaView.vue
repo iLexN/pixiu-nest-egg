@@ -2,7 +2,6 @@
 import { onMounted, ref } from 'vue'
 import {
   api,
-  errorMessage,
   type AiaEvent,
   type AiaPolicy,
   type AiaPolicyWithEvents,
@@ -12,19 +11,13 @@ import { fmtMoney, fmtMonth, fmtPercent, signClass, shiftYearIso, todayIso } fro
 import { numOrNull } from '../parse'
 import DateInput from '../components/DateInput.vue'
 import RowActions from '../components/RowActions.vue'
+import { usePage } from '../page'
 
 const summary = ref<AiaSummary | null>(null)
-const message = ref('')
-const error = ref('')
 
-async function load() {
-  error.value = ''
-  try {
-    summary.value = await api.aiaSummary()
-  } catch (err) {
-    error.value = errorMessage(err)
-  }
-}
+const { message, error, reload, run } = usePage(async () => {
+  summary.value = await api.aiaSummary()
+})
 
 function flagLabel(policy: AiaPolicy): string {
   if (policy.excluded) return '不計入'
@@ -42,21 +35,15 @@ function startRateEdit() {
   editingRate.value = true
 }
 
-async function saveRate() {
-  const rate = numOrNull(rateDraft.value)
-  if (rate === null || rate <= 0) {
-    error.value = '匯率必須是正數'
-    return
-  }
-  try {
+function saveRate() {
+  run(async () => {
+    const rate = numOrNull(rateDraft.value)
+    if (rate === null || rate <= 0) {
+      throw new Error('匯率必須是正數')
+    }
     await api.updateFxRate('USD', rate)
     editingRate.value = false
-    message.value = '已更新匯率'
-    error.value = ''
-    await load()
-  } catch (err) {
-    error.value = errorMessage(err)
-  }
+  }, { message: '已更新匯率' })
 }
 
 // ----- policy add/edit form -----
@@ -112,52 +99,45 @@ function startPolicyEdit(policy: AiaPolicy | 'new') {
         }
 }
 
-async function savePolicy() {
-  const premium = numOrNull(policyDraft.value.premium_usd)
-  const value = numOrNull(policyDraft.value.value_usd)
-  const withdrew = numOrNull(policyDraft.value.withdrew_usd)
-  if (premium === null || value === null || withdrew === null) {
-    error.value = '已繳保費、現值及已提取必須是數字'
-    return
-  }
-  const body = {
-    label: policyDraft.value.label.trim(),
-    policy_no: policyDraft.value.policy_no.trim() || null,
-    next_pay_date: policyDraft.value.next_pay_date || null,
-    premium_usd: premium,
-    value_usd: value,
-    remaining_years: numOrNull(policyDraft.value.remaining_years),
-    withdrew_usd: withdrew,
-    note: policyDraft.value.note.trim() || null,
-    link: policyDraft.value.link.trim() || null,
-    excluded: policyDraft.value.excluded,
-    in_account: policyDraft.value.in_account,
-  }
-  try {
-    if (editingPolicy.value === 'new') {
+function savePolicy() {
+  const wasNew = editingPolicy.value === 'new'
+  const target = editingPolicy.value
+  run(async () => {
+    const premium = numOrNull(policyDraft.value.premium_usd)
+    const value = numOrNull(policyDraft.value.value_usd)
+    const withdrew = numOrNull(policyDraft.value.withdrew_usd)
+    if (premium === null || value === null || withdrew === null) {
+      throw new Error('已繳保費、現值及已提取必須是數字')
+    }
+    const body = {
+      label: policyDraft.value.label.trim(),
+      policy_no: policyDraft.value.policy_no.trim() || null,
+      next_pay_date: policyDraft.value.next_pay_date || null,
+      premium_usd: premium,
+      value_usd: value,
+      remaining_years: numOrNull(policyDraft.value.remaining_years),
+      withdrew_usd: withdrew,
+      note: policyDraft.value.note.trim() || null,
+      link: policyDraft.value.link.trim() || null,
+      excluded: policyDraft.value.excluded,
+      in_account: policyDraft.value.in_account,
+    }
+    if (wasNew) {
       await api.createAiaPolicy(body)
-      message.value = '已新增保單'
-    } else if (editingPolicy.value) {
-      await api.updateAiaPolicy(editingPolicy.value.id, body)
-      message.value = '已儲存保單'
+    } else if (target && target !== 'new') {
+      await api.updateAiaPolicy(target.id, body)
     }
     editingPolicy.value = null
-    error.value = ''
-    await load()
-  } catch (err) {
-    error.value = errorMessage(err)
-  }
+  }, {
+    message: wasNew ? '已新增保單' : '已儲存保單',
+  })
 }
 
-async function removePolicy(policy: AiaPolicy) {
-  if (!window.confirm(`刪除保單 ${policy.label}？其繳費/提取記錄會一併刪除。`)) return
-  try {
-    await api.deleteAiaPolicy(policy.id)
-    message.value = `已刪除 ${policy.label}`
-    await load()
-  } catch (err) {
-    error.value = errorMessage(err)
-  }
+function removePolicy(policy: AiaPolicy) {
+  run(() => api.deleteAiaPolicy(policy.id), {
+    confirm: `刪除保單 ${policy.label}？其繳費/提取記錄會一併刪除。`,
+    message: `已刪除 ${policy.label}`,
+  })
 }
 
 // ----- 繳費 / 提取 event forms -----
@@ -186,15 +166,14 @@ function startPay(policy: AiaPolicy) {
   }
 }
 
-async function savePay() {
+function savePay() {
   const current = paying.value
   if (!current) return
-  const amount = numOrNull(current.amount)
-  if (amount === null || amount <= 0) {
-    error.value = '金額必須是正數'
-    return
-  }
-  try {
+  run(async () => {
+    const amount = numOrNull(current.amount)
+    if (amount === null || amount <= 0) {
+      throw new Error('金額必須是正數')
+    }
     await api.createAiaEvent({
       policy_id: current.policy.id,
       kind: 'payment',
@@ -204,12 +183,7 @@ async function savePay() {
       note: current.note.trim() || null,
     })
     paying.value = null
-    message.value = '已記錄繳費 — 已繳保費、餘下年期及下期繳費日已更新'
-    error.value = ''
-    await load()
-  } catch (err) {
-    error.value = errorMessage(err)
-  }
+  }, { message: '已記錄繳費 — 已繳保費、餘下年期及下期繳費日已更新' })
 }
 
 const withdrawing = ref<{
@@ -223,15 +197,14 @@ function startWithdraw(policy: AiaPolicy) {
   withdrawing.value = { policy, event_date: todayIso(), amount: '', note: '' }
 }
 
-async function saveWithdraw() {
+function saveWithdraw() {
   const current = withdrawing.value
   if (!current) return
-  const amount = numOrNull(current.amount)
-  if (amount === null || amount <= 0) {
-    error.value = '金額必須是正數'
-    return
-  }
-  try {
+  run(async () => {
+    const amount = numOrNull(current.amount)
+    if (amount === null || amount <= 0) {
+      throw new Error('金額必須是正數')
+    }
     await api.createAiaEvent({
       policy_id: current.policy.id,
       kind: 'withdrawal',
@@ -240,24 +213,15 @@ async function saveWithdraw() {
       note: current.note.trim() || null,
     })
     withdrawing.value = null
-    message.value = '已記錄提取'
-    error.value = ''
-    await load()
-  } catch (err) {
-    error.value = errorMessage(err)
-  }
+  }, { message: '已記錄提取' })
 }
 
-async function removeEvent(policy: AiaPolicyWithEvents, event: AiaEvent) {
+function removeEvent(policy: AiaPolicyWithEvents, event: AiaEvent) {
   const kind = event.kind === 'payment' ? '繳費' : '提取'
-  if (!window.confirm(`刪除 ${event.event_date} 的${kind}記錄？保單數值會還原。`)) return
-  try {
-    await api.deleteAiaEvent(event.id)
-    message.value = `已刪除 ${policy.label} ${event.event_date} ${kind}`
-    await load()
-  } catch (err) {
-    error.value = errorMessage(err)
-  }
+  run(() => api.deleteAiaEvent(event.id), {
+    confirm: `刪除 ${event.event_date} 的${kind}記錄？保單數值會還原。`,
+    message: `已刪除 ${policy.label} ${event.event_date} ${kind}`,
+  })
 }
 
 function policiesWithEvents(): AiaPolicyWithEvents[] {
@@ -274,18 +238,14 @@ function startNote() {
   noteLoaded.value = true
 }
 
-async function saveNote() {
-  try {
+function saveNote() {
+  run(async () => {
     await api.updateAiaNote(noteDraft.value.trim() || null)
     noteLoaded.value = false
-    message.value = '已儲存備註'
-    await load()
-  } catch (err) {
-    error.value = errorMessage(err)
-  }
+  }, { message: '已儲存備註' })
 }
 
-onMounted(load)
+onMounted(reload)
 </script>
 
 <template>
@@ -567,7 +527,7 @@ onMounted(load)
     </div>
 
     <p v-if="message" class="ok">{{ message }}</p>
-    <p v-if="error" class="error">{{ error }}</p>
+    <p v-if="error" class="error">{{ error?.message }}</p>
   </section>
 </template>
 

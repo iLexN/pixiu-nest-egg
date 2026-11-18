@@ -287,3 +287,11 @@ endpoint (`service::<domain>::summary`, `service::mpf::overview`,
 `service::summary::build`) — owned by `service/`, called once by the route,
 and `pub use`-re-exported from it so the OpenAPI schema is unchanged.
 _Avoid_: view model, DTO
+
+## Frontend structure
+
+**Page lifecycle**: the frontend counterpart of the Page read model — the
+module that loads a page's read model and runs its write actions, owning
+the confirm-before-delete, success-message, error-report, and
+reload-after-write protocol around every write; one per page, one per form.
+_Avoid_: view model, page state, controller, store

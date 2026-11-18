@@ -2,7 +2,6 @@
 import { computed, reactive, ref, watch } from 'vue'
 import {
   api,
-  errorMessage,
   type ForecastCell,
   type ForecastItem,
   type ForecastItemKind,
@@ -13,10 +12,15 @@ import {
 import DepositForm from './DepositForm.vue'
 import { fmtMoney, signClass } from '../format'
 import { numOrNull } from '../parse'
+import type { PageRun } from '../page'
 
-const props = defineProps<{ forecast: ForecastResponse }>()
+const props = defineProps<{
+  forecast: ForecastResponse
+  /** The page's mutation runner — saves land on the page's message/error. */
+  run: PageRun
+}>()
 
-const emit = defineEmits<{ saved: [message: string]; failed: [message: string] }>()
+const emit = defineEmits<{ converted: [] }>()
 
 // ----- 預測 grid (the sheet's Overview!A20:H36) -----
 
@@ -102,15 +106,14 @@ watch(
   },
 )
 
-async function saveItem(item: ForecastItem) {
+function saveItem(item: ForecastItem) {
   const draft = drafts.value[item.id]
   if (!draft) return
-  const amount = numOrNull(draft.amount)
-  if (amount === null) {
-    emit('failed', '金額必須是數字')
-    return
-  }
-  try {
+  props.run(async () => {
+    const amount = numOrNull(draft.amount)
+    if (amount === null) {
+      throw new Error('金額必須是數字')
+    }
     await api.updateForecastItem(item.id, {
       amount,
       note: draft.note.trim() || null,
@@ -119,21 +122,17 @@ async function saveItem(item: ForecastItem) {
         ? { return_month: draft.return_month || null }
         : {}),
     })
-    emit('saved', '已更新預測')
-  } catch (err) {
-    emit('failed', errorMessage(err))
-  }
+  }, { message: '已更新預測' })
 }
 
-async function addItem() {
+function addItem() {
   const current = selected.value
   if (!current) return
-  const amount = numOrNull(newItem.amount)
-  if (amount === null) {
-    emit('failed', '金額必須是數字')
-    return
-  }
-  try {
+  props.run(async () => {
+    const amount = numOrNull(newItem.amount)
+    if (amount === null) {
+      throw new Error('金額必須是數字')
+    }
     await api.createForecastItem(current.month.slice(0, 7), {
       kind: current.kind,
       amount,
@@ -145,44 +144,36 @@ async function addItem() {
     newItem.amount = ''
     newItem.note = ''
     newItem.return_month = ''
-    emit('saved', '已新增預測項目')
-  } catch (err) {
-    emit('failed', errorMessage(err))
-  }
+  }, { message: '已新增預測項目' })
 }
 
-async function removeItem(item: ForecastItem) {
-  if (!window.confirm(`刪除預測項目（${fmtMoney(item.amount)}）？`)) return
-  try {
-    await api.deleteForecastItem(item.id)
-    emit('saved', '已刪除預測項目')
-  } catch (err) {
-    emit('failed', errorMessage(err))
-  }
+function removeItem(item: ForecastItem) {
+  props.run(() => api.deleteForecastItem(item.id), {
+    confirm: `刪除預測項目（${fmtMoney(item.amount)}）？`,
+    message: '已刪除預測項目',
+  })
 }
 
 /** 複製: duplicate the row's current inputs into the same month next year.
  * The target sits outside the 7-month window — stored but invisible until
  * the months slide forward, so the message names where it landed. */
-async function copyItem(item: ForecastItem) {
+function copyItem(item: ForecastItem) {
   const draft = drafts.value[item.id]
   if (!draft) return
-  const amount = numOrNull(draft.amount)
-  if (amount === null) {
-    emit('failed', '金額必須是數字')
-    return
-  }
   const target = `${Number(item.month.slice(0, 4)) + 1}-${item.month.slice(5, 7)}`
-  try {
+  props.run(async () => {
+    const amount = numOrNull(draft.amount)
+    if (amount === null) {
+      throw new Error('金額必須是數字')
+    }
     await api.createForecastItem(target, {
       kind: item.kind,
       amount,
       note: draft.note.trim() || undefined,
     })
-    emit('saved', `已複製到 ${target}`)
-  } catch (err) {
-    emit('failed', errorMessage(err))
-  }
+  }, {
+    message: `已複製到 ${target}`,
+  })
 }
 
 function startConvert(item: ForecastItem) {
@@ -191,7 +182,7 @@ function startConvert(item: ForecastItem) {
 
 function onConverted() {
   converting.value = null
-  emit('saved', '已轉為定期')
+  emit('converted')
 }
 </script>
 

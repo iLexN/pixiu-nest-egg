@@ -192,12 +192,6 @@ export class ApiError extends Error {
   }
 }
 
-/** The catch-body idiom: an ApiError already carries the server's message;
- * anything else is stringified. */
-export function errorMessage(err: unknown): string {
-  return err instanceof ApiError ? err.message : String(err)
-}
-
 /** Re-wrap a non-ApiError so form components treat every failure the same;
  * status 0 marks a transport/non-API failure. */
 export function toApiError(err: unknown): ApiError {

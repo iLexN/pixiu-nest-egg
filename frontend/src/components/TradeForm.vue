@@ -1,9 +1,10 @@
 <script setup lang="ts">
-import { computed, reactive, ref, watch } from 'vue'
-import { api, ApiError, toApiError, type Market, type Stock, type Trade, type TradeType } from '../api'
+import { computed, reactive, watch } from 'vue'
+import { api, type Market, type Stock, type Trade, type TradeType } from '../api'
 import FieldError from './FieldError.vue'
 import DateInput from './DateInput.vue'
 import { fmtMoney, fmtPrice, todayIso } from '../format'
+import { usePage } from '../page'
 
 const props = defineProps<{
   market: Market
@@ -38,8 +39,7 @@ function emptyForm(): FormState {
 }
 
 const form = reactive<FormState>(emptyForm())
-const error = ref<ApiError | null>(null)
-const saving = ref(false)
+const { error, busy, run } = usePage()
 
 watch(
   () => props.stocks,
@@ -105,10 +105,8 @@ const preview = computed(() => {
   return { fee, total, unitInclFee: shares === 0 ? null : total / shares }
 })
 
-async function submit() {
-  error.value = null
-  saving.value = true
-  try {
+function submit() {
+  run(async () => {
     const shares = num(form.shares) ?? 0
     const unitPrice = num(form.unit_price) ?? 0
     const note = String(form.note).trim() === '' ? null : String(form.note).trim()
@@ -143,11 +141,7 @@ async function submit() {
       Object.assign(form, emptyForm())
     }
     emit('saved', saved)
-  } catch (err) {
-    error.value = toApiError(err)
-  } finally {
-    saving.value = false
-  }
+  }, { reload: false })
 }
 </script>
 
@@ -220,7 +214,7 @@ async function submit() {
     <p v-if="error && error.fields.length === 0" class="error">{{ error.message }}</p>
 
     <div class="actions">
-      <button type="submit" :disabled="saving">{{ props.editing ? '儲存' : '新增' }}</button>
+      <button type="submit" :disabled="busy">{{ props.editing ? '儲存' : '新增' }}</button>
       <button v-if="props.editing" type="button" class="secondary" @click="emit('cancelled')">
         取消
       </button>

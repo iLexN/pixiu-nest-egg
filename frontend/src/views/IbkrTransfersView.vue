@@ -1,44 +1,25 @@
 <script setup lang="ts">
-import { computed, onMounted, ref } from 'vue'
-import { api, errorMessage, type IbkrTransfer } from '../api'
+import { computed, onMounted } from 'vue'
+import { api, type IbkrTransfer } from '../api'
+import { usePage } from '../page'
 import { fmtMoney } from '../format'
 
 // 股票 → 轉入記錄 (美股 only): the ibkr_transfers log with per-row delete —
 // a delete reverses the recorded cash movement exactly.
-const transfers = ref<IbkrTransfer[]>([])
-const message = ref('')
-const error = ref('')
+const { data, message, error, reload, run } = usePage(() => api.listIbkrTransfers())
 
+const transfers = computed(() => data.value ?? [])
 const total = computed(() => transfers.value.reduce((sum, t) => sum + t.amount_hkd, 0))
 
-async function load() {
-  error.value = ''
-  try {
-    transfers.value = await api.listIbkrTransfers()
-  } catch (err) {
-    error.value = errorMessage(err)
-  }
-}
-
-async function remove(transfer: IbkrTransfer) {
+function remove(transfer: IbkrTransfer) {
   const label = transfer.from_account_label ?? ''
-  if (
-    !window.confirm(
-      `刪除 ${transfer.transfer_date} ${label}轉入 ${fmtMoney(transfer.amount_hkd)}？`,
-    )
-  )
-    return
-  try {
-    await api.deleteIbkrTransfer(transfer.id)
-    message.value = `已刪除 ${transfer.transfer_date} 轉入 ${fmtMoney(transfer.amount_hkd)}`
-    error.value = ''
-    await load()
-  } catch (err) {
-    error.value = errorMessage(err)
-  }
+  run(() => api.deleteIbkrTransfer(transfer.id), {
+    confirm: `刪除 ${transfer.transfer_date} ${label}轉入 ${fmtMoney(transfer.amount_hkd)}？`,
+    message: `已刪除 ${transfer.transfer_date} 轉入 ${fmtMoney(transfer.amount_hkd)}`,
+  })
 }
 
-onMounted(load)
+onMounted(reload)
 </script>
 
 <template>
@@ -75,6 +56,6 @@ onMounted(load)
       </table>
     </div>
     <p v-if="message" class="ok">{{ message }}</p>
-    <p v-if="error" class="error">{{ error }}</p>
+    <p v-if="error" class="error">{{ error?.message }}</p>
   </section>
 </template>

@@ -5,13 +5,13 @@ import DividendReceiveForm from '../components/DividendReceiveForm.vue'
 import DividendTable from '../components/DividendTable.vue'
 import {
   api,
-  errorMessage,
   type Dividend,
   type DividendSummary,
   type Market,
   type SummaryStock,
 } from '../api'
 import { fmtMoney, fmtPercent } from '../format'
+import { usePage } from '../page'
 
 const props = defineProps<{ market: Market }>()
 
@@ -20,46 +20,35 @@ const stocks = ref<SummaryStock[]>([])
 const received = ref<Dividend[]>([])
 const year = ref<number | null>(new Date().getFullYear())
 const filterStockId = ref<number | null>(null)
-const message = ref('')
-const error = ref('')
 const editing = ref<Dividend | null>(null)
 const receiving = ref<Dividend | null>(null)
 const showForm = ref(false)
 
-async function load() {
-  error.value = ''
-  try {
-    const [dividendSummary, marketSummary] = await Promise.all([
-      api.dividendSummary(props.market),
-      api.summary(props.market),
-    ])
-    summary.value = dividendSummary
-    stocks.value = marketSummary.stocks
-    const years = dividendSummary.history_years
-    if (year.value !== null && !years.includes(year.value)) {
-      year.value = years.at(-1) ?? year.value
-    }
-    received.value = await api.listDividends({
-      market: props.market,
-      status: 'received',
-      stock_id: filterStockId.value ?? undefined,
-      year: year.value ?? undefined,
-      order: 'desc',
-    })
-  } catch (err) {
-    error.value = errorMessage(err)
+const { message, error, reload, run } = usePage(async () => {
+  const [dividendSummary, marketSummary] = await Promise.all([
+    api.dividendSummary(props.market),
+    api.summary(props.market),
+  ])
+  summary.value = dividendSummary
+  stocks.value = marketSummary.stocks
+  const years = dividendSummary.history_years
+  if (year.value !== null && !years.includes(year.value)) {
+    year.value = years.at(-1) ?? year.value
   }
-}
+  received.value = await api.listDividends({
+    market: props.market,
+    status: 'received',
+    stock_id: filterStockId.value ?? undefined,
+    year: year.value ?? undefined,
+    order: 'desc',
+  })
+})
 
-async function remove(dividend: Dividend) {
-  if (!window.confirm(`刪除 ${dividend.code}（${dividend.pay_date}）派息記錄？`)) return
-  try {
-    await api.deleteDividend(dividend.id)
-    message.value = `已刪除 ${dividend.code} 派息記錄`
-    await load()
-  } catch (err) {
-    error.value = errorMessage(err)
-  }
+function remove(dividend: Dividend) {
+  run(() => api.deleteDividend(dividend.id), {
+    confirm: `刪除 ${dividend.code}（${dividend.pay_date}）派息記錄？`,
+    message: `已刪除 ${dividend.code} 派息記錄`,
+  })
 }
 
 function toggleForm() {
@@ -81,11 +70,10 @@ function startEdit(dividend: Dividend) {
 
 function onSaved() {
   message.value = '已儲存派息記錄'
-  error.value = ''
   editing.value = null
   receiving.value = null
   showForm.value = false
-  void load()
+  reload()
 }
 
 const yearOptions = computed(() => summary.value?.history_years ?? [])
@@ -104,11 +92,11 @@ watch(() => props.market, () => {
   showForm.value = false
   year.value = new Date().getFullYear()
   filterStockId.value = null
-  void load()
+  reload()
 })
-watch([year, filterStockId], () => void load())
+watch([year, filterStockId], () => reload())
 
-onMounted(load)
+onMounted(reload)
 </script>
 
 <template>
@@ -189,7 +177,7 @@ onMounted(load)
     </div>
 
     <p v-if="message" class="ok">{{ message }}</p>
-    <p v-if="error" class="error">{{ error }}</p>
+    <p v-if="error" class="error">{{ error?.message }}</p>
   </section>
 </template>
 

@@ -2,7 +2,6 @@
 import { computed, onMounted, ref } from 'vue'
 import {
   api,
-  errorMessage,
   type Bond,
   type BondCoupon,
   type BondSummary,
@@ -12,11 +11,10 @@ import { fmtMoney, fmtPercent, signClass, todayIso } from '../format'
 import { numOrNull } from '../parse'
 import DateInput from '../components/DateInput.vue'
 import RowActions from '../components/RowActions.vue'
+import { usePage } from '../page'
 
 const summary = ref<BondSummary | null>(null)
 const accounts = ref<CashAccount[]>([])
-const message = ref('')
-const error = ref('')
 
 /** HKD cash accounts a bond receipt can bank into. */
 const cashAccounts = computed(() =>
@@ -28,19 +26,14 @@ const defaultHkdAccount = computed(() =>
   cashAccounts.value.find((account) => account.is_default_receipt),
 )
 
-async function load() {
-  error.value = ''
-  try {
-    const [summaryData, accountsData] = await Promise.all([
-      api.bondSummary(),
-      api.listCashAccounts(),
-    ])
-    summary.value = summaryData
-    accounts.value = accountsData
-  } catch (err) {
-    error.value = errorMessage(err)
-  }
-}
+const { message, error, reload, run } = usePage(async () => {
+  const [summaryData, accountsData] = await Promise.all([
+    api.bondSummary(),
+    api.listCashAccounts(),
+  ])
+  summary.value = summaryData
+  accounts.value = accountsData
+})
 
 function couponStatusLabel(coupon: BondCoupon): string {
   if (coupon.status === 'RECEIVED') return '已收'
@@ -83,44 +76,37 @@ function startBondEdit(bond: Bond | 'new') {
         }
 }
 
-async function saveBond() {
-  const principal = Number(bondDraft.value.principal)
-  if (!Number.isFinite(principal)) {
-    error.value = '本金必須是數字'
-    return
-  }
-  const body = {
-    label: bondDraft.value.label.trim(),
-    issue_no: bondDraft.value.issue_no.trim() || null,
-    principal,
-    maturity_date: bondDraft.value.maturity_date,
-    note: bondDraft.value.note.trim() || null,
-  }
-  try {
-    if (editingBond.value === 'new') {
+function saveBond() {
+  const wasNew = editingBond.value === 'new'
+  const target = editingBond.value
+  run(async () => {
+    const principal = Number(bondDraft.value.principal)
+    if (!Number.isFinite(principal)) {
+      throw new Error('本金必須是數字')
+    }
+    const body = {
+      label: bondDraft.value.label.trim(),
+      issue_no: bondDraft.value.issue_no.trim() || null,
+      principal,
+      maturity_date: bondDraft.value.maturity_date,
+      note: bondDraft.value.note.trim() || null,
+    }
+    if (wasNew) {
       await api.createBond(body)
-      message.value = '已新增債券'
-    } else if (editingBond.value) {
-      await api.updateBond(editingBond.value.id, body)
-      message.value = '已儲存債券'
+    } else if (target && target !== 'new') {
+      await api.updateBond(target.id, body)
     }
     editingBond.value = null
-    error.value = ''
-    await load()
-  } catch (err) {
-    error.value = errorMessage(err)
-  }
+  }, {
+    message: wasNew ? '已新增債券' : '已儲存債券',
+  })
 }
 
-async function removeBond(bond: Bond) {
-  if (!window.confirm(`刪除債券 ${bond.label}？其付息記錄會一併刪除。`)) return
-  try {
-    await api.deleteBond(bond.id)
-    message.value = `已刪除 ${bond.label}`
-    await load()
-  } catch (err) {
-    error.value = errorMessage(err)
-  }
+function removeBond(bond: Bond) {
+  run(() => api.deleteBond(bond.id), {
+    confirm: `刪除債券 ${bond.label}？其付息記錄會一併刪除。`,
+    message: `已刪除 ${bond.label}`,
+  })
 }
 
 // ----- coupon add/edit form -----
@@ -161,45 +147,39 @@ function startCouponEdit(bondId: number, coupon: BondCoupon | 'new') {
         }
 }
 
-async function saveCoupon() {
+function saveCoupon() {
   const editing = editingCoupon.value
   if (!editing) return
-  const ratePct = numOrNull(couponDraft.value.annual_rate)
-  const body = {
-    bond_id: editing.bondId,
-    pay_date: couponDraft.value.pay_date,
-    fixing_date: couponDraft.value.fixing_date || null,
-    // The form takes 年息率 as a percent (4); the API stores the fraction.
-    annual_rate: ratePct === null ? null : ratePct / 100,
-    per_10k: numOrNull(couponDraft.value.per_10k),
-    received_amount: numOrNull(couponDraft.value.received_amount),
-    note: couponDraft.value.note.trim() || null,
-  }
-  try {
-    if (editing.coupon === 'new') {
+  const wasNew = editing.coupon === 'new'
+  const target = editing.coupon
+  run(async () => {
+    const ratePct = numOrNull(couponDraft.value.annual_rate)
+    const body = {
+      bond_id: editing.bondId,
+      pay_date: couponDraft.value.pay_date,
+      fixing_date: couponDraft.value.fixing_date || null,
+      // The form takes 年息率 as a percent (4); the API stores the fraction.
+      annual_rate: ratePct === null ? null : ratePct / 100,
+      per_10k: numOrNull(couponDraft.value.per_10k),
+      received_amount: numOrNull(couponDraft.value.received_amount),
+      note: couponDraft.value.note.trim() || null,
+    }
+    if (wasNew) {
       await api.createCoupon(body)
-      message.value = '已新增付息'
-    } else {
-      await api.updateCoupon(editing.coupon.id, body)
-      message.value = '已儲存付息'
+    } else if (target !== 'new') {
+      await api.updateCoupon(target.id, body)
     }
     editingCoupon.value = null
-    error.value = ''
-    await load()
-  } catch (err) {
-    error.value = errorMessage(err)
-  }
+  }, {
+    message: wasNew ? '已新增付息' : '已儲存付息',
+  })
 }
 
-async function removeCoupon(coupon: BondCoupon) {
-  if (!window.confirm(`刪除 ${coupon.pay_date} 的付息記錄？`)) return
-  try {
-    await api.deleteCoupon(coupon.id)
-    message.value = `已刪除 ${coupon.pay_date} 付息`
-    await load()
-  } catch (err) {
-    error.value = errorMessage(err)
-  }
+function removeCoupon(coupon: BondCoupon) {
+  run(() => api.deleteCoupon(coupon.id), {
+    confirm: `刪除 ${coupon.pay_date} 的付息記錄？`,
+    message: `已刪除 ${coupon.pay_date} 付息`,
+  })
 }
 
 // ----- 釐定息率 (待定 -> pending) -----
@@ -217,28 +197,22 @@ function startFix(coupon: BondCoupon) {
   }
 }
 
-async function saveFix() {
+function saveFix() {
   const current = fixing.value
   if (!current) return
-  const ratePct = numOrNull(current.rate)
-  const per10k = numOrNull(current.per_10k)
-  if (ratePct === null || per10k === null) {
-    error.value = '年息率及每1萬利息均須填寫'
-    return
-  }
-  try {
+  run(async () => {
+    const ratePct = numOrNull(current.rate)
+    const per10k = numOrNull(current.per_10k)
+    if (ratePct === null || per10k === null) {
+      throw new Error('年息率及每1萬利息均須填寫')
+    }
     await api.updateCoupon(current.coupon.id, {
       fixing_date: current.fixing_date || null,
       annual_rate: ratePct / 100,
       per_10k: per10k,
     })
     fixing.value = null
-    message.value = '已釐定息率'
-    error.value = ''
-    await load()
-  } catch (err) {
-    error.value = errorMessage(err)
-  }
+  }, { message: '已釐定息率' })
 }
 
 // ----- 收訖 (pending -> received) -----
@@ -257,15 +231,14 @@ function startReceive(coupon: BondCoupon) {
   }
 }
 
-async function saveReceive() {
+function saveReceive() {
   const current = receiving.value
   if (!current) return
-  const amount = numOrNull(current.amount)
-  if (amount === null) {
-    error.value = '實收金額必須是數字'
-    return
-  }
-  try {
+  run(async () => {
+    const amount = numOrNull(current.amount)
+    if (amount === null) {
+      throw new Error('實收金額必須是數字')
+    }
     await api.updateCoupon(current.coupon.id, {
       received_amount: amount,
       ...(current.account_id === null
@@ -273,12 +246,7 @@ async function saveReceive() {
         : { account_id: current.account_id }),
     })
     receiving.value = null
-    message.value = '已記錄收訖'
-    error.value = ''
-    await load()
-  } catch (err) {
-    error.value = errorMessage(err)
-  }
+  }, { message: '已記錄收訖' })
 }
 
 // ----- bond 收訖 (principal return -> received, optional bank-in) -----
@@ -299,15 +267,14 @@ function startBondReceive(bond: Bond) {
   }
 }
 
-async function saveBondReceive() {
+function saveBondReceive() {
   const current = receivingBond.value
   if (!current) return
-  const creditAmount = numOrNull(current.credit_amount)
-  if (current.account_id !== null && creditAmount === null) {
-    error.value = '存入金額必須是數字'
-    return
-  }
-  try {
+  run(async () => {
+    const creditAmount = numOrNull(current.credit_amount)
+    if (current.account_id !== null && creditAmount === null) {
+      throw new Error('存入金額必須是數字')
+    }
     await api.receiveBond(current.bond.id, {
       received_at: current.received_at || undefined,
       ...(current.account_id === null
@@ -316,15 +283,10 @@ async function saveBondReceive() {
       credit_amount: creditAmount ?? undefined,
     })
     receivingBond.value = null
-    message.value = '已記錄本金收訖'
-    error.value = ''
-    await load()
-  } catch (err) {
-    error.value = errorMessage(err)
-  }
+  }, { message: '已記錄本金收訖' })
 }
 
-onMounted(load)
+onMounted(reload)
 </script>
 
 <template>
@@ -654,7 +616,7 @@ onMounted(load)
     </div>
 
     <p v-if="message" class="ok">{{ message }}</p>
-    <p v-if="error" class="error">{{ error }}</p>
+    <p v-if="error" class="error">{{ error?.message }}</p>
   </section>
 </template>
 

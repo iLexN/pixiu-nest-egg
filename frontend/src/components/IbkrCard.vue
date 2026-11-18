@@ -1,17 +1,21 @@
 <script setup lang="ts">
 import { computed, ref } from 'vue'
-import { api, ApiError, type CashAccount, type IbkrBlock } from '../api'
+import { api, type CashAccount, type IbkrBlock } from '../api'
 import { fmtMoney, fmtPercent, signClass, todayIso } from '../format'
+import { usePage } from '../page'
 
 const props = defineProps<{ ibkr: IbkrBlock }>()
 const emit = defineEmits<{ saved: [IbkrBlock] }>()
+
+// A form instance: saves and 轉入 runs never reload here — `saved` lets the
+// parent reload (總覽) or swap the block (美股 → 總覽).
+const { error, run } = usePage()
 
 // The 美股 sheet's A1:B5 block — three editable cash/total inputs via PATCH
 // /api/ibkr; the derived figures (computed total, net vs transferred) come
 // back in the response. 轉入 lives on its own form below, through
 // POST /api/ibkr/transfers.
 const editing = ref(false)
-const error = ref('')
 const draft = ref({
   now_value: '' as number | '',
   hkd_cash: '' as number | '',
@@ -36,19 +40,16 @@ function field(raw: number | '', label: string): number | null {
   return parsed
 }
 
-async function save() {
-  try {
+function save() {
+  run(async () => {
     const updated = await api.updateIbkr({
       now_value: field(draft.value.now_value, 'IBKR App 現值'),
       hkd_cash: field(draft.value.hkd_cash, 'HKD 現金'),
       usd_cash: field(draft.value.usd_cash, 'USD 現金'),
     })
     editing.value = false
-    error.value = ''
     emit('saved', updated)
-  } catch (err) {
-    error.value = err instanceof ApiError || err instanceof Error ? err.message : String(err)
-  }
+  }, { reload: false })
 }
 
 // ----- 轉入 (bank→IBKR cash movement) -----
@@ -76,8 +77,8 @@ const transferAmount = computed(() => {
   return Number.isFinite(amount) ? amount : null
 })
 
-async function startTransfer() {
-  try {
+function startTransfer() {
+  run(async () => {
     // Fresh balances so the before→after preview is current.
     bankAccounts.value = await api.listCashAccounts()
     transferDraft.value = {
@@ -87,10 +88,7 @@ async function startTransfer() {
         hkdBanks.value.find((a) => a.label === 'HS')?.id ?? hkdBanks.value[0]?.id ?? 0,
     }
     transferring.value = true
-    error.value = ''
-  } catch (err) {
-    error.value = err instanceof ApiError || err instanceof Error ? err.message : String(err)
-  }
+  }, { reload: false })
 }
 
 /** Refetch the block; `saved` lets the parent reload (總覽) or swap the
@@ -99,24 +97,20 @@ async function refresh() {
   emit('saved', await api.ibkr())
 }
 
-async function saveTransfer() {
-  const amount = transferAmount.value
-  if (amount === null || amount <= 0) {
-    error.value = '轉入金額必須是正數'
-    return
-  }
-  try {
+function saveTransfer() {
+  run(async () => {
+    const amount = transferAmount.value
+    if (amount === null || amount <= 0) {
+      throw new Error('轉入金額必須是正數')
+    }
     await api.createIbkrTransfer({
       amount_hkd: amount,
       transfer_date: transferDraft.value.transfer_date || undefined,
       from_account_id: transferDraft.value.from_account_id || undefined,
     })
     transferring.value = false
-    error.value = ''
     await refresh()
-  } catch (err) {
-    error.value = err instanceof ApiError || err instanceof Error ? err.message : String(err)
-  }
+  }, { reload: false })
 }
 </script>
 
@@ -213,7 +207,7 @@ async function saveTransfer() {
         </p>
       </form>
     </template>
-    <p v-if="error" class="error">{{ error }}</p>
+    <p v-if="error" class="error">{{ error?.message }}</p>
   </section>
 </template>
 

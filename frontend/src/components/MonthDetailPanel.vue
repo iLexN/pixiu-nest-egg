@@ -2,7 +2,6 @@
 import { computed, ref, watch } from 'vue'
 import {
   api,
-  errorMessage,
   type MonthDetail,
   type MonthItem,
   type MonthItemCategory,
@@ -11,13 +10,10 @@ import {
 } from '../api'
 import { fmtMoney, fmtMonth, signClass, todayIso } from '../format'
 import { numOrNull } from '../parse'
+import type { PageRun } from '../page'
 
-const props = defineProps<{ detail: MonthDetail }>()
-const emit = defineEmits<{
-  saved: [text: string]
-  failed: [text: string]
-  deleted: []
-}>()
+const props = defineProps<{ detail: MonthDetail; run: PageRun }>()
+const emit = defineEmits<{ deleted: [] }>()
 
 // History rows never derive live (the backend keeps their NULL totals as
 // absent), so re-snapshotting or unfreezing only applies from this month on.
@@ -96,7 +92,7 @@ function startEdit() {
 // month (after an item save, say) must not clobber in-flight figure edits.
 watch(() => props.detail.month.month, startEdit, { immediate: true })
 
-async function saveMonth() {
+function saveMonth() {
   const patch: MonthStatPatch = {
     start_cash: numOrNull(monthDraft.value.start_cash),
     salary: numOrNull(monthDraft.value.salary),
@@ -104,44 +100,37 @@ async function saveMonth() {
     pool_input: numOrNull(monthDraft.value.pool_input) ?? 0,
     note: monthDraft.value.note.trim() || null,
   }
-  try {
-    await api.patchMonth(props.detail.month.month, patch)
-    emit('saved', '已儲存月份')
-  } catch (err) {
-    emit('failed', errorMessage(err))
-  }
+  props.run(() => api.patchMonth(props.detail.month.month, patch), {
+    message: '已儲存月份',
+  })
 }
 
-async function recapture() {
-  try {
-    await api.patchMonth(props.detail.month.month, { recapture: true })
-    emit('saved', '已重新擷取月初及即時總數')
-  } catch (err) {
-    emit('failed', errorMessage(err))
-  }
+function recapture() {
+  props.run(() => api.patchMonth(props.detail.month.month, { recapture: true }), {
+    message: '已重新擷取月初及即時總數',
+  })
 }
 
-async function goLive() {
-  try {
-    await api.patchMonth(props.detail.month.month, {
-      total_assets: null,
-      liquid_assets: null,
-    })
-    emit('saved', '已改為即時計算')
-  } catch (err) {
-    emit('failed', errorMessage(err))
-  }
+function goLive() {
+  props.run(
+    () =>
+      api.patchMonth(props.detail.month.month, {
+        total_assets: null,
+        liquid_assets: null,
+      }),
+    { message: '已改為即時計算' },
+  )
 }
 
-async function removeMonth() {
+function removeMonth() {
   const month = props.detail.month.month
-  if (!window.confirm(`刪除 ${fmtMonth(month)}？其項目會一併刪除。`)) return
-  try {
+  props.run(async () => {
     await api.deleteMonth(month)
     emit('deleted')
-  } catch (err) {
-    emit('failed', errorMessage(err))
-  }
+  }, {
+    confirm: `刪除 ${fmtMonth(month)}？其項目會一併刪除。`,
+    message: `已刪除 ${fmtMonth(month)}`,
+  })
 }
 
 // ----- items -----
@@ -169,15 +158,14 @@ function startItemEdit(item: MonthItem) {
   }
 }
 
-async function saveItem() {
+function saveItem() {
   const item = editingItem.value
   if (!item) return
-  const amount = numOrNull(itemDraft.value.amount)
-  if (amount === null) {
-    emit('failed', '金額必須是數字')
-    return
-  }
-  try {
+  props.run(async () => {
+    const amount = numOrNull(itemDraft.value.amount)
+    if (amount === null) {
+      throw new Error('金額必須是數字')
+    }
     await api.updateMonthItem(item.id, {
       label: itemDraft.value.label.trim() || null,
       amount,
@@ -186,20 +174,14 @@ async function saveItem() {
       note: itemDraft.value.note.trim() || null,
     })
     editingItem.value = null
-    emit('saved', '已儲存項目')
-  } catch (err) {
-    emit('failed', errorMessage(err))
-  }
+  }, { message: '已儲存項目' })
 }
 
-async function removeItem(item: MonthItem) {
-  if (!window.confirm(`刪除項目 ${item.label ?? item.amount}？`)) return
-  try {
-    await api.deleteMonthItem(item.id)
-    emit('saved', '已刪除項目')
-  } catch (err) {
-    emit('failed', errorMessage(err))
-  }
+function removeItem(item: MonthItem) {
+  props.run(() => api.deleteMonthItem(item.id), {
+    confirm: `刪除項目 ${item.label ?? item.amount}？`,
+    message: '已刪除項目',
+  })
 }
 
 const newItem = ref<{
@@ -216,13 +198,12 @@ const newItem = ref<{
   note: '',
 })
 
-async function addItem() {
-  const amount = numOrNull(newItem.value.amount)
-  if (amount === null) {
-    emit('failed', '金額必須是數字')
-    return
-  }
-  try {
+function addItem() {
+  props.run(async () => {
+    const amount = numOrNull(newItem.value.amount)
+    if (amount === null) {
+      throw new Error('金額必須是數字')
+    }
     await api.createMonthItem(props.detail.month.month, {
       category: newItem.value.category,
       label: newItem.value.label.trim() || null,
@@ -238,42 +219,32 @@ async function addItem() {
       exclude_from_living: false,
       note: '',
     }
-    emit('saved', '已新增項目')
-  } catch (err) {
-    emit('failed', errorMessage(err))
-  }
+  }, { message: '已新增項目' })
 }
 
-async function acceptSuggestion(suggestion: MonthSuggestion) {
-  try {
-    await api.createMonthItem(props.detail.month.month, {
-      category: suggestion.category,
-      label: suggestion.label,
-      amount: suggestion.amount,
-      auto_key: suggestion.auto_key,
-    })
-    emit('saved', '已接受建議')
-  } catch (err) {
-    emit('failed', errorMessage(err))
-  }
+function acceptSuggestion(suggestion: MonthSuggestion) {
+  props.run(
+    () =>
+      api.createMonthItem(props.detail.month.month, {
+        category: suggestion.category,
+        label: suggestion.label,
+        amount: suggestion.amount,
+        auto_key: suggestion.auto_key,
+      }),
+    { message: '已接受建議' },
+  )
 }
 
-async function dismissSuggestion(suggestion: MonthSuggestion) {
-  try {
-    await api.dismissMonthItem(props.detail.month.month, suggestion.auto_key)
-    emit('saved', '已忽略建議')
-  } catch (err) {
-    emit('failed', errorMessage(err))
-  }
+function dismissSuggestion(suggestion: MonthSuggestion) {
+  props.run(() => api.dismissMonthItem(props.detail.month.month, suggestion.auto_key), {
+    message: '已忽略建議',
+  })
 }
 
-async function undismissSuggestion(suggestion: MonthSuggestion) {
-  try {
-    await api.undismissMonthItem(props.detail.month.month, suggestion.auto_key)
-    emit('saved', '已取消忽略')
-  } catch (err) {
-    emit('failed', errorMessage(err))
-  }
+function undismissSuggestion(suggestion: MonthSuggestion) {
+  props.run(() => api.undismissMonthItem(props.detail.month.month, suggestion.auto_key), {
+    message: '已取消忽略',
+  })
 }
 </script>
 

@@ -1,9 +1,10 @@
 <script setup lang="ts">
 import { computed, onMounted, reactive, ref, watch } from 'vue'
-import { api, ApiError, toApiError, type CashAccount, type Deposit, type ForecastItem } from '../api'
+import { api, type CashAccount, type Deposit, type ForecastItem } from '../api'
 import FieldError from './FieldError.vue'
 import DateInput from './DateInput.vue'
 import { fmtMoney, todayIso } from '../format'
+import { usePage } from '../page'
 
 const props = defineProps<{
   editing: Deposit | null
@@ -40,14 +41,20 @@ function emptyForm(): FormState {
 }
 
 const form = reactive<FormState>(emptyForm())
-const error = ref<ApiError | null>(null)
-const saving = ref(false)
 
 // 扣自: the HKD bank accounts the principal can be debited from (create
 // and convert only — an edit never re-syncs the stored debit).
 const debitAccounts = ref<CashAccount[]>([])
 const debitAccountId = ref<number | null>(null)
 const debitTouched = ref(false)
+
+// A form instance: the loader fetches the 扣自 accounts; `busy` gates submit.
+const { error, busy, reload, run } = usePage(async () => {
+  debitAccounts.value = (await api.listCashAccounts()).filter(
+    (account) => account.currency === 'HKD' && account.role === 'bank',
+  )
+  if (!debitTouched.value) debitAccountId.value = defaultDebitAccount()
+})
 
 function defaultDebitAccount(): number | null {
   const labelled = (label: string) =>
@@ -65,16 +72,7 @@ watch(
   },
 )
 
-onMounted(async () => {
-  try {
-    debitAccounts.value = (await api.listCashAccounts()).filter(
-      (account) => account.currency === 'HKD' && account.role === 'bank',
-    )
-    if (!debitTouched.value) debitAccountId.value = defaultDebitAccount()
-  } catch (err) {
-    error.value = toApiError(err)
-  }
-})
+onMounted(reload)
 
 watch(
   () => props.editing,
@@ -145,10 +143,8 @@ const preview = computed(() => {
   return { total: (principal ?? 0) + (interest ?? 0) }
 })
 
-async function submit() {
-  error.value = null
-  saving.value = true
-  try {
+function submit() {
+  run(async () => {
     // The form takes rate as a percent (2.8); the API stores the fraction.
     const ratePct = num(form.rate)
     const payload = {
@@ -173,11 +169,7 @@ async function submit() {
       Object.assign(form, emptyForm())
     }
     emit('saved', saved)
-  } catch (err) {
-    error.value = toApiError(err)
-  } finally {
-    saving.value = false
-  }
+  }, { reload: false })
 }
 </script>
 
@@ -275,7 +267,7 @@ async function submit() {
     <p v-if="error && error.fields.length === 0" class="error">{{ error.message }}</p>
 
     <div class="actions">
-      <button type="submit" :disabled="saving">{{ props.editing ? '儲存' : '新增' }}</button>
+      <button type="submit" :disabled="busy">{{ props.editing ? '儲存' : '新增' }}</button>
       <button
         v-if="props.editing || props.converting"
         type="button"

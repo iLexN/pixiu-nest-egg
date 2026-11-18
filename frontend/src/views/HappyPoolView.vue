@@ -1,29 +1,32 @@
 <script setup lang="ts">
 import { computed, onMounted, ref } from 'vue'
-import { api, errorMessage, type MonthSummary, type MonthYearSummary } from '../api'
+import { api, type MonthYearSummary } from '../api'
+import { usePage } from '../page'
 import { fmtMoney } from '../format'
 
-const summary = ref<MonthSummary | null>(null)
-const error = ref('')
+const { data, error, reload, run } = usePage(() => api.monthSummary())
+const summary = computed(() => data.value)
 const copiedYear = ref<number | null>(null)
 
 /** Tab-separated plain numbers so a paste into Google Sheets fills adjacent cells. */
-async function copyRow(year: MonthYearSummary) {
+function copyRow(year: MonthYearSummary) {
   const cells = [
     year.pool_balance,
     year.pool_income,
     year.pool_input_sum,
     year.entertainment_sum,
   ].map((v) => v.toFixed(2))
-  try {
-    await navigator.clipboard.writeText([String(year.year), ...cells].join('\t'))
+  run(async () => {
+    try {
+      await navigator.clipboard.writeText([String(year.year), ...cells].join('\t'))
+    } catch (err) {
+      throw new Error(`複製失敗: ${err instanceof Error ? err.message : String(err)}`)
+    }
     copiedYear.value = year.year
     setTimeout(() => {
       if (copiedYear.value === year.year) copiedYear.value = null
     }, 1500)
-  } catch (err) {
-    error.value = `複製失敗: ${err instanceof Error ? err.message : String(err)}`
-  }
+  }, { reload: false })
 }
 
 /** Years with any pool activity, oldest first — all-zero years stay hidden. */
@@ -34,21 +37,11 @@ const years = computed(() =>
   ),
 )
 
-async function load() {
-  error.value = ''
-  try {
-    summary.value = await api.monthSummary()
-  } catch (err) {
-    summary.value = null
-    error.value = errorMessage(err)
-  }
-}
-
-onMounted(load)
+onMounted(reload)
 </script>
 
 <template>
-  <p v-if="error" class="error">{{ error }}</p>
+  <p v-if="error" class="error">{{ error?.message }}</p>
 
   <template v-if="summary">
     <div class="card">

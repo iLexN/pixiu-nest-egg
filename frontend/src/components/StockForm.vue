@@ -1,7 +1,8 @@
 <script setup lang="ts">
-import { reactive, ref, watch } from 'vue'
-import { api, ApiError, toApiError, type Market, type Stock } from '../api'
+import { reactive, watch } from 'vue'
+import { api, type Market, type Stock } from '../api'
 import FieldError from './FieldError.vue'
+import { usePage } from '../page'
 
 const props = defineProps<{
   market: Market
@@ -42,8 +43,7 @@ function emptyForm(): FormState {
 }
 
 const form = reactive<FormState>(emptyForm())
-const error = ref<ApiError | null>(null)
-const saving = ref(false)
+const { error, busy, run } = usePage()
 
 watch(
   () => props.editing,
@@ -85,10 +85,8 @@ function optionalNumber(value: string | number | null): number | null {
   return Number.isFinite(parsed) ? parsed : null
 }
 
-async function submit() {
-  error.value = null
-  saving.value = true
-  try {
+function submit() {
+  run(async () => {
     const payload = {
       code: String(form.code).trim(),
       ticker: optional(form.ticker),
@@ -106,11 +104,7 @@ async function submit() {
       : await api.createStock({ market: props.market, ...payload })
     if (!props.editing) Object.assign(form, emptyForm())
     emit('saved', saved)
-  } catch (err) {
-    error.value = toApiError(err)
-  } finally {
-    saving.value = false
-  }
+  }, { reload: false })
 }
 </script>
 
@@ -168,7 +162,7 @@ async function submit() {
     </div>
     <p v-if="error && error.fields.length === 0" class="error">{{ error.message }}</p>
     <div class="actions">
-      <button type="submit" :disabled="saving">{{ props.editing ? '儲存' : '新增' }}</button>
+      <button type="submit" :disabled="busy">{{ props.editing ? '儲存' : '新增' }}</button>
       <button v-if="props.editing" type="button" class="secondary" @click="emit('cancelled')">
         取消
       </button>

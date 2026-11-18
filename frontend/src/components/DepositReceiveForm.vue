@@ -1,8 +1,9 @@
 <script setup lang="ts">
 import { computed, onMounted, ref } from 'vue'
-import { api, errorMessage, type CashAccount, type Deposit } from '../api'
+import { api, type CashAccount, type Deposit } from '../api'
 import { fmtMoney, todayIso } from '../format'
 import { numOrNull } from '../parse'
+import { usePage } from '../page'
 
 const props = defineProps<{
   deposit: Deposit
@@ -33,8 +34,9 @@ function defaultAccount(): number | null {
 const received_at = ref(todayIso())
 const interest = ref<string | number>(props.deposit.interest ?? '')
 const account_id = ref<number | null>(defaultAccount())
-const error = ref('')
 const formEl = ref<HTMLFormElement | null>(null)
+
+const { error, run } = usePage()
 
 onMounted(() => formEl.value?.scrollIntoView({ behavior: 'smooth', block: 'start' }))
 
@@ -44,22 +46,19 @@ const receivePreview = computed(
     (props.deposit.principal ?? 0) + (numOrNull(interest.value) ?? props.deposit.interest ?? 0),
 )
 
-async function save() {
-  const parsed = numOrNull(interest.value)
-  if (interest.value !== '' && parsed === null) {
-    error.value = '實收利息必須是數字'
-    return
-  }
-  try {
+function save() {
+  run(async () => {
+    const parsed = numOrNull(interest.value)
+    if (interest.value !== '' && parsed === null) {
+      throw new Error('實收利息必須是數字')
+    }
     const deposit = await api.receiveDeposit(props.deposit.id, {
       received_at: received_at.value || undefined,
       interest: parsed ?? undefined,
       ...(account_id.value === null ? { bank_in: false } : { account_id: account_id.value }),
     })
     emit('saved', deposit)
-  } catch (err) {
-    error.value = errorMessage(err)
-  }
+  }, { reload: false })
 }
 </script>
 
@@ -86,7 +85,7 @@ async function save() {
     <p v-if="account_id !== null" class="muted">
       存入 {{ fmtMoney(receivePreview) }}（本金 + 實收利息）
     </p>
-    <p v-if="error" class="error">{{ error }}</p>
+    <p v-if="error" class="error">{{ error?.message }}</p>
     <div class="form-actions">
       <button type="submit">收訖</button>
       <button type="button" class="link" @click="emit('cancelled')">取消</button>

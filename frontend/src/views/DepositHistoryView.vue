@@ -3,7 +3,8 @@ import { onMounted, ref } from 'vue'
 import DepositForm from '../components/DepositForm.vue'
 import DepositReceiveForm from '../components/DepositReceiveForm.vue'
 import DepositTable from '../components/DepositTable.vue'
-import { api, errorMessage, type CashAccount, type Deposit } from '../api'
+import { api, type CashAccount, type Deposit } from '../api'
+import { usePage } from '../page'
 
 const showForm = ref(false)
 const editing = ref<Deposit | null>(null)
@@ -13,46 +14,35 @@ const accounts = ref<CashAccount[]>([])
 const history = ref<Deposit[]>([])
 const historyYears = ref<number[]>([])
 const selectedYear = ref<number>(new Date().getFullYear())
-const message = ref('')
-const error = ref('')
 
-async function load() {
-  error.value = ''
-  try {
-    const [summary, accountsData] = await Promise.all([
-      api.depositSummary(),
-      api.listCashAccounts(),
-    ])
-    historyYears.value = summary.history_years
-    accounts.value = accountsData
-    if (!historyYears.value.includes(selectedYear.value)) {
-      selectedYear.value = historyYears.value.at(-1) ?? selectedYear.value
-    }
-    await loadHistory()
-  } catch (err) {
-    error.value = errorMessage(err)
-  }
-}
-
-async function loadHistory() {
+async function fetchHistory() {
   editing.value = null
-  try {
-    history.value = await api.listDeposits({ year: selectedYear.value, order: 'desc' })
-  } catch (err) {
-    error.value = errorMessage(err)
-  }
+  history.value = await api.listDeposits({ year: selectedYear.value, order: 'desc' })
 }
 
-async function remove(deposit: Deposit) {
-  const name = deposit.label ?? `#${deposit.id}`
-  if (!window.confirm(`刪除定期 ${name}（${deposit.end_date} 到期）？`)) return
-  try {
-    await api.deleteDeposit(deposit.id)
-    message.value = `已刪除定期 ${name}`
-    await load()
-  } catch (err) {
-    error.value = errorMessage(err)
+const { message, error, reload, run } = usePage(async () => {
+  const [summary, accountsData] = await Promise.all([
+    api.depositSummary(),
+    api.listCashAccounts(),
+  ])
+  historyYears.value = summary.history_years
+  accounts.value = accountsData
+  if (!historyYears.value.includes(selectedYear.value)) {
+    selectedYear.value = historyYears.value.at(-1) ?? selectedYear.value
   }
+  await fetchHistory()
+})
+
+function loadHistory() {
+  run(fetchHistory, { reload: false })
+}
+
+function remove(deposit: Deposit) {
+  const name = deposit.label ?? `#${deposit.id}`
+  run(() => api.deleteDeposit(deposit.id), {
+    confirm: `刪除定期 ${name}（${deposit.end_date} 到期）？`,
+    message: `已刪除定期 ${name}`,
+  })
 }
 
 function toggleForm() {
@@ -73,20 +63,18 @@ function startEdit(deposit: Deposit) {
 
 function onSaved(deposit: Deposit) {
   message.value = `已儲存定期 #${deposit.id}`
-  error.value = ''
   editing.value = null
   showForm.value = false
-  void load()
+  reload()
 }
 
 function onReceived() {
   message.value = '已記錄收訖'
-  error.value = ''
   receiving.value = null
-  void load()
+  reload()
 }
 
-onMounted(load)
+onMounted(reload)
 </script>
 
 <template>
@@ -133,7 +121,7 @@ onMounted(load)
     </div>
 
     <p v-if="message" class="ok">{{ message }}</p>
-    <p v-if="error" class="error">{{ error }}</p>
+    <p v-if="error" class="error">{{ error?.message }}</p>
   </section>
 </template>
 

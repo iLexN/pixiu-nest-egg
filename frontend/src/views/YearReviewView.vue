@@ -2,28 +2,17 @@
 import { computed, onMounted, ref } from 'vue'
 import {
   api,
-  errorMessage,
   type YearReviewPatch,
-  type YearReviewResponse,
   type YearReviewRow,
 } from '../api'
 import { fmtMoney, fmtPercent, signClass } from '../format'
+import { usePage } from '../page'
 
-const response = ref<YearReviewResponse | null>(null)
-const error = ref('')
+const { data, error, reload, run } = usePage(() => api.yearReview())
+const response = computed(() => data.value)
 const years = computed(() => response.value?.years ?? [])
 
-async function load() {
-  error.value = ''
-  try {
-    response.value = await api.yearReview()
-  } catch (err) {
-    response.value = null
-    error.value = errorMessage(err)
-  }
-}
-
-onMounted(load)
+onMounted(reload)
 
 type EditField = keyof YearReviewPatch
 
@@ -162,38 +151,33 @@ function startEdit(row: YearReviewRow, field: EditField, current: number | null)
   draft.value = current === null ? '' : String(current)
 }
 
-async function saveEdit(row: YearReviewRow, field: EditField) {
-  const text = String(draft.value).trim()
-  const parsed = text === '' ? null : Number(text)
-  if (parsed !== null && !Number.isFinite(parsed)) {
-    error.value = '數值必須是數字'
-    return
-  }
-  // sold_pl, the invested adjustment, and raise may legitimately be negative.
-  if (
-    parsed !== null &&
-    parsed < 0 &&
-    field !== 'sold_pl' &&
-    field !== 'invested_adjustment' &&
-    field !== 'raise'
-  ) {
-    error.value = '數值必須是非負數字'
-    return
-  }
-  try {
+function saveEdit(row: YearReviewRow, field: EditField) {
+  run(async () => {
+    const text = String(draft.value).trim()
+    const parsed = text === '' ? null : Number(text)
+    if (parsed !== null && !Number.isFinite(parsed)) {
+      throw new Error('數值必須是數字')
+    }
+    // sold_pl, the invested adjustment, and raise may legitimately be negative.
+    if (
+      parsed !== null &&
+      parsed < 0 &&
+      field !== 'sold_pl' &&
+      field !== 'invested_adjustment' &&
+      field !== 'raise'
+    ) {
+      throw new Error('數值必須是非負數字')
+    }
     await api.updateYearReview(row.year, { [field]: parsed })
     editingCell.value = null
-    await load()
-  } catch (err) {
-    error.value = errorMessage(err)
-  }
+  })
 }
 </script>
 
 <template>
   <section class="card">
     <h3>回顧</h3>
-    <p v-if="error" class="error">{{ error }}</p>
+    <p v-if="error" class="error">{{ error?.message }}</p>
     <p class="muted">
       收入、invested 調整、投資P/L 與歷史債券/定期為手動或匯入凍結值（*），點擊可修改；月薪增幅由月結薪金自動計算，（*）時為手動覆寫。
       美股數字為 USD；混合回報率按已存的 USD→HKD 匯率折算美股部分，未設匯率時顯示 —。
