@@ -9,6 +9,7 @@ import {
   type MonthSuggestion,
 } from '../api'
 import { fmtMoney, fmtMonth, signClass, todayIso } from '../format'
+import InlineForm from './InlineForm.vue'
 import { numOrNull } from '../parse'
 import type { PageRun } from '../page'
 
@@ -251,7 +252,7 @@ function undismissSuggestion(suggestion: MonthSuggestion) {
 <template>
   <div class="card">
     <h3>{{ fmtMonth(detail.month.month) }}</h3>
-    <form class="inline-form" @submit.prevent="saveMonth">
+    <InlineForm @submit="saveMonth">
       <label>
         月初
         <input v-model="monthDraft.start_cash" type="number" step="any" inputmode="decimal" />
@@ -289,15 +290,15 @@ function undismissSuggestion(suggestion: MonthSuggestion) {
         Note
         <input v-model="monthDraft.note" />
       </label>
-      <div class="form-actions">
+      <template #actions>
         <button type="submit">儲存</button>
         <template v-if="selectedIsCurrentOrLater">
           <button type="button" class="link" @click="recapture">重新擷取月初/總數/流動</button>
           <button type="button" class="link" @click="goLive">改為即時</button>
         </template>
         <button type="button" class="link danger" @click="removeMonth">刪除月份</button>
-      </div>
-    </form>
+      </template>
+    </InlineForm>
     <p class="muted totals-hint">
       總數 {{ fmtMoney(detail.month.total_assets) || '—'
       }}<template v-if="detail.month.total_assets_live">（即時）</template> · 流動資產
@@ -416,8 +417,7 @@ function undismissSuggestion(suggestion: MonthSuggestion) {
       </table>
     </div>
 
-    <form class="inline-form" @submit.prevent="addItem">
-      <h4>新增項目</h4>
+    <InlineForm title="新增項目" @submit="addItem">
       <label>
         類別
         <select v-model="newItem.category">
@@ -440,10 +440,10 @@ function undismissSuggestion(suggestion: MonthSuggestion) {
         <input v-model="newItem.exclude_from_living" type="checkbox" />
         不計入生活支出
       </label>
-      <div class="form-actions">
+      <template #actions>
         <button type="submit">新增項目</button>
-      </div>
-    </form>
+      </template>
+    </InlineForm>
   </div>
 </template>
 
@@ -471,28 +471,6 @@ function undismissSuggestion(suggestion: MonthSuggestion) {
 /* Pending interest components (deposit not yet 收訖): preview only. */
 .pending-interest td {
   opacity: 0.55;
-}
-.inline-form {
-  display: grid;
-  grid-template-columns: repeat(auto-fit, minmax(10rem, 1fr));
-  gap: 0.75rem;
-  margin-top: 1rem;
-}
-.inline-form h4 {
-  grid-column: 1 / -1;
-  margin: 0;
-}
-.inline-form label {
-  display: flex;
-  flex-direction: column;
-  font-size: 0.8rem;
-  gap: 0.2rem;
-}
-.form-actions {
-  grid-column: 1 / -1;
-  display: flex;
-  gap: 0.5rem;
-  align-items: center;
 }
 .totals-hint {
   margin: 0.5rem 0;

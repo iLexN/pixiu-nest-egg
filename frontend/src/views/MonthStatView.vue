@@ -9,6 +9,7 @@ import {
   type MonthStat,
   type MonthSummary,
 } from '../api'
+import InlineForm from '../components/InlineForm.vue'
 import MonthDetailPanel from '../components/MonthDetailPanel.vue'
 import MonthSettingsPanel from '../components/MonthSettingsPanel.vue'
 import { fmtMoney, fmtMonth, fmtPercent, signClass, todayIso } from '../format'
@@ -269,15 +270,15 @@ onMounted(reload)
         </tbody>
       </table>
 
-      <form class="inline-form" @submit.prevent="addMonth">
+      <InlineForm @submit="addMonth">
         <label>
           新增月份
           <input v-model="newMonth" type="month" :placeholder="defaultNewMonth()" />
         </label>
-        <div class="form-actions">
+        <template #actions>
           <button type="submit">新增月份</button>
-        </div>
-      </form>
+        </template>
+      </InlineForm>
     </div>
 
     <MonthDetailPanel
@@ -347,23 +348,5 @@ onMounted(reload)
 }
 .live-value {
   font-style: italic;
-}
-.inline-form {
-  display: grid;
-  grid-template-columns: repeat(auto-fit, minmax(10rem, 1fr));
-  gap: 0.75rem;
-  margin-top: 1rem;
-}
-.inline-form label {
-  display: flex;
-  flex-direction: column;
-  font-size: 0.8rem;
-  gap: 0.2rem;
-}
-.form-actions {
-  grid-column: 1 / -1;
-  display: flex;
-  gap: 0.5rem;
-  align-items: center;
 }
 </style>

@@ -10,6 +10,7 @@ import {
 import { fmtMoney, fmtPercent, signClass, todayIso } from '../format'
 import { numOrNull } from '../parse'
 import DateInput from '../components/DateInput.vue'
+import InlineForm from '../components/InlineForm.vue'
 import RowActions from '../components/RowActions.vue'
 import { usePage } from '../page'
 
@@ -403,8 +404,12 @@ onMounted(reload)
       </p>
       <button type="button" class="link" @click="startBondEdit('new')">新增債券</button>
 
-      <form v-if="editingBond" class="inline-form" @submit.prevent="saveBond">
-        <h4>{{ editingBond === 'new' ? '新增債券' : `編輯 ${editingBond.label}` }}</h4>
+      <InlineForm
+        v-if="editingBond"
+        :title="editingBond === 'new' ? '新增債券' : `編輯 ${editingBond.label}`"
+        @submit="saveBond"
+        @cancel="editingBond = null"
+      >
         <label>
           名稱
           <input v-model="bondDraft.label" required />
@@ -425,14 +430,14 @@ onMounted(reload)
           備註
           <input v-model="bondDraft.note" />
         </label>
-        <div class="form-actions">
-          <button type="submit">儲存</button>
-          <button type="button" class="link" @click="editingBond = null">取消</button>
-        </div>
-      </form>
+      </InlineForm>
 
-      <form v-if="editingCoupon" class="inline-form" @submit.prevent="saveCoupon">
-        <h4>{{ editingCoupon.coupon === 'new' ? '新增付息' : '編輯付息' }}</h4>
+      <InlineForm
+        v-if="editingCoupon"
+        :title="editingCoupon.coupon === 'new' ? '新增付息' : '編輯付息'"
+        @submit="saveCoupon"
+        @cancel="editingCoupon = null"
+      >
         <label>
           付息日
           <DateInput v-model="couponDraft.pay_date" required />
@@ -468,14 +473,15 @@ onMounted(reload)
           備註
           <input v-model="couponDraft.note" />
         </label>
-        <div class="form-actions">
-          <button type="submit">儲存</button>
-          <button type="button" class="link" @click="editingCoupon = null">取消</button>
-        </div>
-      </form>
+      </InlineForm>
 
-      <form v-if="fixing" class="inline-form" @submit.prevent="saveFix">
-        <h4>釐定息率 — {{ fixing.coupon.pay_date }}</h4>
+      <InlineForm
+        v-if="fixing"
+        :title="`釐定息率 — ${fixing.coupon.pay_date}`"
+        submit-label="釐定"
+        @submit="saveFix"
+        @cancel="fixing = null"
+      >
         <label>
           釐定日
           <DateInput v-model="fixing.fixing_date" />
@@ -488,14 +494,15 @@ onMounted(reload)
           每1萬利息
           <input v-model="fixing.per_10k" type="number" step="any" inputmode="decimal" required />
         </label>
-        <div class="form-actions">
-          <button type="submit">釐定</button>
-          <button type="button" class="link" @click="fixing = null">取消</button>
-        </div>
-      </form>
+      </InlineForm>
 
-      <form v-if="receiving" class="inline-form" @submit.prevent="saveReceive">
-        <h4>收訖 — {{ receiving.coupon.pay_date }}</h4>
+      <InlineForm
+        v-if="receiving"
+        :title="`收訖 — ${receiving.coupon.pay_date}`"
+        submit-label="收訖"
+        @submit="saveReceive"
+        @cancel="receiving = null"
+      >
         <label>
           實收金額
           <input v-model="receiving.amount" type="number" step="any" inputmode="decimal" required />
@@ -509,16 +516,15 @@ onMounted(reload)
             </option>
           </select>
         </label>
-        <div class="form-actions">
-          <button type="submit">收訖</button>
-          <button type="button" class="link" @click="receiving = null">取消</button>
-        </div>
-      </form>
+      </InlineForm>
 
-      <form v-if="receivingBond" class="inline-form" @submit.prevent="saveBondReceive">
-        <h4>
-          本金收訖 — {{ receivingBond.bond.label }}（{{ receivingBond.bond.maturity_date }} 到期）
-        </h4>
+      <InlineForm
+        v-if="receivingBond"
+        :title="`本金收訖 — ${receivingBond.bond.label}（${receivingBond.bond.maturity_date} 到期）`"
+        submit-label="收訖"
+        @submit="saveBondReceive"
+        @cancel="receivingBond = null"
+      >
         <label>
           收訖日
           <input v-model="receivingBond.received_at" type="date" required />
@@ -541,11 +547,7 @@ onMounted(reload)
             inputmode="decimal"
           />
         </label>
-        <div class="form-actions">
-          <button type="submit">收訖</button>
-          <button type="button" class="link" @click="receivingBond = null">取消</button>
-        </div>
-      </form>
+      </InlineForm>
     </div>
 
     <div v-if="summary && summary.matured.length" class="card">
@@ -659,32 +661,6 @@ onMounted(reload)
 }
 .unreceived {
   color: var(--negative, #b91c1c);
-}
-.inline-form {
-  display: grid;
-  grid-template-columns: repeat(auto-fit, minmax(10rem, 1fr));
-  gap: 0.75rem;
-  margin-top: 1rem;
-}
-.inline-form h4 {
-  grid-column: 1 / -1;
-  margin: 0;
-}
-.inline-form label {
-  display: flex;
-  flex-direction: column;
-  font-size: 0.8rem;
-  gap: 0.2rem;
-}
-.inline-form label.checkbox {
-  flex-direction: row;
-  align-items: center;
-  gap: 0.4rem;
-}
-.form-actions {
-  grid-column: 1 / -1;
-  display: flex;
-  gap: 0.5rem;
 }
 .hints p {
   margin: 0;

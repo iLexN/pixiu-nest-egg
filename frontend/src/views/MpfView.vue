@@ -2,6 +2,7 @@
 import { computed, onMounted, ref } from 'vue'
 import { api, type MpfAccount } from '../api'
 import { compareClass, fmtFigures, fmtMoney, fmtPercent, signClass } from '../format'
+import InlineForm from '../components/InlineForm.vue'
 import RowActions from '../components/RowActions.vue'
 import { usePage } from '../page'
 
@@ -231,8 +232,12 @@ onMounted(reload)
 
       <button type="button" class="link" @click="startEdit('new')">新增帳戶</button>
 
-      <form v-if="editing" class="account-form" @submit.prevent="saveAccount">
-        <h4>{{ editing === 'new' ? '新增帳戶' : `編輯 ${editing.label}` }}</h4>
+      <InlineForm
+        v-if="editing"
+        :title="editing === 'new' ? '新增帳戶' : `編輯 ${editing.label}`"
+        @submit="saveAccount"
+        @cancel="editing = null"
+      >
         <label>
           帳戶
           <input v-model="draft.label" required />
@@ -257,11 +262,7 @@ onMounted(reload)
           成員編號
           <input v-model="draft.member_no" />
         </label>
-        <div class="form-actions">
-          <button type="submit">儲存</button>
-          <button type="button" class="link" @click="editing = null">取消</button>
-        </div>
-      </form>
+      </InlineForm>
     </div>
 
     <div v-if="overview" class="card">
@@ -347,27 +348,6 @@ onMounted(reload)
 .total-card strong {
   font-size: 1.05rem;
   font-weight: 650;
-}
-.account-form {
-  display: grid;
-  grid-template-columns: repeat(auto-fit, minmax(10rem, 1fr));
-  gap: 0.75rem;
-  margin-top: 1rem;
-}
-.account-form h4 {
-  grid-column: 1 / -1;
-  margin: 0;
-}
-.account-form label {
-  display: flex;
-  flex-direction: column;
-  font-size: 0.8rem;
-  gap: 0.2rem;
-}
-.form-actions {
-  grid-column: 1 / -1;
-  display: flex;
-  gap: 0.5rem;
 }
 .note-text {
   white-space: pre-line;

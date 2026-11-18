@@ -10,6 +10,7 @@ import {
 import { fmtMoney, fmtMonth, fmtPercent, signClass, shiftYearIso, todayIso } from '../format'
 import { numOrNull } from '../parse'
 import DateInput from '../components/DateInput.vue'
+import InlineForm from '../components/InlineForm.vue'
 import RowActions from '../components/RowActions.vue'
 import { usePage } from '../page'
 
@@ -356,8 +357,12 @@ onMounted(reload)
       </table>
       <button type="button" class="link" @click="startPolicyEdit('new')">新增保單</button>
 
-      <form v-if="editingPolicy" class="inline-form" @submit.prevent="savePolicy">
-        <h4>{{ editingPolicy === 'new' ? '新增保單' : `編輯 ${editingPolicy.label}` }}</h4>
+      <InlineForm
+        v-if="editingPolicy"
+        :title="editingPolicy === 'new' ? '新增保單' : `編輯 ${editingPolicy.label}`"
+        @submit="savePolicy"
+        @cancel="editingPolicy = null"
+      >
         <label>
           名稱
           <input v-model="policyDraft.label" required />
@@ -402,26 +407,27 @@ onMounted(reload)
           <input v-model="policyDraft.in_account" type="checkbox" />
           計入 AIA 戶口顯示值
         </label>
-        <div class="form-actions">
-          <button type="submit">儲存</button>
-          <button type="button" class="link" @click="editingPolicy = null">取消</button>
-        </div>
-      </form>
+      </InlineForm>
 
-      <form v-if="editingRate" class="inline-form" @submit.prevent="saveRate">
-        <h4>USD → HKD 匯率</h4>
+      <InlineForm
+        v-if="editingRate"
+        title="USD → HKD 匯率"
+        @submit="saveRate"
+        @cancel="editingRate = false"
+      >
         <label>
           匯率
           <input v-model="rateDraft" type="number" step="any" inputmode="decimal" required />
         </label>
-        <div class="form-actions">
-          <button type="submit">儲存</button>
-          <button type="button" class="link" @click="editingRate = false">取消</button>
-        </div>
-      </form>
+      </InlineForm>
 
-      <form v-if="paying" class="inline-form" @submit.prevent="savePay">
-        <h4>繳費 — {{ paying.policy.label }} {{ paying.policy.policy_no ?? '' }}</h4>
+      <InlineForm
+        v-if="paying"
+        :title="`繳費 — ${paying.policy.label} ${paying.policy.policy_no ?? ''}`"
+        submit-label="繳費"
+        @submit="savePay"
+        @cancel="paying = null"
+      >
         <label>
           日期
           <DateInput v-model="paying.event_date" required />
@@ -438,14 +444,15 @@ onMounted(reload)
           備註
           <input v-model="paying.note" />
         </label>
-        <div class="form-actions">
-          <button type="submit">繳費</button>
-          <button type="button" class="link" @click="paying = null">取消</button>
-        </div>
-      </form>
+      </InlineForm>
 
-      <form v-if="withdrawing" class="inline-form" @submit.prevent="saveWithdraw">
-        <h4>提取 — {{ withdrawing.policy.label }} {{ withdrawing.policy.policy_no ?? '' }}</h4>
+      <InlineForm
+        v-if="withdrawing"
+        :title="`提取 — ${withdrawing.policy.label} ${withdrawing.policy.policy_no ?? ''}`"
+        submit-label="提取"
+        @submit="saveWithdraw"
+        @cancel="withdrawing = null"
+      >
         <label>
           日期
           <DateInput v-model="withdrawing.event_date" required />
@@ -458,11 +465,7 @@ onMounted(reload)
           備註
           <input v-model="withdrawing.note" />
         </label>
-        <div class="form-actions">
-          <button type="submit">提取</button>
-          <button type="button" class="link" @click="withdrawing = null">取消</button>
-        </div>
-      </form>
+      </InlineForm>
     </div>
 
     <div v-if="policiesWithEvents().length" class="card">
@@ -591,32 +594,6 @@ textarea {
 }
 .event-block h4 {
   margin: 0.25rem 0;
-}
-.inline-form {
-  display: grid;
-  grid-template-columns: repeat(auto-fit, minmax(10rem, 1fr));
-  gap: 0.75rem;
-  margin-top: 1rem;
-}
-.inline-form h4 {
-  grid-column: 1 / -1;
-  margin: 0;
-}
-.inline-form label {
-  display: flex;
-  flex-direction: column;
-  font-size: 0.8rem;
-  gap: 0.2rem;
-}
-.inline-form label.check {
-  flex-direction: row;
-  align-items: center;
-  gap: 0.4rem;
-}
-.form-actions {
-  grid-column: 1 / -1;
-  display: flex;
-  gap: 0.5rem;
 }
 .hints p {
   margin: 0;

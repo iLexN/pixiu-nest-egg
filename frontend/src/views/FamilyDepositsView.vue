@@ -1,6 +1,7 @@
 <script setup lang="ts">
 import { computed, onMounted, ref } from 'vue'
 import DateInput from '../components/DateInput.vue'
+import InlineForm from '../components/InlineForm.vue'
 import RowActions from '../components/RowActions.vue'
 import {
   api,
@@ -425,14 +426,13 @@ onMounted(reload)
         </tbody>
       </table>
 
-      <form v-if="receiving" class="inline-form" @submit.prevent="saveReceive">
-        <h4>
-          收訖 — {{ receiving.deposit.holder }}
-          {{ receiving.deposit.label ?? `#${receiving.deposit.id}` }}（{{
-            receiving.deposit.end_date
-          }}
-          到期）
-        </h4>
+      <InlineForm
+        v-if="receiving"
+        :title="`收訖 — ${receiving.deposit.holder} ${receiving.deposit.label ?? `#${receiving.deposit.id}`}（${receiving.deposit.end_date} 到期）`"
+        submit-label="收訖"
+        @submit="saveReceive"
+        @cancel="receiving = null"
+      >
         <label>
           收訖日
           <DateInput v-model="receiving.received_at" required />
@@ -441,11 +441,7 @@ onMounted(reload)
           實收利息
           <input v-model="receiving.interest" type="number" step="any" inputmode="decimal" />
         </label>
-        <div class="form-actions">
-          <button type="submit">收訖</button>
-          <button type="button" class="link" @click="receiving = null">取消</button>
-        </div>
-      </form>
+      </InlineForm>
     </div>
 
     <div v-if="summary" class="card">
@@ -603,27 +599,6 @@ h4 {
 }
 .overdue {
   color: var(--negative, #b91c1c);
-}
-.inline-form {
-  display: grid;
-  grid-template-columns: repeat(auto-fit, minmax(10rem, 1fr));
-  gap: 0.75rem;
-  margin-top: 1rem;
-}
-.inline-form h4 {
-  grid-column: 1 / -1;
-  margin: 0;
-}
-.inline-form label {
-  display: flex;
-  flex-direction: column;
-  font-size: 0.8rem;
-  gap: 0.2rem;
-}
-.form-actions {
-  grid-column: 1 / -1;
-  display: flex;
-  gap: 0.5rem;
 }
 .history-header {
   display: flex;

@@ -3,6 +3,7 @@ import { computed, onMounted, ref } from 'vue'
 import { api, type CashAccount, type Deposit } from '../api'
 import { fmtMoney, todayIso } from '../format'
 import { numOrNull } from '../parse'
+import InlineForm from './InlineForm.vue'
 import { usePage } from '../page'
 
 const props = defineProps<{
@@ -34,11 +35,11 @@ function defaultAccount(): number | null {
 const received_at = ref(todayIso())
 const interest = ref<string | number>(props.deposit.interest ?? '')
 const account_id = ref<number | null>(defaultAccount())
-const formEl = ref<HTMLFormElement | null>(null)
+const formEl = ref<InstanceType<typeof InlineForm> | null>(null)
 
 const { error, run } = usePage()
 
-onMounted(() => formEl.value?.scrollIntoView({ behavior: 'smooth', block: 'start' }))
+onMounted(() => formEl.value?.formEl?.scrollIntoView({ behavior: 'smooth', block: 'start' }))
 
 /** What the cash row will be credited: principal + 實收利息 (display only). */
 const receivePreview = computed(
@@ -63,8 +64,13 @@ function save() {
 </script>
 
 <template>
-  <form ref="formEl" class="inline-form" @submit.prevent="save">
-    <h4>收訖 — {{ deposit.label ?? `#${deposit.id}` }}（{{ deposit.end_date }} 到期）</h4>
+  <InlineForm
+    ref="formEl"
+    :title="`收訖 — ${deposit.label ?? `#${deposit.id}`}（${deposit.end_date} 到期）`"
+    submit-label="收訖"
+    @submit="save"
+    @cancel="emit('cancelled')"
+  >
     <label>
       收訖日
       <input v-model="received_at" type="date" required />
@@ -86,35 +92,10 @@ function save() {
       存入 {{ fmtMoney(receivePreview) }}（本金 + 實收利息）
     </p>
     <p v-if="error" class="error">{{ error?.message }}</p>
-    <div class="form-actions">
-      <button type="submit">收訖</button>
-      <button type="button" class="link" @click="emit('cancelled')">取消</button>
-    </div>
-  </form>
+  </InlineForm>
 </template>
 
 <style scoped>
-.inline-form {
-  display: grid;
-  grid-template-columns: repeat(auto-fit, minmax(10rem, 1fr));
-  gap: 0.75rem;
-  margin-top: 1rem;
-}
-.inline-form h4 {
-  grid-column: 1 / -1;
-  margin: 0;
-}
-.inline-form label {
-  display: flex;
-  flex-direction: column;
-  font-size: 0.8rem;
-  gap: 0.2rem;
-}
-.form-actions {
-  grid-column: 1 / -1;
-  display: flex;
-  gap: 0.5rem;
-}
 .error {
   grid-column: 1 / -1;
   margin: 0;

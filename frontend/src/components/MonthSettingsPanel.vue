@@ -13,6 +13,7 @@ import {
   type NewManualAsset,
 } from '../api'
 import { fmtMoney, fmtPercent, fmtPercentShort } from '../format'
+import InlineForm from './InlineForm.vue'
 import { numOrNull } from '../parse'
 import type { PageRun } from '../page'
 const props = defineProps<{
@@ -316,8 +317,12 @@ function removeAccount(account: CashAccount) {
       </table>
       <button type="button" class="link" @click="startAccountEdit('new')">新增帳戶</button>
 
-      <form v-if="editingAccount" class="inline-form" @submit.prevent="saveAccount">
-        <h4>{{ editingAccount === 'new' ? '新增帳戶' : `編輯 ${editingAccount.label}` }}</h4>
+      <InlineForm
+        v-if="editingAccount"
+        :title="editingAccount === 'new' ? '新增帳戶' : `編輯 ${editingAccount.label}`"
+        @submit="saveAccount"
+        @cancel="editingAccount = null"
+      >
         <label>
           名稱
           <input v-model="accountDraft.label" required />
@@ -350,11 +355,7 @@ function removeAccount(account: CashAccount) {
           <input v-model="accountDraft.is_default_receipt" type="checkbox" />
           預設收款
         </label>
-        <div class="form-actions">
-          <button type="submit">儲存</button>
-          <button type="button" class="link" @click="editingAccount = null">取消</button>
-        </div>
-      </form>
+      </InlineForm>
 
       <h4>資產</h4>
       <table>
@@ -386,8 +387,12 @@ function removeAccount(account: CashAccount) {
       </table>
       <button type="button" class="link" @click="startAssetEdit('new')">新增結餘</button>
 
-      <form v-if="editingAsset" class="inline-form" @submit.prevent="saveAsset">
-        <h4>{{ editingAsset === 'new' ? '新增結餘' : `編輯 ${editingAsset.label}` }}</h4>
+      <InlineForm
+        v-if="editingAsset"
+        :title="editingAsset === 'new' ? '新增結餘' : `編輯 ${editingAsset.label}`"
+        @submit="saveAsset"
+        @cancel="editingAsset = null"
+      >
         <label>
           名稱
           <input v-model="assetDraft.label" required />
@@ -407,11 +412,7 @@ function removeAccount(account: CashAccount) {
           備註
           <input v-model="assetDraft.note" />
         </label>
-        <div class="form-actions">
-          <button type="submit">儲存</button>
-          <button type="button" class="link" @click="editingAsset = null">取消</button>
-        </div>
-      </form>
+      </InlineForm>
 
       <p class="muted settings-line">
         薪金 {{ fmtMoney(settings?.salary) || '—' }} · 開心Pool {{ year }} 利率
@@ -447,8 +448,12 @@ function removeAccount(account: CashAccount) {
       <p class="muted settings-line">
         日曆 Private {{ settings?.calendar_private_id || '—' }}
       </p>
-      <form v-if="editingSettings" class="inline-form" @submit.prevent="saveSettings">
-        <h4>設定</h4>
+      <InlineForm
+        v-if="editingSettings"
+        title="設定"
+        @submit="saveSettings"
+        @cancel="editingSettings = false"
+      >
         <label>
           薪金
           <input v-model="salaryDraft" type="number" step="any" inputmode="decimal" />
@@ -525,11 +530,7 @@ function removeAccount(account: CashAccount) {
             placeholder="…@group.calendar.google.com"
           />
         </label>
-        <div class="form-actions">
-          <button type="submit">儲存</button>
-          <button type="button" class="link" @click="editingSettings = false">取消</button>
-        </div>
-      </form>
+      </InlineForm>
     </template>
   </div>
 </template>
@@ -540,28 +541,6 @@ function removeAccount(account: CashAccount) {
   font-size: 0.75rem;
   font-family: monospace;
   white-space: normal;
-}
-.inline-form {
-  display: grid;
-  grid-template-columns: repeat(auto-fit, minmax(10rem, 1fr));
-  gap: 0.75rem;
-  margin-top: 1rem;
-}
-.inline-form h4 {
-  grid-column: 1 / -1;
-  margin: 0;
-}
-.inline-form label {
-  display: flex;
-  flex-direction: column;
-  font-size: 0.8rem;
-  gap: 0.2rem;
-}
-.form-actions {
-  grid-column: 1 / -1;
-  display: flex;
-  gap: 0.5rem;
-  align-items: center;
 }
 .settings-line {
   font-size: 0.85rem;
