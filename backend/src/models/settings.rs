@@ -10,6 +10,9 @@ pub struct AppSettings {
     /// The rate in effect for `pool_rate_year`.
     pub pool_rate: Option<f64>,
     pub pool_rate_year: i32,
+    /// Every stored per-year 開心Pool rate (`pool_rates` table), ascending by
+    /// year — years relying on the earlier-year fallback carry no row.
+    pub pool_rates: Vec<PoolRate>,
     /// `forecast.bill_amount` — the quarterly 差餉 charge in the forecast's
     /// 繳費 row; the effective value (2158 while unset).
     pub bill_amount: f64,
@@ -44,6 +47,14 @@ pub struct AppSettings {
     /// links pre-select; `null` while unset (events open on the default
     /// calendar).
     pub calendar_private_id: Option<String>,
+}
+
+/// One stored `pool_rates` row.
+#[derive(Debug, Clone, Serialize, ToSchema)]
+pub struct PoolRate {
+    pub year: i32,
+    /// The year's 開心Pool rate as a fraction (0.337 = 33.7%).
+    pub rate: f64,
 }
 
 /// Absent fields are left untouched; `null` clears `salary`/`pool_rate`/

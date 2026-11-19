@@ -261,7 +261,7 @@ function saveEdit(row: YearReviewRow, field: EditField) {
     </ol>
     <p class="muted">
       年初不用做什麼：新一年的列會自動出現；開心Pool 利率沒變就不用設，薪金變了才去
-      月結設定更新。債券/定期不用手動填——已到期的記錄仍會留著，數字會繼續自己算。
+      設定更新。債券/定期不用手動填——已到期的記錄仍會留著，數字會繼續自己算。
     </p>
   </section>
 </template>

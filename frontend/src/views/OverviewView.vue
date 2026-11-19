@@ -419,7 +419,6 @@ onMounted(reload)
           }})。</span>
         </span>
       </p>
-      <p v-if="targetNoteTerms" class="muted">月薪增幅於 年結 → 投資 覆寫</p>
     </div>
 
     <div class="card goals-card">

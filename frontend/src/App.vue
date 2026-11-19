@@ -16,6 +16,7 @@ import OverviewView from './views/OverviewView.vue'
 import YearReviewView from './views/YearReviewView.vue'
 import HappyPoolView from './views/HappyPoolView.vue'
 import FamilyDepositsView from './views/FamilyDepositsView.vue'
+import SettingsView from './views/SettingsView.vue'
 
 type Tab =
   | 'overview'
@@ -33,6 +34,7 @@ type Tab =
   | 'yearReview'
   | 'happyPool'
   | 'family-deposits'
+  | 'settings'
 type Group =
   | 'overview'
   | 'stock'
@@ -41,6 +43,7 @@ type Group =
   | 'bond'
   | 'aia'
   | 'family'
+  | 'settings'
 
 const NAV: {
   id: Group
@@ -100,6 +103,11 @@ const NAV: {
     id: 'family',
     label: '家人',
     tabs: [{ id: 'family-deposits', label: '定期' }],
+  },
+  {
+    id: 'settings',
+    label: '設定',
+    tabs: [{ id: 'settings', label: '設定' }],
   },
 ]
 
@@ -176,6 +184,7 @@ function selectGroup(g: (typeof NAV)[number]) {
     <YearReviewView v-else-if="tab === 'yearReview'" />
     <HappyPoolView v-else-if="tab === 'happyPool'" />
     <FamilyDepositsView v-else-if="tab === 'family-deposits'" />
+    <SettingsView v-else-if="tab === 'settings'" />
     <IbkrTransfersView v-else-if="tab === 'ibkrTransfers'" />
     <DepositHistoryView v-else />
   </main>

@@ -8,12 +8,12 @@ Defines the app's top-level navigation: which pages are grouped under 股票, �
 
 ### Requirement: Grouped top navigation with roll-ups under 總覽
 
-The app SHALL present a two-level top navigation. The first level SHALL show one button per group: 總覽, 股票, 定期, MPF, 債券, AIA, and 家人, in that order. There SHALL be no top-level 月結 or 年結 group. The active group and active sub-tab SHALL each be visually marked.
+The app SHALL present a two-level top navigation. The first level SHALL show one button per group: 總覽, 股票, 定期, MPF, 債券, AIA, 家人, and 設定, in that order. There SHALL be no top-level 月結 or 年結 group. The active group and active sub-tab SHALL each be visually marked.
 
 #### Scenario: App loads
 
 - **WHEN** the app loads
-- **THEN** the nav shows the 總覽, 股票, 定期, MPF, 債券, AIA, and 家人 group buttons, the 總覽 group is active, and its sub-tabs 總覽, 月結, 年結, HappyPool are shown
+- **THEN** the nav shows the 總覽, 股票, 定期, MPF, 債券, AIA, 家人, and 設定 group buttons, the 總覽 group is active, and its sub-tabs 總覽, 月結, 年結, HappyPool are shown
 
 #### Scenario: Switch to the 總覽 group
 
@@ -23,7 +23,7 @@ The app SHALL present a two-level top navigation. The first level SHALL show one
 #### Scenario: Open 總覽 → 月結
 
 - **WHEN** the 總覽 group is active and the user clicks the 月結 sub-tab
-- **THEN** the 月結 sub-tab becomes active and the Month Stat page (monthly ledger, pool balance, and settings) is shown
+- **THEN** the 月結 sub-tab becomes active and the Month Stat page (monthly ledger and pool balance) is shown
 
 #### Scenario: Open 總覽 → 年結
 
@@ -60,10 +60,15 @@ The app SHALL present a two-level top navigation. The first level SHALL show one
 - **WHEN** the user clicks the 家人 group button
 - **THEN** the 家人 group becomes active, its 定期 sub-tab replaces the previous sub-tabs, and the 家人 → 定期 page (per-holder family deposits, notes, and history) is shown
 
+#### Scenario: Switch to the 設定 group
+
+- **WHEN** the user clicks the 設定 group button
+- **THEN** the 設定 group becomes active, its 設定 sub-tab replaces the previous sub-tabs, and the 設定 page (活期帳戶 and 資產 tables plus the parameter sections) is shown
+
 #### Scenario: Only active group's sub-tabs shown
 
 - **WHEN** the 股票 group is active
-- **THEN** the 總覽, 定期, MPF, 債券, AIA, and 家人 groups' sub-tabs are not shown in the nav
+- **THEN** the 總覽, 定期, MPF, 債券, AIA, 家人, and 設定 groups' sub-tabs are not shown in the nav
 
 #### Scenario: No 月結 or 年結 group button
 
@@ -72,7 +77,7 @@ The app SHALL present a two-level top navigation. The first level SHALL show one
 
 ### Requirement: Sub-tab membership per group
 
-The second level SHALL show the sub-tabs of the currently active group only — 總覽 SHALL contain 總覽, 月結, 年結, HappyPool (in that order); 股票 SHALL contain 總覽, 交易記錄, 派息, 管理 (in that order), followed by 轉入記錄 while the market is 美股; 定期 SHALL contain 總覽, 記錄 (in that order); MPF SHALL contain 總覽; 債券 SHALL contain 總覽; AIA SHALL contain 總覽; 家人 SHALL contain 定期.
+The second level SHALL show the sub-tabs of the currently active group only — 總覽 SHALL contain 總覽, 月結, 年結, HappyPool (in that order); 股票 SHALL contain 總覽, 交易記錄, 派息, 管理 (in that order), followed by 轉入記錄 while the market is 美股; 定期 SHALL contain 總覽, 記錄 (in that order); MPF SHALL contain 總覽; 債券 SHALL contain 總覽; AIA SHALL contain 總覽; 家人 SHALL contain 定期; 設定 SHALL contain 設定.
 
 #### Scenario: Switching groups
 
@@ -109,7 +114,7 @@ Clicking a group button SHALL switch to that group and open its first sub-tab. T
 
 ### Requirement: Market toggle is hidden outside the 股票 group
 
-The 港股/美股 market toggle SHALL be shown while the 股票 group is active and SHALL control the market for all of its sub-pages (總覽, 交易記錄, 派息, 管理, and the 美股-only 轉入記錄). It SHALL be hidden while the 總覽 (including its 月結 and 年結 sub-tabs), 定期, MPF, 債券, AIA, or 家人 group is active. The selected market SHALL persist when switching between stock sub-tabs. Switching to 港股 while 轉入記錄 is open SHALL open 股票 → 總覽.
+The 港股/美股 market toggle SHALL be shown while the 股票 group is active and SHALL control the market for all of its sub-pages (總覽, 交易記錄, 派息, 管理, and the 美股-only 轉入記錄). It SHALL be hidden while the 總覽 (including its 月結 and 年結 sub-tabs), 定期, MPF, 債券, AIA, 家人, or 設定 group is active. The selected market SHALL persist when switching between stock sub-tabs. Switching to 港股 while 轉入記錄 is open SHALL open 股票 → 總覽.
 
 #### Scenario: Market toggle on stock pages
 
@@ -154,6 +159,11 @@ The 港股/美股 market toggle SHALL be shown while the 股票 group is active 
 #### Scenario: Market toggle hidden for 家人
 
 - **WHEN** the user switches to the 家人 group
+- **THEN** the 港股/美股 toggle is not shown
+
+#### Scenario: Market toggle hidden for 設定
+
+- **WHEN** the user switches to the 設定 group
 - **THEN** the 港股/美股 toggle is not shown
 
 #### Scenario: Market persists across stock sub-tabs

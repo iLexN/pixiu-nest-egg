@@ -1371,6 +1371,11 @@ export interface components {
             pool_rate: number | null;
             /** Format: int32 */
             pool_rate_year: number;
+            /**
+             * @description Every stored per-year 開心Pool rate (`pool_rates` table), ascending by
+             *     year — years relying on the earlier-year fallback carry no row.
+             */
+            pool_rates: components["schemas"]["PoolRate"][];
             /** Format: double */
             salary: number | null;
             /**
@@ -3500,6 +3505,16 @@ export interface components {
         /** @description A policy with its payment/withdrawal history attached. */
         PolicyWithEvents: components["schemas"]["AiaPolicy"] & {
             events: components["schemas"]["AiaEvent"][];
+        };
+        /** @description One stored `pool_rates` row. */
+        PoolRate: {
+            /**
+             * Format: double
+             * @description The year's 開心Pool rate as a fraction (0.337 = 33.7%).
+             */
+            rate: number;
+            /** Format: int32 */
+            year: number;
         };
         /** @description The all-years 開心Pool contribution totals behind the HappyPool page. */
         PoolTotals: {

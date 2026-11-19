@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { ref, watch } from 'vue'
+import { onMounted, ref, watch } from 'vue'
 import {
   api,
   type AppSettings,
@@ -8,74 +8,52 @@ import {
   type Currency,
   type ManualAsset,
   type ManualAssetLiquidity,
-  type MonthSummary,
   type NewCashAccount,
   type NewManualAsset,
+  type PoolRate,
 } from '../api'
 import { fmtMoney, fmtPercent, fmtPercentShort } from '../format'
-import InlineForm from './InlineForm.vue'
+import InlineForm from '../components/InlineForm.vue'
 import { numOrNull } from '../parse'
-import type { PageRun } from '../page'
-const props = defineProps<{
-  settings: AppSettings | null
-  summary: MonthSummary | null
-  accounts: CashAccount[]
-  assets: ManualAsset[]
-  /** The displayed year — labels the pool rate and becomes `pool_rate_year`. */
-  year: number
-  /** The page's mutation runner — saves land on the page's message/error. */
-  run: PageRun
-}>()
+import { usePage } from '../page'
 
-const settingsOpen = ref(false)
-const salaryDraft = ref<string | number>('')
-const rateDraft = ref<string | number>('')
-const billDraft = ref<string | number>('')
-const targetDraft = ref<string | number>('')
-const mmStartDateDraft = ref('')
-const mmSavedDraft = ref<string | number>('')
-const mmTargetMonthsDraft = ref<string | number>('')
-const mmTargetAmountDraft = ref<string | number>('')
-const mmMonthNowDraft = ref<string | number>('')
-const mmComingSaveDraft = ref<string | number>('')
-const goal1Draft = ref<string | number>('')
-const goal2Draft = ref<string | number>('')
-const goal3InflationDraft = ref<string | number>('')
-const goal3YearsDraft = ref<string | number>('')
-const finalReplacementDraft = ref<string | number>('')
-const privateCalendarDraft = ref('')
-const editingSettings = ref(false)
+const settings = ref<AppSettings | null>(null)
+const accounts = ref<CashAccount[]>([])
+const assets = ref<ManualAsset[]>([])
 
-function startSettingsEdit() {
-  salaryDraft.value = props.settings?.salary ?? ''
-  // Stored as a fraction; edited as a percent, same as deposit rates.
-  const rate = props.summary?.pool_rate
-  rateDraft.value = rate === null || rate === undefined ? '' : rate * 100
-  billDraft.value = props.settings?.bill_amount ?? ''
-  const target = props.settings?.semi_liquid_target
-  targetDraft.value = target === null || target === undefined ? '' : target * 100
-  mmStartDateDraft.value = props.settings?.money_master_start_date ?? ''
-  mmSavedDraft.value = props.settings?.money_master_saved ?? ''
-  mmTargetMonthsDraft.value = props.settings?.money_master_target_months ?? ''
-  mmTargetAmountDraft.value = props.settings?.money_master_target_amount ?? ''
-  mmMonthNowDraft.value = props.settings?.money_master_month_now ?? ''
-  mmComingSaveDraft.value = props.settings?.money_master_coming_save ?? ''
-  goal1Draft.value = props.settings?.goal1_amount ?? ''
-  goal2Draft.value = props.settings?.goal2_amount ?? ''
-  goal3InflationDraft.value = props.settings?.goal3_inflation ?? ''
-  goal3YearsDraft.value = props.settings?.goal3_years ?? ''
-  finalReplacementDraft.value = props.settings?.final_replacement ?? ''
-  privateCalendarDraft.value = props.settings?.calendar_private_id ?? ''
-  editingSettings.value = true
+const { message, error, reload, run } = usePage(load)
+
+async function load() {
+  const [settingsData, assetsData, accountsData] = await Promise.all([
+    api.getSettings(),
+    api.listManualAssets(),
+    api.listCashAccounts(),
+  ])
+  settings.value = settingsData
+  assets.value = assetsData
+  accounts.value = accountsData
 }
 
-function saveSettings() {
-  props.run(async () => {
+type Section = 'general' | 'mm' | 'goals' | 'calendar'
+const editingSection = ref<Section | null>(null)
+
+// ----- 一般 -----
+
+const salaryDraft = ref<string | number>('')
+const billDraft = ref<string | number>('')
+const targetDraft = ref<string | number>('')
+
+function startGeneralEdit() {
+  salaryDraft.value = settings.value?.salary ?? ''
+  billDraft.value = settings.value?.bill_amount ?? ''
+  const target = settings.value?.semi_liquid_target
+  targetDraft.value = target === null || target === undefined ? '' : target * 100
+  editingSection.value = 'general'
+}
+
+function saveGeneral() {
+  run(async () => {
     const salary = numOrNull(salaryDraft.value)
-    const ratePct = numOrNull(rateDraft.value)
-    if (ratePct !== null && (ratePct < 0 || ratePct >= 100)) {
-      throw new Error('開心Pool 利率必須是 0–100%')
-    }
     const bill = numOrNull(billDraft.value)
     if (bill !== null && bill < 0) {
       throw new Error('繳費金額不能是負數')
@@ -84,6 +62,77 @@ function saveSettings() {
     if (targetPct !== null && (targetPct < 0 || targetPct >= 100)) {
       throw new Error('半流動資金目標必須是 0–100%')
     }
+    await api.updateSettings({
+      salary,
+      // Blank resets to the 2158 default / the 25% sheet literal.
+      bill_amount: bill,
+      semi_liquid_target: targetPct === null ? null : targetPct / 100,
+    })
+    editingSection.value = null
+  }, { message: '已儲存設定' })
+}
+
+// ----- 開心Pool -----
+
+const editingRate = ref<PoolRate | 'new' | null>(null)
+const rateDraft = ref<{ year: string | number; rate: string | number }>({
+  year: '',
+  rate: '',
+})
+
+function startRateEdit(row: PoolRate | 'new') {
+  editingRate.value = row
+  rateDraft.value =
+    row === 'new'
+      ? { year: settings.value?.pool_rate_year ?? new Date().getFullYear(), rate: '' }
+      : { year: row.year, rate: row.rate * 100 }
+}
+
+function saveRate() {
+  const wasNew = editingRate.value === 'new'
+  run(async () => {
+    const year = numOrNull(rateDraft.value.year)
+    if (year === null || !Number.isInteger(year)) {
+      throw new Error('年份必須是整數')
+    }
+    const pct = numOrNull(rateDraft.value.rate)
+    if (pct === null || pct < 0 || pct >= 100) {
+      throw new Error('開心Pool 利率必須是 0–100%')
+    }
+    await api.updateSettings({ pool_rate: pct / 100, pool_rate_year: year })
+    editingRate.value = null
+  }, { message: wasNew ? '已新增利率' : '已儲存利率' })
+}
+
+function removeRate(row: PoolRate) {
+  // A cleared rate falls back to the latest earlier stored year.
+  run(() => api.updateSettings({ pool_rate: null, pool_rate_year: row.year }), {
+    confirm: `刪除 ${row.year} 年利率？`,
+    message: `已刪除 ${row.year} 年利率`,
+  })
+}
+
+// ----- Money Master -----
+
+const mmStartDateDraft = ref('')
+const mmSavedDraft = ref<string | number>('')
+const mmTargetMonthsDraft = ref<string | number>('')
+const mmTargetAmountDraft = ref<string | number>('')
+const mmMonthNowDraft = ref<string | number>('')
+const mmComingSaveDraft = ref<string | number>('')
+
+function startMmEdit() {
+  mmStartDateDraft.value = settings.value?.money_master_start_date ?? ''
+  mmSavedDraft.value = settings.value?.money_master_saved ?? ''
+  mmTargetMonthsDraft.value = settings.value?.money_master_target_months ?? ''
+  mmTargetAmountDraft.value = settings.value?.money_master_target_amount ?? ''
+  mmMonthNowDraft.value = settings.value?.money_master_month_now ?? ''
+  mmComingSaveDraft.value = settings.value?.money_master_coming_save ?? ''
+  editingSection.value = 'mm'
+}
+
+function saveMm() {
+  run(async () => {
     const mmTargetMonths = numOrNull(mmTargetMonthsDraft.value)
     const mmMonthNow = numOrNull(mmMonthNowDraft.value)
     for (const value of [mmTargetMonths, mmMonthNow]) {
@@ -95,6 +144,38 @@ function saveSettings() {
     if (mmTargetAmount !== null && mmTargetAmount <= 0) {
       throw new Error('Money Master 目標金額必須是正數')
     }
+    await api.updateSettings({
+      // Blank clears; the two overrides derive while unset.
+      money_master_start_date: mmStartDateDraft.value || null,
+      money_master_saved: numOrNull(mmSavedDraft.value),
+      money_master_target_months: mmTargetMonths,
+      money_master_target_amount: mmTargetAmount,
+      money_master_month_now: mmMonthNow,
+      money_master_coming_save: numOrNull(mmComingSaveDraft.value),
+    })
+    editingSection.value = null
+  }, { message: '已儲存設定' })
+}
+
+// ----- 目標 -----
+
+const goal1Draft = ref<string | number>('')
+const goal2Draft = ref<string | number>('')
+const goal3InflationDraft = ref<string | number>('')
+const goal3YearsDraft = ref<string | number>('')
+const finalReplacementDraft = ref<string | number>('')
+
+function startGoalsEdit() {
+  goal1Draft.value = settings.value?.goal1_amount ?? ''
+  goal2Draft.value = settings.value?.goal2_amount ?? ''
+  goal3InflationDraft.value = settings.value?.goal3_inflation ?? ''
+  goal3YearsDraft.value = settings.value?.goal3_years ?? ''
+  finalReplacementDraft.value = settings.value?.final_replacement ?? ''
+  editingSection.value = 'goals'
+}
+
+function saveGoals() {
+  run(async () => {
     const goal1 = numOrNull(goal1Draft.value)
     const goal2 = numOrNull(goal2Draft.value)
     for (const amount of [goal1, goal2]) {
@@ -111,33 +192,37 @@ function saveSettings() {
       }
     }
     await api.updateSettings({
-      salary,
-      pool_rate: ratePct === null ? null : ratePct / 100,
-      pool_rate_year: props.year,
-      // Empty keeps the stored value? No — the forecast reads the effective
-      // amount; blank resets to the 2158 default.
-      bill_amount: bill,
-      // Same: blank resets to the 25% sheet literal.
-      semi_liquid_target: targetPct === null ? null : targetPct / 100,
-      // Money Master: blank clears; the two overrides derive while unset.
-      money_master_start_date: mmStartDateDraft.value || null,
-      money_master_saved: numOrNull(mmSavedDraft.value),
-      money_master_target_months: mmTargetMonths,
-      money_master_target_amount: mmTargetAmount,
-      money_master_month_now: mmMonthNow,
-      money_master_coming_save: numOrNull(mmComingSaveDraft.value),
-      // 目標: blank clears the amounts and resets the constants to the
-      // sheet literals (1.07 / 30 / 0.7).
+      // Blank clears the amounts and resets the constants to the sheet
+      // literals (1.07 / 30 / 0.7).
       goal1_amount: goal1,
       goal2_amount: goal2,
       goal3_inflation: goal3Inflation,
       goal3_years: goal3Years,
       final_replacement: finalReplacement,
-      calendar_private_id: privateCalendarDraft.value.trim() || null,
     })
-    editingSettings.value = false
+    editingSection.value = null
   }, { message: '已儲存設定' })
 }
+
+// ----- 日曆 -----
+
+const privateCalendarDraft = ref('')
+
+function startCalendarEdit() {
+  privateCalendarDraft.value = settings.value?.calendar_private_id ?? ''
+  editingSection.value = 'calendar'
+}
+
+function saveCalendar() {
+  run(async () => {
+    await api.updateSettings({
+      calendar_private_id: privateCalendarDraft.value.trim() || null,
+    })
+    editingSection.value = null
+  }, { message: '已儲存設定' })
+}
+
+// ----- 資產 -----
 
 const editingAsset = ref<ManualAsset | 'new' | null>(null)
 const assetDraft = ref<{
@@ -168,7 +253,7 @@ function startAssetEdit(asset: ManualAsset | 'new') {
 function saveAsset() {
   const wasNew = editingAsset.value === 'new'
   const target = editingAsset.value
-  props.run(async () => {
+  run(async () => {
     const amount = numOrNull(assetDraft.value.amount)
     if (assetDraft.value.label.trim() === '' || amount === null) {
       throw new Error('名稱及金額必填')
@@ -191,7 +276,7 @@ function saveAsset() {
 }
 
 function removeAsset(asset: ManualAsset) {
-  props.run(() => api.deleteManualAsset(asset.id), {
+  run(() => api.deleteManualAsset(asset.id), {
     confirm: `刪除結餘 ${asset.label}？`,
     message: `已刪除 ${asset.label}`,
   })
@@ -239,7 +324,7 @@ function startAccountEdit(account: CashAccount | 'new') {
 function saveAccount() {
   const wasNew = editingAccount.value === 'new'
   const target = editingAccount.value
-  props.run(async () => {
+  run(async () => {
     const amount = numOrNull(accountDraft.value.amount)
     if (accountDraft.value.label.trim() === '' || amount === null) {
       throw new Error('名稱及金額必填')
@@ -264,22 +349,19 @@ function saveAccount() {
 
 function removeAccount(account: CashAccount) {
   // 409 (broker rows, or other server-side refusals) surfaces the server message.
-  props.run(() => api.deleteCashAccount(account.id), {
+  run(() => api.deleteCashAccount(account.id), {
     confirm: `刪除帳戶 ${account.label}？`,
     message: `已刪除 ${account.label}`,
   })
 }
+
+onMounted(reload)
 </script>
 
 <template>
-  <div class="card">
-    <h3>
-      <button type="button" class="link" @click="settingsOpen = !settingsOpen">
-        設定 {{ settingsOpen ? '▾' : '▸' }}
-      </button>
-    </h3>
-    <template v-if="settingsOpen">
-      <h4>活期帳戶</h4>
+  <section>
+    <div class="card">
+      <h3>活期帳戶</h3>
       <table>
         <thead>
           <tr>
@@ -356,8 +438,10 @@ function removeAccount(account: CashAccount) {
           預設收款
         </label>
       </InlineForm>
+    </div>
 
-      <h4>資產</h4>
+    <div class="card">
+      <h3>資產</h3>
       <table>
         <thead>
           <tr>
@@ -413,16 +497,102 @@ function removeAccount(account: CashAccount) {
           <input v-model="assetDraft.note" />
         </label>
       </InlineForm>
+    </div>
 
+    <div class="card">
+      <h3>一般</h3>
       <p class="muted settings-line">
-        薪金 {{ fmtMoney(settings?.salary) || '—' }} · 開心Pool {{ year }} 利率
-        {{ fmtPercent(year === summary?.pool_rate_year ? summary?.pool_rate : null) || '—' }} ·
-        繳費 {{ fmtMoney(settings?.bill_amount) || '—' }} · 流動目標
+        薪金 {{ fmtMoney(settings?.salary) || '—' }} · 繳費
+        {{ fmtMoney(settings?.bill_amount) || '—' }} · 流動目標
         {{ fmtPercentShort(settings?.semi_liquid_target) || '—' }}
-        <button type="button" class="link" @click="startSettingsEdit">編輯</button>
+        <button type="button" class="link" @click="startGeneralEdit">編輯</button>
       </p>
+      <InlineForm
+        v-if="editingSection === 'general'"
+        title="一般設定"
+        @submit="saveGeneral"
+        @cancel="editingSection = null"
+      >
+        <label>
+          薪金
+          <input v-model="salaryDraft" type="number" step="any" inputmode="decimal" />
+        </label>
+        <label>
+          預測繳費（季繳差餉；留空回復 2158）
+          <input v-model="billDraft" type="number" step="any" inputmode="decimal" />
+        </label>
+        <label>
+          半流動資金目標（流動資產 %；留空回復 25%）
+          <input v-model="targetDraft" type="number" step="any" inputmode="decimal" placeholder="25" />
+        </label>
+      </InlineForm>
+    </div>
+
+    <div class="card">
+      <h3>開心Pool</h3>
+      <table>
+        <thead>
+          <tr>
+            <th>年份</th>
+            <th class="num">利率</th>
+            <th></th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr v-for="row in settings?.pool_rates ?? []" :key="row.year">
+            <td>{{ row.year }}</td>
+            <td class="num">{{ fmtPercent(row.rate) }}</td>
+            <td class="row-actions">
+              <button type="button" class="link" @click="startRateEdit(row)">編輯</button>
+              <button type="button" class="link danger" @click="removeRate(row)">刪除</button>
+            </td>
+          </tr>
+          <tr v-if="(settings?.pool_rates ?? []).length === 0">
+            <td colspan="3" class="muted">沒有利率記錄</td>
+          </tr>
+        </tbody>
+      </table>
+      <button type="button" class="link" @click="startRateEdit('new')">新增利率</button>
       <p class="muted settings-line">
-        Money Master 開始 {{ settings?.money_master_start_date || '—' }} · 已儲
+        今年 {{ settings?.pool_rate_year ?? '—' }} 利率
+        {{ fmtPercent(settings?.pool_rate) || '—' }} — 未設年份沿用最近較早年份
+      </p>
+
+      <InlineForm
+        v-if="editingRate"
+        :title="editingRate === 'new' ? '新增利率' : `編輯 ${editingRate.year} 利率`"
+        @submit="saveRate"
+        @cancel="editingRate = null"
+      >
+        <label>
+          年份
+          <input
+            v-model="rateDraft.year"
+            type="number"
+            step="1"
+            inputmode="numeric"
+            :disabled="editingRate !== 'new'"
+            required
+          />
+        </label>
+        <label>
+          利率（%）
+          <input
+            v-model="rateDraft.rate"
+            type="number"
+            step="any"
+            inputmode="decimal"
+            placeholder="33.7"
+            required
+          />
+        </label>
+      </InlineForm>
+    </div>
+
+    <div class="card">
+      <h3>Money Master</h3>
+      <p class="muted settings-line">
+        開始 {{ settings?.money_master_start_date || '—' }} · 已儲
         {{ fmtMoney(settings?.money_master_saved) || '—' }} · 目標
         {{ settings?.money_master_target_months ?? '—' }}月/{{
           fmtMoney(settings?.money_master_target_amount) || '—'
@@ -437,40 +607,14 @@ function removeAccount(account: CashAccount) {
             fmtMoney(settings?.money_master_coming_save) || '—'
           }}
         </template>
-      </p>
-      <p class="muted settings-line">
-        目標 1st {{ fmtMoney(settings?.goal1_amount) || '—' }} · 2nd
-        {{ fmtMoney(settings?.goal2_amount) || '—' }} · 3rd ×{{
-          settings?.goal3_inflation ?? '—'
-        }}/{{ settings?.goal3_years ?? '—' }}年 · Final
-        {{ fmtPercentShort(settings?.final_replacement) || '—' }}
-      </p>
-      <p class="muted settings-line">
-        日曆 Private {{ settings?.calendar_private_id || '—' }}
+        <button type="button" class="link" @click="startMmEdit">編輯</button>
       </p>
       <InlineForm
-        v-if="editingSettings"
-        title="設定"
-        @submit="saveSettings"
-        @cancel="editingSettings = false"
+        v-if="editingSection === 'mm'"
+        title="Money Master"
+        @submit="saveMm"
+        @cancel="editingSection = null"
       >
-        <label>
-          薪金
-          <input v-model="salaryDraft" type="number" step="any" inputmode="decimal" />
-        </label>
-        <label>
-          開心Pool 利率（{{ year }}，%）
-          <input v-model="rateDraft" type="number" step="any" inputmode="decimal" placeholder="33.7" />
-        </label>
-        <label>
-          預測繳費（季繳差餉；留空回復 2158）
-          <input v-model="billDraft" type="number" step="any" inputmode="decimal" />
-        </label>
-        <label>
-          半流動資金目標（流動資產 %；留空回復 25%）
-          <input v-model="targetDraft" type="number" step="any" inputmode="decimal" placeholder="25" />
-        </label>
-        <h4>Money Master</h4>
         <label>
           挑戰開始日
           <input v-model="mmStartDateDraft" type="date" />
@@ -495,7 +639,25 @@ function removeAccount(account: CashAccount) {
           每月需儲覆寫（留空自動推算）
           <input v-model="mmComingSaveDraft" type="number" step="any" inputmode="decimal" />
         </label>
-        <h4>目標</h4>
+      </InlineForm>
+    </div>
+
+    <div class="card">
+      <h3>目標</h3>
+      <p class="muted settings-line">
+        1st {{ fmtMoney(settings?.goal1_amount) || '—' }} · 2nd
+        {{ fmtMoney(settings?.goal2_amount) || '—' }} · 3rd ×{{
+          settings?.goal3_inflation ?? '—'
+        }}/{{ settings?.goal3_years ?? '—' }}年 · Final
+        {{ fmtPercentShort(settings?.final_replacement) || '—' }}
+        <button type="button" class="link" @click="startGoalsEdit">編輯</button>
+      </p>
+      <InlineForm
+        v-if="editingSection === 'goals'"
+        title="目標"
+        @submit="saveGoals"
+        @cancel="editingSection = null"
+      >
         <label>
           1st 目標金額（留空清除）
           <input v-model="goal1Draft" type="number" step="any" inputmode="decimal" />
@@ -521,7 +683,21 @@ function removeAccount(account: CashAccount) {
             inputmode="decimal"
           />
         </label>
-        <h4>日曆</h4>
+      </InlineForm>
+    </div>
+
+    <div class="card">
+      <h3>日曆</h3>
+      <p class="muted settings-line">
+        Private {{ settings?.calendar_private_id || '—' }}
+        <button type="button" class="link" @click="startCalendarEdit">編輯</button>
+      </p>
+      <InlineForm
+        v-if="editingSection === 'calendar'"
+        title="日曆"
+        @submit="saveCalendar"
+        @cancel="editingSection = null"
+      >
         <label>
           Private 日曆 ID
           <input
@@ -531,8 +707,11 @@ function removeAccount(account: CashAccount) {
           />
         </label>
       </InlineForm>
-    </template>
-  </div>
+    </div>
+
+    <p v-if="message" class="ok">{{ message }}</p>
+    <p v-if="error" class="error">{{ error?.message }}</p>
+  </section>
 </template>
 
 <style scoped>

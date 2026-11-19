@@ -389,7 +389,7 @@ Each row of the deposits view's 未到期定期 list SHALL offer a 加到日曆 
 
 ### Requirement: Private calendar setting
 
-`GET/PATCH /api/settings` SHALL expose `calendar_private_id`, the ID of the user's Private Google calendar, stored as the `calendar.private_id` key in `app_meta`. A patched value SHALL be stored trimmed. A blank string or `null` SHALL clear it, and an unset value reads as `null`. No ID format SHALL be enforced. The 月結 設定 form SHALL let the user view and edit it.
+`GET/PATCH /api/settings` SHALL expose `calendar_private_id`, the ID of the user's Private Google calendar, stored as the `calendar.private_id` key in `app_meta`. A patched value SHALL be stored trimmed. A blank string or `null` SHALL clear it, and an unset value reads as `null`. No ID format SHALL be enforced. The 設定 page's 日曆 section SHALL let the user view and edit it.
 
 #### Scenario: Setting round-trips
 
@@ -403,9 +403,8 @@ Each row of the deposits view's 未到期定期 list SHALL offer a 加到日曆 
 
 #### Scenario: Edited in the 設定 form
 
-- **WHEN** the user opens the 月結 設定 form
+- **WHEN** the user opens the 設定 page's 日曆 editor
 - **THEN** it offers a `Private 日曆 ID` field prefilled with the stored value, and saving an empty field clears the setting
-
 ### Requirement: Deposit calendar routing
 
 Adding an own deposit to the calendar SHALL pre-select the calendar named by `calendar_private_id`. While that setting is empty, the editor SHALL open on the user's default calendar.

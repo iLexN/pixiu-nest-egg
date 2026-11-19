@@ -5,7 +5,7 @@ use chrono::Datelike;
 use sqlx::SqlitePool;
 
 use crate::calc::FieldError;
-use crate::models::{AppSettings, AppSettingsPatch};
+use crate::models::{AppSettings, AppSettingsPatch, PoolRate};
 use crate::service::ServiceError;
 use crate::store::months::{self, DEFAULT_BILL_AMOUNT};
 use crate::store::{StoreError, settings, today};
@@ -15,10 +15,15 @@ use crate::store::{StoreError, settings, today};
 pub async fn get(pool: &SqlitePool) -> Result<AppSettings, StoreError> {
     let stored = settings::Settings::load(pool).await?;
     let pool_rate_year = today().year();
+    let stored_rates = months::pool_rates(pool).await?;
     Ok(AppSettings {
         salary: stored.salary,
-        pool_rate: months::pool_rate(pool, pool_rate_year).await?,
+        pool_rate: crate::calc::pool_rate_for_year(&stored_rates, pool_rate_year),
         pool_rate_year,
+        pool_rates: stored_rates
+            .into_iter()
+            .map(|(year, rate)| PoolRate { year, rate })
+            .collect(),
         bill_amount: stored.bill_amount.unwrap_or(DEFAULT_BILL_AMOUNT),
         semi_liquid_target: stored
             .semi_liquid_target

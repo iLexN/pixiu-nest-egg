@@ -131,16 +131,6 @@ pub(crate) async fn pool_rates(pool: &SqlitePool) -> Result<BTreeMap<i32, f64>, 
     Ok(rates)
 }
 
-/// The stored rate for one year; `None` while unset.
-pub async fn pool_rate(pool: &SqlitePool, year: i32) -> Result<Option<f64>, StoreError> {
-    Ok(
-        sqlx::query_scalar("SELECT rate FROM pool_rates WHERE year = ?")
-            .bind(year)
-            .fetch_optional(pool)
-            .await?,
-    )
-}
-
 /// Store (or clear, on `None`) the rate for one year.
 pub async fn set_pool_rate(
     pool: &SqlitePool,

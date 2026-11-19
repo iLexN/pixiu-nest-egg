@@ -2,25 +2,18 @@
 import { computed, onMounted, ref } from 'vue'
 import {
   api,
-  type AppSettings,
-  type CashAccount,
-  type ManualAsset,
   type MonthDetail,
   type MonthStat,
   type MonthSummary,
 } from '../api'
 import InlineForm from '../components/InlineForm.vue'
 import MonthDetailPanel from '../components/MonthDetailPanel.vue'
-import MonthSettingsPanel from '../components/MonthSettingsPanel.vue'
 import { fmtMoney, fmtMonth, fmtPercent, signClass, todayIso } from '../format'
 import { usePage } from '../page'
 
 const summary = ref<MonthSummary | null>(null)
 const months = ref<MonthStat[]>([])
 const detail = ref<MonthDetail | null>(null)
-const settings = ref<AppSettings | null>(null)
-const assets = ref<ManualAsset[]>([])
-const accounts = ref<CashAccount[]>([])
 
 const currentYear = new Date().getFullYear()
 const year = ref(currentYear)
@@ -46,21 +39,14 @@ function yoyClass(value: number | null): string {
 }
 
 async function load() {
-  const [summaryData, monthsData, allMonths, settingsData, assetsData, accountsData] =
-    await Promise.all([
-      api.monthSummary(),
-      api.listMonths(year.value),
-      api.listMonths(),
-      api.getSettings(),
-      api.listManualAssets(),
-      api.listCashAccounts(),
-    ])
+  const [summaryData, monthsData, allMonths] = await Promise.all([
+    api.monthSummary(),
+    api.listMonths(year.value),
+    api.listMonths(),
+  ])
   summary.value = summaryData
   months.value = monthsData
   latestStoredMonth.value = allMonths.at(-1)?.month ?? null
-  settings.value = settingsData
-  assets.value = assetsData
-  accounts.value = accountsData
   if (!newMonth.value) newMonth.value = defaultNewMonth()
   if (selectedMonth.value) {
     detail.value = await api.monthDetail(selectedMonth.value)
@@ -286,15 +272,6 @@ onMounted(reload)
       :detail="detail"
       :run="run"
       @deleted="onPanelDeleted"
-    />
-
-    <MonthSettingsPanel
-      :settings="settings"
-      :summary="summary"
-      :accounts="accounts"
-      :assets="assets"
-      :year="year"
-      :run="run"
     />
 
     <p v-if="message" class="ok">{{ message }}</p>
