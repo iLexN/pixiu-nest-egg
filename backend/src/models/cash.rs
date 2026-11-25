@@ -105,6 +105,15 @@ pub struct NewCashAccount {
     pub is_default_receipt: Option<bool>,
 }
 
+/// `POST /api/cash-accounts/moves` body: a 活期調撥 of `amount` HKD from one
+/// bank account to another.
+#[derive(Debug, Clone, Deserialize, ToSchema)]
+pub struct NewBankMove {
+    pub from_account_id: i64,
+    pub to_account_id: i64,
+    pub amount: f64,
+}
+
 /// `PATCH /api/cash-accounts/{id}`: any subset of the fields.
 #[derive(Debug, Clone, Default, Deserialize, ToSchema)]
 pub struct CashAccountPatch {

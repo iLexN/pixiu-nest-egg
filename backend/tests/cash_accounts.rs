@@ -97,4 +97,67 @@ async fn cash_account_crud_and_rules() {
     assert_eq!(hs["is_default_receipt"], false);
 }
 
+#[tokio::test]
+async fn bank_move_round_trip() {
+    let app = app().await;
+    let mut ids = Vec::new();
+    for (label, amount) in [("HS", 30000.0), ("渣打", 1549.01)] {
+        let (status, body) = send(
+            &app,
+            "POST",
+            "/api/cash-accounts",
+            Some(json!({ "label": label, "currency": "HKD", "role": "bank",
+                         "amount": amount })),
+        )
+        .await;
+        assert_eq!(status, StatusCode::CREATED, "body = {body}");
+        ids.push(body["id"].as_i64().expect("id"));
+    }
+    let (hs, sc) = (ids[0], ids[1]);
+
+    let (status, body) = send(
+        &app,
+        "POST",
+        "/api/cash-accounts/moves",
+        Some(json!({ "from_account_id": hs, "to_account_id": sc, "amount": 10000.0 })),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "body = {body}");
+    assert_eq!(body[0]["id"], hs);
+    approx(&body[0]["amount"], 20000.0);
+    assert_eq!(body[1]["id"], sc);
+    approx(&body[1]["amount"], 11549.01);
+
+    let (status, body) = send(
+        &app,
+        "POST",
+        "/api/cash-accounts/moves",
+        Some(json!({ "from_account_id": hs, "to_account_id": sc, "amount": 999999.0 })),
+    )
+    .await;
+    assert_eq!(status, StatusCode::BAD_REQUEST, "body = {body}");
+    assert_eq!(body["fields"][0]["field"], "amount");
+
+    let (status, body) = send(
+        &app,
+        "POST",
+        "/api/cash-accounts/moves",
+        Some(json!({ "from_account_id": hs, "to_account_id": 9999, "amount": 1.0 })),
+    )
+    .await;
+    assert_eq!(status, StatusCode::NOT_FOUND, "body = {body}");
+    assert_eq!(body["error"], "not_found");
+
+    // Neither rejected move touched the source.
+    let (status, body) = send(&app, "GET", "/api/cash-accounts", None).await;
+    assert_eq!(status, StatusCode::OK);
+    let hs_row = body
+        .as_array()
+        .expect("accounts")
+        .iter()
+        .find(|a| a["id"] == hs)
+        .expect("HS");
+    approx(&hs_row["amount"], 20000.0);
+}
+
 // --- 5.1 receipts over HTTP ---

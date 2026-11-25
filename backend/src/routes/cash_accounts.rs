@@ -4,7 +4,7 @@ use axum::http::StatusCode;
 
 use super::AppState;
 use crate::error::{ApiError, ErrorBody};
-use crate::models::{CashAccount, CashAccountPatch, NewCashAccount};
+use crate::models::{CashAccount, CashAccountPatch, NewBankMove, NewCashAccount};
 use crate::service::cash_accounts;
 use crate::store::cash_accounts as store;
 
@@ -39,6 +39,25 @@ pub async fn create(
 ) -> Result<(StatusCode, Json<CashAccount>), ApiError> {
     let account = cash_accounts::create(&state.pool, &body).await?;
     Ok((StatusCode::CREATED, Json(account)))
+}
+
+#[utoipa::path(
+    operation_id = "cash_accounts_move",
+    post,
+    path = "/api/cash-accounts/moves",
+    tag = "cash-accounts",
+    request_body = NewBankMove,
+    responses(
+        (status = 200, description = "Both accounts after the 活期調撥, source first", body = [CashAccount]),
+        (status = 400, description = "Invalid amount, non-bank or same account, or overdraft", body = ErrorBody),
+        (status = 404, description = "Cash account not found", body = ErrorBody),
+    )
+)]
+pub async fn bank_move(
+    State(state): State<AppState>,
+    Json(body): Json<NewBankMove>,
+) -> Result<Json<Vec<CashAccount>>, ApiError> {
+    Ok(Json(cash_accounts::bank_move(&state.pool, &body).await?))
 }
 
 #[utoipa::path(

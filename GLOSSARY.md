@@ -216,6 +216,12 @@ broker account atomically; log-only rows (no `from_account_id`) never suggest
 month items.
 _Avoid_: deposit, funding
 
+**活期調撥**: a move of HKD between two 活期 bank accounts (e.g. HS → 渣打);
+the source loses exactly what the destination gains, and a move larger than
+the source balance is refused. The 活期 total is unchanged, so nothing is
+recorded and no month item is suggested; the undo is a 調撥 back.
+_Avoid_: transfer, 轉入
+
 **Manual asset (資產)**: a non-cash stored balance (e.g. Irene, HS人壽) with
 `liquidity` `short`/`long` — drives 策略 tier placement.
 _Avoid_: asset row, misc asset

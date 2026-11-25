@@ -71,6 +71,7 @@ export type FxRate = S['FxRate']
 export type FxRateEntry = S['FxRateEntry']
 export type NewCashAccount = S['NewCashAccount']
 export type CashAccountPatch = S['CashAccountPatch']
+export type NewBankMove = S['NewBankMove']
 export type FieldError = S['FieldError']
 export type Stock = S['Stock']
 export type Trade = S['Trade']
@@ -497,6 +498,10 @@ export const api = {
   },
   deleteCashAccount(id: number): Promise<void> {
     return request(`/cash-accounts/${id}`, { method: 'DELETE' })
+  },
+  /** 活期調撥: both accounts after the move, source first. */
+  bankMove(body: NewBankMove): Promise<CashAccount[]> {
+    return request('/cash-accounts/moves', { method: 'POST', body: JSON.stringify(body) })
   },
   listFxRates(): Promise<FxRate[]> {
     return request('/fx-rates')

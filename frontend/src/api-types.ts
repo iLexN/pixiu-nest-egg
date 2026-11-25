@@ -210,6 +210,22 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/cash-accounts/moves": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        post: operations["cash_accounts_move"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/cash-accounts/{id}": {
         parameters: {
             query?: never;
@@ -3178,6 +3194,18 @@ export interface components {
             /** Format: double */
             withdrew_usd: number;
         };
+        /**
+         * @description `POST /api/cash-accounts/moves` body: a 活期調撥 of `amount` HKD from one
+         *     bank account to another.
+         */
+        NewBankMove: {
+            /** Format: double */
+            amount: number;
+            /** Format: int64 */
+            from_account_id: number;
+            /** Format: int64 */
+            to_account_id: number;
+        };
         NewBond: {
             issue_no?: string | null;
             label: string;
@@ -4917,6 +4945,48 @@ export interface operations {
             };
             /** @description Duplicate label or a second broker for the currency */
             409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorBody"];
+                };
+            };
+        };
+    };
+    cash_accounts_move: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["NewBankMove"];
+            };
+        };
+        responses: {
+            /** @description Both accounts after the 活期調撥, source first */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["CashAccount"][];
+                };
+            };
+            /** @description Invalid amount, non-bank or same account, or overdraft */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorBody"];
+                };
+            };
+            /** @description Cash account not found */
+            404: {
                 headers: {
                     [name: string]: unknown;
                 };

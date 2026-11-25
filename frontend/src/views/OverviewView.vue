@@ -3,6 +3,7 @@ import { computed, onMounted, ref } from 'vue'
 import { api, type ForecastResponse, type OverviewResponse } from '../api'
 import ForecastGrid from '../components/ForecastGrid.vue'
 import IbkrCard from '../components/IbkrCard.vue'
+import InlineForm from '../components/InlineForm.vue'
 import { fmtMoney, fmtPercent, fmtPercentShort, fmtPrice, signClass } from '../format'
 import { numOrNull } from '../parse'
 import { usePage } from '../page'
@@ -59,6 +60,54 @@ function saveEdit() {
     }
     editingId.value = null
   }, { message: '已更新' })
+}
+
+// ----- 活期調撥 (POST /api/cash-accounts/moves) -----
+
+const moveOpen = ref(false)
+const moveFrom = ref<number | null>(null)
+const moveTo = ref<number | null>(null)
+const moveAmount = ref<number | ''>('')
+
+const cashRows = computed(() => data.value?.semi_liquid.cash_rows ?? [])
+
+function openMove() {
+  const rows = cashRows.value
+  moveFrom.value = rows[0]?.id ?? null
+  moveTo.value = rows.length === 2 ? rows[1].id : null
+  moveAmount.value = ''
+  moveOpen.value = true
+}
+
+/** With exactly two bank rows, picking one side sets the other. */
+function pairMove(side: 'from' | 'to') {
+  const rows = cashRows.value
+  if (rows.length !== 2) return
+  const picked = side === 'from' ? moveFrom.value : moveTo.value
+  const other = picked === null ? null : (rows.find((row) => row.id !== picked)?.id ?? null)
+  if (side === 'from') moveTo.value = other
+  else moveFrom.value = other
+}
+
+function saveMove() {
+  run(async () => {
+    const amount = numOrNull(moveAmount.value)
+    if (amount === null) {
+      throw new Error('金額必須是數字')
+    }
+    if (moveFrom.value === null || moveTo.value === null) {
+      throw new Error('請選擇調出及調入戶口')
+    }
+    if (moveFrom.value === moveTo.value) {
+      throw new Error('調出及調入戶口不可相同')
+    }
+    await api.bankMove({
+      from_account_id: moveFrom.value,
+      to_account_id: moveTo.value,
+      amount,
+    })
+    moveOpen.value = false
+  }, { message: '已調撥' })
 }
 
 // ----- 投資目標 formula footnote -----
@@ -308,7 +357,16 @@ onMounted(reload)
           <tr>
             <td>活期</td>
             <td class="num">{{ fmtMoney(data.semi_liquid.cash_sum) || '—' }}</td>
-            <td></td>
+            <td>
+              <button
+                v-if="!moveOpen && cashRows.length >= 2"
+                type="button"
+                class="link"
+                @click="openMove"
+              >
+                調撥
+              </button>
+            </td>
           </tr>
         </tbody>
         <tfoot>
@@ -330,6 +388,31 @@ onMounted(reload)
           </tr>
         </tfoot>
       </table>
+      <InlineForm v-if="moveOpen" title="活期調撥" @submit="saveMove" @cancel="moveOpen = false">
+        <label>
+          調出
+          <select v-model="moveFrom" required @change="pairMove('from')">
+            <option v-for="row in cashRows" :key="row.id" :value="row.id">{{ row.label }}</option>
+          </select>
+        </label>
+        <label>
+          調入
+          <select v-model="moveTo" required @change="pairMove('to')">
+            <option v-for="row in cashRows" :key="row.id" :value="row.id">{{ row.label }}</option>
+          </select>
+        </label>
+        <label>
+          金額
+          <input
+            v-model="moveAmount"
+            type="number"
+            step="any"
+            min="0"
+            inputmode="decimal"
+            required
+          />
+        </label>
+      </InlineForm>
     </div>
 
     <div class="card">

@@ -115,6 +115,7 @@ pub fn api_router(state: AppState) -> (Router, utoipa::openapi::OpenApi) {
             cash_accounts::list,
             cash_accounts::create
         ))
+        .routes(utoipa_axum::routes!(cash_accounts::bank_move))
         .routes(utoipa_axum::routes!(
             cash_accounts::update,
             cash_accounts::remove
@@ -275,6 +276,7 @@ mod tests {
             ("/api/bonds/{id}/receive", "post"),
             ("/api/cash-accounts", "get"),
             ("/api/cash-accounts", "post"),
+            ("/api/cash-accounts/moves", "post"),
             ("/api/cash-accounts/{id}", "delete"),
             ("/api/cash-accounts/{id}", "patch"),
             ("/api/coupons", "get"),

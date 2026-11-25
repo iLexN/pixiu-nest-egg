@@ -114,6 +114,19 @@ pub async fn shift(
     }
 }
 
+/// The 活期 rule every bank leg shares: `Err(Validation)` on `field` unless
+/// the account is a `bank` in HKD.
+pub fn require_hkd_bank(account: &CashAccount, field: &str) -> Result<(), ServiceError> {
+    if account.role == CashRole::Bank && account.currency == Currency::Hkd {
+        Ok(())
+    } else {
+        Err(ServiceError::Validation(vec![FieldError::new(
+            field,
+            "must be an HKD bank account",
+        )]))
+    }
+}
+
 /// Debit an HKD bank account for a placement or 轉入 source: the account must
 /// exist, be a `bank` in HKD, and hold at least `amount` — the overdraft
 /// check reads it inside the transaction so the check and the debit see the
@@ -129,12 +142,7 @@ pub async fn debit_bank(
     now: &str,
 ) -> Result<CashAccount, ServiceError> {
     let account = cash_accounts::load_one(&mut *conn, account_id).await?;
-    if account.role != CashRole::Bank || account.currency != Currency::Hkd {
-        return Err(ServiceError::Validation(vec![FieldError::new(
-            field,
-            "must be an HKD bank account",
-        )]));
-    }
+    require_hkd_bank(&account, field)?;
     if account.amount < amount {
         return Err(ServiceError::Validation(vec![FieldError::new(
             amount_field,
