@@ -60,6 +60,7 @@ const NAV: {
       { id: 'yearReview', label: '年結' },
       { id: 'happyPool', label: 'HappyPool' },
     ],
+    links: [{ label: 'Export', href: '/api/export/analysis' }],
   },
   {
     id: 'stock',
@@ -160,8 +161,8 @@ function selectGroup(g: (typeof NAV)[number]) {
           v-for="l in activeGroup.links ?? []"
           :key="l.href"
           :href="l.href"
-          target="_blank"
-          rel="noopener"
+          :target="l.href.startsWith('http') ? '_blank' : null"
+          :rel="l.href.startsWith('http') ? 'noopener' : null"
           class="tab-link"
         >
           {{ l.label }}

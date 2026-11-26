@@ -28,6 +28,7 @@ pub mod cash_accounts;
 pub mod cash_movement;
 pub mod deposits;
 pub mod dividends;
+pub mod export;
 pub mod family;
 pub mod forecast;
 pub mod ibkr;

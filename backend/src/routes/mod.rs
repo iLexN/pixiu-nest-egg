@@ -3,6 +3,7 @@ pub mod bonds;
 pub mod cash_accounts;
 pub mod deposits;
 pub mod dividends;
+pub mod export;
 pub mod family;
 pub mod forecast;
 pub mod fx;
@@ -134,6 +135,7 @@ pub fn api_router(state: AppState) -> (Router, utoipa::openapi::OpenApi) {
             forecast::remove_item
         ))
         .routes(utoipa_axum::routes!(forecast::convert))
+        .routes(utoipa_axum::routes!(export::analysis))
         .split_for_parts();
     (router.with_state(state), api)
 }
@@ -294,6 +296,7 @@ mod tests {
             ("/api/dividends/summary", "get"),
             ("/api/dividends/{id}", "delete"),
             ("/api/dividends/{id}", "patch"),
+            ("/api/export/analysis", "get"),
             ("/api/family/deposits", "get"),
             ("/api/family/deposits", "post"),
             ("/api/family/deposits/summary", "get"),

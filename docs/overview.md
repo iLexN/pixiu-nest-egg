@@ -220,3 +220,16 @@ At year start nothing is required:
 - No 債券/定期 overrides are needed for future years: the app keeps matured history, so those columns keep deriving. The seeded overrides exist only for years the workbook deleted.
 
 The month ledger, deposits, dividends, coupons, and MPF all roll across the boundary on their own.
+
+## Download the analysis export
+
+```text
+Export link (總覽 sub-tab row, after HappyPool) → GET /api/export/analysis
+  → routes/export.rs hands off to service/export.rs, which composes
+    service::overview::build + service::forecast::build +
+    service::summary::summarize_market (HK and US) — no stored data of its own
+  → the response is application/json with Content-Disposition
+    attachment; filename="wealth-export-<as_of_date>.json"
+```
+
+The snapshot is the same figures the pages show, reshaped for an external AI: `meta` (as-of date, USD→HKD rate, goal-3 target), `liquid_assets_summary` (the 流動資產 breakdown), `cash_flow_momentum` (salary + the trailing 12-month averages), `upcoming_cash_flow_and_rigid_expenses` (the seven 預測 months — projected 活期/半流動資金/maturing deposits, plus `rigid_expenses`), and `equity_holdings` (active stocks per market with shares, market value, cost, dividends, and cumulative yield). A rigid expense is a Tax/Bill/Other plan item (`item` = its note, `amount_hkd` its signed amount); a quarter-month bill that came from the recurring-bill default — not a stored Bill item — is synthesized as a `差餉` line since it has no `forecast_items` row. US rows carry `*_usd` and `*_hkd` money fields (`_hkd` absent while no rate is set); `dividend_yield_pct` is the cumulative 累計派息 ÷ 總買入成本, not annualized.

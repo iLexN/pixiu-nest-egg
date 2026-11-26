@@ -393,6 +393,23 @@ export interface paths {
         patch: operations["dividends_update"];
         trace?: never;
     };
+    "/api/export/analysis": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** The one-shot analysis snapshot, fully derived on read. */
+        get: operations["analysis_export"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/family/deposits": {
         parameters: {
             query?: never;
@@ -1315,6 +1332,13 @@ export interface components {
             /** Format: double */
             withdrew_hkd: number | null;
         };
+        AnalysisExport: {
+            cash_flow_momentum: components["schemas"]["CashFlowMomentum"];
+            equity_holdings: components["schemas"]["EquityHoldings"];
+            liquid_assets_summary: components["schemas"]["LiquidAssetsSummary"];
+            meta: components["schemas"]["ExportMeta"];
+            upcoming_cash_flow_and_rigid_expenses: components["schemas"]["ExportMonth"][];
+        };
         /**
          * @description The month-stat settings held in `app_meta`: the current salary, the
          *     per-year 開心Pool rate, and the forecast's 差餉 bill amount.
@@ -1657,6 +1681,28 @@ export interface components {
             label?: string | null;
             role?: components["schemas"]["CashRole"] | null;
         };
+        CashFlowMomentum: {
+            /**
+             * Format: double
+             * @description Trailing 12-month 利息 average; absent without history.
+             */
+            avg_monthly_interest_hkd: number | null;
+            /**
+             * Format: double
+             * @description Trailing 12-month 存 average; absent without history.
+             */
+            avg_monthly_saving_hkd: number | null;
+            /**
+             * Format: double
+             * @description The stored 薪金; absent while unset.
+             */
+            monthly_salary_hkd: number | null;
+            /**
+             * Format: double
+             * @description Trailing 12-month 生活支出 average; absent without history.
+             */
+            normal_monthly_living_expense_hkd: number | null;
+        };
         /**
          * @description `bank` = a 活期 account (HKD only); `broker` = the IBKR cash in that
          *     currency.
@@ -1674,6 +1720,13 @@ export interface components {
          * @enum {string}
          */
         Currency: "HKD" | "USD";
+        Deductions: {
+            /**
+             * Format: double
+             * @description The live 開心Pool balance.
+             */
+            happy_pool_hkd: number;
+        };
         /**
          * @description A 定期 deposit record. `rate` (when not stored), `total`, `status`,
          *     `end_year` and `end_month` are derived on read, never stored.
@@ -1952,10 +2005,79 @@ export interface components {
             /** Format: int32 */
             year: number;
         };
+        EquityHoldings: {
+            hk_stocks: components["schemas"]["ExportHolding"][];
+            us_stocks: components["schemas"]["ExportHolding"][];
+        };
         ErrorBody: {
             error: string;
             fields: components["schemas"]["FieldError"][];
             message: string;
+        };
+        ExportHolding: {
+            code: string;
+            /**
+             * Format: double
+             * @description 累計派息 ÷ 總買入成本 as a percent; absent while cost is 0.
+             */
+            dividend_yield_pct: number | null;
+            /** Format: double */
+            dividends_received_hkd: number | null;
+            /** Format: double */
+            dividends_received_usd: number | null;
+            exchange: string | null;
+            /**
+             * Format: double
+             * @description Market value in the market's own currency side; `*_hkd` is absent
+             *     while a rate is needed and unset.
+             */
+            market_value_hkd: number | null;
+            /** Format: double */
+            market_value_usd: number | null;
+            sector: string | null;
+            /** Format: double */
+            shares_held: number;
+            ticker: string | null;
+            /** Format: double */
+            total_buy_cost_hkd: number | null;
+            /** Format: double */
+            total_buy_cost_usd: number | null;
+        };
+        ExportMeta: {
+            /** @description The overview's today (`YYYY-MM-DD`). */
+            as_of_date: string;
+            /** @description Always `"HKD"` — the sheet's base currency. */
+            currency: string;
+            /**
+             * Format: double
+             * @description The goal-3 生活保障 target; absent while its inputs are unset.
+             */
+            target_liquid_assets_hkd: number | null;
+            /**
+             * Format: double
+             * @description `aia.usd_hkd_rate`; absent while unset.
+             */
+            usd_hkd_rate: number | null;
+        };
+        ExportMonth: {
+            /**
+             * Format: double
+             * @description Deposits ending this month (deposit_finish).
+             */
+            maturing_deposits_hkd: number;
+            /** @description `YYYY-MM`. */
+            month: string;
+            /**
+             * Format: double
+             * @description The 預測 row-23 活期 figure; absent while its chain is broken.
+             */
+            projected_cash_current_hkd: number | null;
+            /**
+             * Format: double
+             * @description The 預測 半流動資金 figure; absent while its chain is broken.
+             */
+            projected_deposits_and_sc_hkd: number | null;
+            rigid_expenses: components["schemas"]["RigidExpense"][];
         };
         /**
          * @description A 家人 定期 record: a deposit held on behalf of a family member, kept in
@@ -2550,6 +2672,35 @@ export interface components {
              */
             avg_invested: number | null;
             rows: components["schemas"]["InvestTargetRow"][];
+        };
+        LiquidAssetsSummary: {
+            /**
+             * Format: double
+             * @description Active bond principal (Overview 債券 row).
+             */
+            bonds_hkd: number;
+            deductions: components["schemas"]["Deductions"];
+            /**
+             * Format: double
+             * @description 港股 market value (Overview 港股 row).
+             */
+            hk_stocks_hkd: number;
+            semi_liquid_breakdown: components["schemas"]["SemiLiquidBreakdown"];
+            /**
+             * Format: double
+             * @description 半流動資金 = 已定期 + 活期.
+             */
+            semi_liquid_total_hkd: number;
+            /**
+             * Format: double
+             * @description H1 流動資產 — identical to the overview's liquid_assets.
+             */
+            total_liquid_assets_hkd: number;
+            /**
+             * Format: double
+             * @description The IBKR HKD total (Overview IBKR row).
+             */
+            us_stocks_ibkr_hkd: number | null;
         };
         /** @description The Overview `J3:K7` 策略 block: 總數 re-partitioned into liquidity tiers. */
         LiquidityTiers: {
@@ -3636,6 +3787,18 @@ export interface components {
             market: string;
             stock_ids: number[];
         };
+        RigidExpense: {
+            /**
+             * Format: double
+             * @description Signed amount (expenses are negative).
+             */
+            amount_hkd: number;
+            /**
+             * @description The plan item's note; `null` when it has none. `差餉` marks the
+             *     synthesized quarterly bill.
+             */
+            item: string | null;
+        };
         /**
          * @description The five yearly 存/年 (L12) terms — each absent while its inputs are;
          *     `saving_year` is the mean of the present ones.
@@ -3716,6 +3879,18 @@ export interface components {
              *     while unset).
              */
             vs_quarter_liquid: number;
+        };
+        SemiLiquidBreakdown: {
+            /**
+             * Format: double
+             * @description 活期 = Σ bank cash accounts.
+             */
+            cash_current_hkd: number;
+            /**
+             * Format: double
+             * @description 已定期 = Σ principal over active deposits.
+             */
+            time_deposits_hkd: number;
         };
         Stock: {
             code: string;
@@ -5617,6 +5792,26 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["ErrorBody"];
+                };
+            };
+        };
+    };
+    analysis_export: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Analysis export JSON attachment */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["AnalysisExport"];
                 };
             };
         };

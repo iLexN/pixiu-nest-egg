@@ -102,7 +102,7 @@ pub async fn record_market(pool: &SqlitePool, market: Market) -> Result<(), Stor
 
 /// The stock rows, sector rollup and market totals — the part of `build`
 /// that is free of side effects.
-async fn summarize_market(
+pub(crate) async fn summarize_market(
     pool: &SqlitePool,
     market: Market,
 ) -> Result<(Vec<StockRow>, Vec<SectorRollup>, MarketTotals), StoreError> {

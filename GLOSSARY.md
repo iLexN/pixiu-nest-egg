@@ -264,6 +264,15 @@ _Avoid_: cell sum, bucket
 
 **Bill**: the forecast's recurring-bill amount setting.
 
+**Analysis export**: the `GET /api/export/analysis` snapshot — the
+總覽/預測/股票 figures reshaped into one JSON attachment for an external AI.
+Derived on read; nothing is stored.
+
+**Rigid expense**: an analysis-export line for a forecast month's obligatory
+outflow — a Tax/Bill/Other plan item, or the synthesized quarterly `差餉`
+when the recurring-bill default fired. Deposit placements, interest, and
+planned stock trades are never rigid expenses.
+
 **Money Master**: the bank-app savings challenge block — counters
 (`start_date`/`target_months`/`target_amount`/`month_now`) copied from the
 bank app, not derivations of tracked data.

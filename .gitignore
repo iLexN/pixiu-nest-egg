@@ -11,6 +11,7 @@ data/
 /graft/
 
 # personal financial data — never commit
+a.json
 財富分析報告.xlsx
 portfolio.csv
 frontend/openapi.json
