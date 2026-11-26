@@ -1,5 +1,7 @@
 /** Display rounding only: stored values keep their full precision. */
 
+import type { components } from './api-types'
+
 const money = new Intl.NumberFormat('en-US', {
   minimumFractionDigits: 2,
   maximumFractionDigits: 2,
@@ -32,6 +34,32 @@ export function fmtMoney(value: number | null | undefined): string {
 
 export function fmtPrice(value: number | null | undefined): string {
   return value === null || value === undefined ? '' : price.format(value)
+}
+
+/** A bulk 現價 report (upload or fetch) as one inline message:
+ * `已更新 N 支股票現價；…`. Empty report sections are skipped. */
+export function fmtPriceReport(report: components['schemas']['PriceReport']): string {
+  const parts = [`已更新 ${report.updated.length} 支股票現價`]
+  if (report.fx !== null) {
+    parts.push(`美元匯率 ${fmtPrice(report.fx)}`)
+  }
+  if (report.unmatched.length > 0) {
+    parts.push(`找不到股票：${report.unmatched.join('、')}`)
+  }
+  if (report.failed.length > 0) {
+    const symbols = report.failed
+      .map((entry) => entry.symbol)
+      .filter(Boolean)
+      .join('、')
+    parts.push(symbols ? `抓取失敗：${symbols}` : `抓取失敗 ${report.failed.length} 筆`)
+  }
+  if (report.invalid.length > 0) {
+    parts.push(`無效項目 ${report.invalid.length} 筆`)
+  }
+  if (report.not_updated.length > 0) {
+    parts.push(`未更新：${report.not_updated.join('、')}`)
+  }
+  return parts.join('；')
 }
 
 const fixedPrice = new Map<number, Intl.NumberFormat>()

@@ -989,6 +989,26 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/stocks/prices/fetch": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Fetch the latest Yahoo Finance price for every stock in one market and
+         *     apply it through the same pipeline as a price-file upload.
+         */
+        post: operations["stocks_fetch_prices"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/stocks/{id}": {
         parameters: {
             query?: never;
@@ -2154,6 +2174,9 @@ export interface components {
             note: string | null;
             /** @description Unreceived deposits, earliest maturity first. */
             upcoming: components["schemas"]["FamilyDeposit"][];
+        };
+        FetchRequest: {
+            market: components["schemas"]["Market"];
         };
         FieldError: {
             field: string;
@@ -3726,6 +3749,13 @@ export interface components {
         };
         /** @description Result of a bulk 現價 upload. */
         PriceReport: {
+            /** @description Symbols whose fetch failed (empty for a file upload). */
+            failed: components["schemas"]["InvalidPriceEntry"][];
+            /**
+             * Format: double
+             * @description The USD rate a US fetch stored (`None` on HK fetches and uploads).
+             */
+            fx: number | null;
             /** @description File entries that could not be applied. */
             invalid: components["schemas"]["InvalidPriceEntry"][];
             /** @description Stored stocks (as `MARKET code`) with no entry in the file. */
@@ -7309,6 +7339,39 @@ export interface operations {
                 };
             };
             /** @description File could not be parsed */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorBody"];
+                };
+            };
+        };
+    };
+    stocks_fetch_prices: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["FetchRequest"];
+            };
+        };
+        responses: {
+            /** @description Price fetch report */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["PriceReport"];
+                };
+            };
+            /** @description Missing or invalid fields */
             400: {
                 headers: {
                     [name: string]: unknown;

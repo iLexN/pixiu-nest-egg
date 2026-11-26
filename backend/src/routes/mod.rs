@@ -43,6 +43,7 @@ pub fn api_router(state: AppState) -> (Router, utoipa::openapi::OpenApi) {
         .routes(utoipa_axum::routes!(stocks::list, stocks::create))
         .routes(utoipa_axum::routes!(stocks::reorder))
         .routes(utoipa_axum::routes!(stocks::upload_prices))
+        .routes(utoipa_axum::routes!(stocks::fetch_prices))
         .routes(utoipa_axum::routes!(stocks::update, stocks::remove))
         .routes(utoipa_axum::routes!(trades::list, trades::create))
         .routes(utoipa_axum::routes!(trades::update, trades::remove))
@@ -343,6 +344,7 @@ mod tests {
             ("/api/stocks", "post"),
             ("/api/stocks/order", "post"),
             ("/api/stocks/prices", "post"),
+            ("/api/stocks/prices/fetch", "post"),
             ("/api/stocks/{id}", "delete"),
             ("/api/stocks/{id}", "patch"),
             ("/api/summary", "get"),

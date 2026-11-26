@@ -1,6 +1,7 @@
 <script setup lang="ts">
 import { computed, ref, watch } from 'vue'
-import type { Market } from './api'
+import { api, toApiError, type Market } from './api'
+import { fmtPriceReport } from './format'
 import SummaryView from './views/SummaryView.vue'
 import TradesView from './views/TradesView.vue'
 import StocksView from './views/StocksView.vue'
@@ -128,6 +129,26 @@ watch(market, (m) => {
 function selectGroup(g: (typeof NAV)[number]) {
   tab.value = g.tabs[0].id
 }
+
+const fetching = ref(false)
+const fetchMessage = ref('')
+// Bumped on a successful fetch so the current view remounts and reloads
+// with the fresh prices.
+const viewKey = ref(0)
+
+async function fetchPrices() {
+  fetching.value = true
+  fetchMessage.value = ''
+  try {
+    const report = await api.fetchPrices(market.value)
+    fetchMessage.value = fmtPriceReport(report)
+    viewKey.value += 1
+  } catch (err) {
+    fetchMessage.value = `抓取失敗：${toApiError(err).message}`
+  } finally {
+    fetching.value = false
+  }
+}
 </script>
 
 <template>
@@ -149,29 +170,30 @@ function selectGroup(g: (typeof NAV)[number]) {
         <button :class="{ active: market === 'US' }" @click="market = 'US'">美股</button>
       </nav>
       <nav class="tabs">
-        <button
-          v-for="t in visibleTabs"
-          :key="t.id"
-          :class="{ active: tab === t.id }"
-          @click="tab = t.id"
-        >
-          {{ t.label }}
-        </button>
+        <template v-for="t in visibleTabs" :key="t.id">
+          <button :class="{ active: tab === t.id }" @click="tab = t.id">
+            {{ t.label }}
+          </button>
+          <button v-if="t.id === 'stocks'" :disabled="fetching" @click="fetchPrices">
+            更新現價
+          </button>
+        </template>
         <a
           v-for="l in activeGroup.links ?? []"
           :key="l.href"
           :href="l.href"
-          :target="l.href.startsWith('http') ? '_blank' : null"
-          :rel="l.href.startsWith('http') ? 'noopener' : null"
+          :target="l.href.startsWith('http') ? '_blank' : undefined"
+          :rel="l.href.startsWith('http') ? 'noopener' : undefined"
           class="tab-link"
         >
           {{ l.label }}
         </a>
       </nav>
+      <span v-if="fetchMessage" class="muted">{{ fetchMessage }}</span>
     </div>
   </header>
 
-  <main>
+  <main :key="viewKey">
     <OverviewView v-if="tab === 'overview'" />
     <TradesView v-else-if="tab === 'trades'" :market="market" />
     <SummaryView v-else-if="tab === 'summary'" :market="market" />
@@ -189,6 +211,8 @@ function selectGroup(g: (typeof NAV)[number]) {
     <IbkrTransfersView v-else-if="tab === 'ibkrTransfers'" />
     <DepositHistoryView v-else />
   </main>
+
+  <div v-if="fetching" class="fetch-overlay">抓取中…</div>
 </template>
 
 <style scoped>
@@ -235,5 +259,16 @@ nav button.active {
 }
 .tabs a.tab-link:hover {
   border-color: var(--accent);
+}
+.fetch-overlay {
+  position: fixed;
+  inset: 0;
+  z-index: 100;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: rgb(27 42 56 / 55%);
+  color: #fff;
+  font-size: 1.2rem;
 }
 </style>

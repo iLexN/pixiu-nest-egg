@@ -7,7 +7,7 @@ use serde::Deserialize;
 
 use super::{AppState, parse_market};
 use crate::error::{ApiError, ErrorBody};
-use crate::models::{NewStock, PriceReport, Stock, StockPatch};
+use crate::models::{Market, NewStock, PriceReport, Stock, StockPatch};
 use crate::prices;
 use crate::store::now_timestamp;
 use crate::store::stocks as store;
@@ -229,6 +229,31 @@ pub async fn upload_prices(
 ) -> Result<Json<PriceReport>, ApiError> {
     let upload = prices::parse(&body)?;
     Ok(Json(prices::apply(&state.pool, upload).await?))
+}
+
+#[derive(Debug, Deserialize, utoipa::ToSchema)]
+pub struct FetchRequest {
+    pub market: Market,
+}
+
+/// Fetch the latest Yahoo Finance price for every stock in one market and
+/// apply it through the same pipeline as a price-file upload.
+#[utoipa::path(
+    operation_id = "stocks_fetch_prices",
+    post,
+    path = "/api/stocks/prices/fetch",
+    tag = "stocks",
+    request_body = FetchRequest,
+    responses(
+        (status = 200, description = "Price fetch report", body = PriceReport),
+        (status = 400, description = "Missing or invalid fields", body = ErrorBody),
+    )
+)]
+pub async fn fetch_prices(
+    State(state): State<AppState>,
+    Json(body): Json<FetchRequest>,
+) -> Result<Json<PriceReport>, ApiError> {
+    Ok(Json(prices::fetch_market(&state.pool, body.market).await?))
 }
 
 #[utoipa::path(

@@ -257,6 +257,13 @@ export const api = {
   uploadPrices(fileText: string): Promise<PriceReport> {
     return request('/stocks/prices', { method: 'POST', body: fileText })
   },
+  /** 更新現價: fetch the latest Yahoo price for every stock in the market. */
+  fetchPrices(market: Market): Promise<PriceReport> {
+    return request('/stocks/prices/fetch', {
+      method: 'POST',
+      body: JSON.stringify({ market }),
+    })
+  },
   reorderStocks(market: Market, stockIds: number[]): Promise<Stock[]> {
     return request('/stocks/order', {
       method: 'POST',

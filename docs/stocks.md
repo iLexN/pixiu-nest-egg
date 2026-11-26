@@ -108,6 +108,30 @@ cargo run -p wealth-backend --bin import_prices -- current-price.json
 
 No external market-data API is called; the JSON file is user-supplied input equivalent to manual entry.
 
+## Fetch 現價 from Yahoo Finance
+
+```text
+更新現價 button in the 股票 nav row (after 管理)
+  → full-screen 抓取中… overlay blocks input until the fetch finishes
+  → POST /api/stocks/prices/fetch { market }
+  → backend loads the market's stocks and maps each to a Yahoo symbol:
+    HK → {ticker}.HK (a stock with no ticker is reported, not fetched);
+    US → code with . converted to - (BRK.B → BRK-B)
+  → sequential chart requests (~200ms apart, ~10s timeout, browser
+    User-Agent): chart.result[0].meta.regularMarketPrice, falling back
+    to previousClose when the live price is absent
+  → prices are rounded (HK 3dp, US 2dp) and applied through the same
+    resolve/apply pipeline as a price file: manual_price +
+    price_updated_at per resolved stock, market history recorded
+  → US only: USDHKD=X is also fetched and stored unrounded in fx_rates
+  → the report shows inline: updated count, applied USD rate, and the
+    failed / unmatched / not_updated symbols (not_updated covers only the
+    fetched market's stocks)
+  → the view remounts so it reloads with the fresh prices
+```
+
+A failed symbol never blocks the batch — its reason lands in `failed` while the successful prices still apply. A failed `USDHKD=X` request leaves the stored USD rate unchanged. Fetching is user-triggered only; nothing refreshes prices automatically.
+
 ## View or edit a stock's 備註 in 股票 → 總覽
 
 The 備註 toggle on a stock row expands a row beneath it showing the note with line breaks preserved; editing it there sends `PATCH /api/stocks/:id { note }` (blank clears the note) and reloads the summary.

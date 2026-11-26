@@ -18,6 +18,7 @@ import {
   fmtPercent,
   fmtPrice,
   fmtPriceDigits,
+  fmtPriceReport,
   fmtShares,
   signClass,
 } from '../format'
@@ -180,17 +181,7 @@ function onPriceFile(event: Event) {
   run(async () => {
     uploadMessage.value = ''
     const report = await api.uploadPrices(await file.text())
-    const parts = [`已更新 ${report.updated.length} 支股票現價`]
-    if (report.unmatched.length > 0) {
-      parts.push(`找不到股票：${report.unmatched.join('、')}`)
-    }
-    if (report.invalid.length > 0) {
-      parts.push(`無效項目 ${report.invalid.length} 筆`)
-    }
-    if (report.not_updated.length > 0) {
-      parts.push(`未更新：${report.not_updated.join('、')}`)
-    }
-    uploadMessage.value = parts.join('；')
+    uploadMessage.value = fmtPriceReport(report)
   })
 }
 

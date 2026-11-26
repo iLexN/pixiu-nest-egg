@@ -125,6 +125,10 @@ pub struct PriceReport {
     pub invalid: Vec<InvalidPriceEntry>,
     /// Stored stocks (as `MARKET code`) with no entry in the file.
     pub not_updated: Vec<String>,
+    /// Symbols whose fetch failed (empty for a file upload).
+    pub failed: Vec<InvalidPriceEntry>,
+    /// The USD rate a US fetch stored (`None` on HK fetches and uploads).
+    pub fx: Option<f64>,
 }
 
 #[derive(Debug, Clone, Default, Deserialize, ToSchema)]
